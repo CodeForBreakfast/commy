@@ -59,15 +59,14 @@ test('matcher does NOT match arbitrary other MCP tools (no over-broad capture)',
   expect(re.test(`${EXPECTED_PREFIX}list_channels`)).toBe(false)
 })
 
-test('command points at the plugin-local bun wrapper, not bare `bun` on host PATH (comms-f9n)', () => {
-  // Bare `bun` would fail in CC sessions where bun is not on the host PATH —
-  // CC reports the hook error as non-blocking, the tool call proceeds with
-  // unmodified tool_input, and no session_id injection happens. The wrapper
-  // resolves bun via the plugin's own Nix flake (same provenance as the MCP
-  // server's `nix run path:.#default`), so the hook works regardless of host PATH.
+test('command invokes bun on PATH against the hook entrypoint — no Nix wrapper (comms-ip4q)', () => {
+  // The plugin's prereq is `bun` on PATH (the same contract the MCP launcher
+  // now relies on — comms-ip4q). The hook entrypoint imports no workspace
+  // packages, so it needs only bun, nothing staged. The former bun-wrap.sh
+  // resolved bun via the plugin's Nix flake; dropping Nix from the consumer
+  // path (comms-ip4q) makes that wrapper vestigial.
   const hook = preToolUse[0]?.hooks[0]
-  // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional — testing placeholder rejection
-  expect(hook?.command).toBe('${CLAUDE_PLUGIN_ROOT}/hooks/bun-wrap.sh')
+  expect(hook?.command).toBe('bun')
   // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional — testing placeholder rejection
   expect(hook?.args).toEqual(['${CLAUDE_PLUGIN_ROOT}/hooks/inject-session-id.ts'])
 })
