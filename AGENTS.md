@@ -1,10 +1,12 @@
 # Agent Instructions
 
 commy is a hexagonal MCP substrate for inter-agent communication — see
-[README.md](README.md) for the architecture overview and workspace package
-map, and [docs/](docs/) for the substrate rationale ([why
-Zulip](docs/why-zulip.md)), [bot naming conventions](docs/naming.md), and the
-[inbound event contract](docs/claude-channel-inbound-contract.md).
+[docs/architecture.md](docs/architecture.md) for the architecture overview and
+workspace package map, [docs/self-hosting.md](docs/self-hosting.md) for the
+operator's environment contract, and [docs/](docs/) for the substrate rationale
+([why Zulip](docs/why-zulip.md)), [bot naming conventions](docs/naming.md), and
+the [inbound event contract](docs/claude-channel-inbound-contract.md). The
+[README](README.md) is the consumer-facing front door.
 
 ## Build & Test
 
