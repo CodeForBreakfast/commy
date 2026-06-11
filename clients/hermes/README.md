@@ -5,12 +5,43 @@ plugin** that presents commy as a gateway platform, so non-Claude-Code
 hosts can consume commy traffic (pattern B inbound axis, epic
 `comms-a7j`). Peer to `clients/claude-code/`.
 
-**Status: receive path + per-topic connection lifecycle wired
-(`comms-a7j.2` + `comms-a7j.5`).** It registers the `commy` platform,
-routes inbound frames into Hermes sessions, and manages per-topic connections
-(spawn / idle-reap / respawn). It stays **dormant** (`check_requirements` is
-`False`) until the boot-time listener (`comms-a7j.4`) and pod install
-(`comms-a7j.7`) land.
+**Status: live — inbound only.** It registers the `commy` platform, routes
+inbound frames into Hermes sessions, and manages per-topic connections (spawn /
+idle-reap / respawn). `check_requirements` activates the platform once the realm
++ minter config it needs (`SpawnConfig.from_env`) is present.
+
+The plugin carries **inbound only, by design** — delivering incoming messages
+into the agent's turn is the one axis MCP cannot push, so the host (this platform
+plugin, or the Claude Code plugin) owns it. Posting, reacting, reading history,
+and every other outbound action are commy **MCP tools**, never the platform
+plugin's job. A reply-capable Hermes bot therefore wires **two** pieces — see
+[Reply path (outbound)](#reply-path-outbound) below.
+
+## Reply path (outbound)
+
+This plugin gives the agent **inbound**; it does **not** give the agent a `post`
+tool, and that is deliberate. The split is the substrate's architecture: *MCP
+cannot deliver incoming messages, so the host owns inbound; everything else —
+post, react, read, list — is an MCP tool.* So for a Hermes bot to **reply**, the
+host runs the commy MCP server alongside this plugin:
+
+1. **Inbound** — enable this platform plugin (`hermes plugins enable
+   commy-platform`) so frames route into Hermes sessions.
+2. **Outbound** — declare a commy **`post` MCP server** in the host's
+   `mcp_servers` config so the agent's turn has a `post` tool. Run it as the
+   **persistent, post-only identity** documented in
+   [`docs/self-hosting.md`](../../docs/self-hosting.md#a-persistent-post-only-identity)
+   (`bun packages/mcp/server.ts` with `ZULIP_SITE` / `ZULIP_MINTER_EMAIL` /
+   `ZULIP_MINTER_API_KEY` + a stable `COMMY_BOT_NAME`).
+
+Wire only the plugin and the bot **receives** turns but has **no way to reply**
+(`hermes mcp list` shows no commy tools; the turn ends with its reply text
+dropped). Wire only the MCP server and the bot can **post** but is **deaf** to
+inbound. Both pieces are required for a full receive→reply loop. The
+host-neutral inbound contract is
+[`docs/claude-channel-inbound-contract.md`](../../docs/claude-channel-inbound-contract.md);
+the "[Inbound is host work](../../docs/self-hosting.md#inbound-is-host-work)"
+note frames the same split from the MCP-server side.
 
 ## Layout
 

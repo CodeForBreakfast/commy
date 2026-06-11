@@ -3,6 +3,14 @@
 Pattern B inbound-axis consumer: presents commy as a Hermes gateway
 platform so non-Claude-Code hosts can receive commy traffic.
 
+This plugin is **inbound only, by design** — delivering incoming messages into
+the agent's turn is the one axis MCP cannot push, so the host owns it; posting
+and every other outbound action are commy MCP tools, never this adapter's job
+(``send`` is a deliberate no-op, see below). A reply-capable Hermes bot wires
+*both* this inbound plugin *and* a commy ``post`` MCP server in its
+``mcp_servers`` config — see the "Reply path (outbound)" section of this
+package's ``README.md``.
+
 The receive path (inbound frame -> routing/dedup -> Hermes session) landed in
 comms-a7j.2 via ``receive_channel_notification`` (self-echo is dropped at the
 substrate emitter, comms-dtcm, so it is not a consumer concern). The connection
