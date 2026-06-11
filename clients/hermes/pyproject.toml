@@ -10,6 +10,27 @@ requires-python = ">=3.11"
 # bundle or pin `hermes-agent` (or its tree). See README for the test recipe.
 dependencies = []
 
+# Hermes discovers plugins by scanning this entry-point group
+# (importlib.metadata.entry_points → ep.load() → register(ctx); see
+# hermes_cli/plugins.py). The value is the importable module that exposes
+# `register`. This is the recommended distribution mechanism: installed via
+# pip, or via `services.hermes-agent.extraPythonPackages` on NixOS, then
+# activated with `hermes plugins enable commy-platform`.
+[project.entry-points."hermes_agent.plugins"]
+commy-platform = "commy"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["commy"]
+
+[tool.setuptools.package-data]
+# Ship the manifest with the wheel for introspection and the directory-install
+# fallback; entry-point discovery itself does not read it.
+commy = ["plugin.yaml"]
+
 [dependency-groups]
 # `mcp` is the MCP Python SDK the per-topic transport (connection lifecycle,
 # comms-a7j.5) drives. It is NOT a runtime dependency of the plugin: the pod's
@@ -17,11 +38,6 @@ dependencies = []
 # it provides `gateway`/`hermes_cli`. It lives in the dev group so the lifecycle
 # tests can import the real SDK and run a real stub-server subprocess.
 dev = ["pytest>=8", "pyyaml>=6", "ruff>=0.6", "mcp>=1.2"]
-
-[tool.uv]
-# Plugin payload is loaded by Hermes via directory scan, not pip-installed as a
-# wheel — so this is a non-package (virtual) uv project: deps + tooling only.
-package = false
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
