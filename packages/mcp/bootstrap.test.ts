@@ -1,13 +1,13 @@
 import { expect, test } from 'bun:test'
-import type { MessageInbox, SubscriptionTarget } from '@codeforbreakfast/core/ports'
+import type { MessageInbox, SubscriptionTarget } from '@commy/core/ports'
 import {
   decodeBotNameSync,
   decodeChannelIdSync,
   decodeChannelNameSync,
   decodeThreadNameSync,
   InboxError,
-} from '@codeforbreakfast/core/ports'
-import { ApiKey, BotEmail, RealmUrl } from '@codeforbreakfast/zulip/http'
+} from '@commy/core/ports'
+import { ApiKey, BotEmail, RealmUrl } from '@commy/zulip/http'
 import { Effect, Option, Redacted, Stream } from 'effect'
 import type { ParsedEnv, ProjectSlug, SessionId } from './bootstrap.ts'
 import {
@@ -446,7 +446,7 @@ test('IdentityPort.acquire refuses an unbranded string at the type level (comms-
   // this — if the @ts-expect-error below stops erroring, the brand has
   // been weakened and unvalidated strings can flow into the identity pipeline.
   const fakePort = {
-    acquire: async (_name: import('@codeforbreakfast/core/ports').BotName) => ({}),
+    acquire: async (_name: import('@commy/core/ports').BotName) => ({}),
   }
   // @ts-expect-error — name must be BotName, not string
   fakePort.acquire('raw-unbranded-string')

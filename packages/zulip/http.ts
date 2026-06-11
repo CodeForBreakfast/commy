@@ -1,4 +1,4 @@
-import { messageOf } from '@codeforbreakfast/core/messageOf'
+import { messageOf } from '@commy/core/messageOf'
 import { HttpBody, HttpClient, HttpClientRequest } from '@effect/platform'
 import {
   Data,

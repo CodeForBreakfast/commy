@@ -14,14 +14,8 @@
  * plumbing is needed because every layer is Effect-native.
  */
 
-import { messageOf } from '@codeforbreakfast/core/messageOf'
-import type {
-  Identity,
-  InboundEvent,
-  InboxError,
-  MessageRef,
-  Timestamp,
-} from '@codeforbreakfast/core/ports'
+import { messageOf } from '@commy/core/messageOf'
+import type { Identity, InboundEvent, InboxError, MessageRef, Timestamp } from '@commy/core/ports'
 import {
   decodeChannelId,
   decodeChannelName,
@@ -32,7 +26,7 @@ import {
   decodeMessageId,
   decodeThreadName,
   decodeTimestamp,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import {
   Chunk,
   Duration,

@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
-import { captureLogger } from '@codeforbreakfast/core/logging'
-import type { Identity, InboundEvent } from '@codeforbreakfast/core/ports'
+import { captureLogger } from '@commy/core/logging'
+import type { Identity, InboundEvent } from '@commy/core/ports'
 import {
   decodeChannelIdSync,
   decodeChannelNameSync,
@@ -11,7 +11,7 @@ import {
   decodeThreadNameSync,
   decodeTimestampSync,
   InboxError,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import {
   Array as Arr,
   Chunk,

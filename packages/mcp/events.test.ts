@@ -5,7 +5,7 @@ import type {
   InboundEvent,
   Message,
   MessageRef,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import {
   decodeChannelIdSync,
   decodeChannelNameSync,
@@ -16,7 +16,7 @@ import {
   decodeMessageIdSync,
   decodeThreadNameSync,
   decodeTimestampSync,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import { formatError, formatMessage, formatReaction } from './events.ts'
 
 const BOT_ID: IdentityIdType = decodeIdentityIdSync('bot-42')

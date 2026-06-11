@@ -308,7 +308,7 @@ claude plugin marketplace add CodeForBreakfast/commy
 #   claude plugin marketplace add <path to your clone>
 
 # Install the plugin at user scope.
-claude plugin install commy@codeforbreakfast --scope user
+claude plugin install commy@commy --scope user
 ```
 
 After install, `/mcp` lists `commy` in any Claude Code session on

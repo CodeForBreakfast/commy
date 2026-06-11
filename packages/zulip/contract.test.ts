@@ -1,10 +1,6 @@
-import type { ChannelRef } from '@codeforbreakfast/core/ports'
-import {
-  decodeBotNameSync,
-  decodeChannelIdSync,
-  decodeChannelNameSync,
-} from '@codeforbreakfast/core/ports'
-import { runAgentCommsContract } from '@codeforbreakfast/testing/contract'
+import type { ChannelRef } from '@commy/core/ports'
+import { decodeBotNameSync, decodeChannelIdSync, decodeChannelNameSync } from '@commy/core/ports'
+import { runAgentCommsContract } from '@commy/testing/contract'
 import { FetchHttpClient, HttpClient } from '@effect/platform'
 import { Effect, Option, Redacted } from 'effect'
 import { zulipAdapter } from './adapter.ts'

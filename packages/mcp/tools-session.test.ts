@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
-import { decodeDisplayNameSync } from '@codeforbreakfast/core/ports'
-import { type MemoryAdapter, memoryAdapter } from '@codeforbreakfast/memory/adapter'
+import { decodeDisplayNameSync } from '@commy/core/ports'
+import { type MemoryAdapter, memoryAdapter } from '@commy/memory/adapter'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { Effect, Option, type Scope } from 'effect'

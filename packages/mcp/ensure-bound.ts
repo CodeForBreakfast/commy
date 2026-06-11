@@ -1,4 +1,4 @@
-import type { AcquiredIdentity, BotName } from '@codeforbreakfast/core/ports'
+import type { AcquiredIdentity, BotName } from '@commy/core/ports'
 import { Cause, Deferred, Effect, Exit, Ref } from 'effect'
 
 export interface EnsureBoundDeps<E> {

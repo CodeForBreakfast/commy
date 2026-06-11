@@ -16,9 +16,9 @@
  * the one-shot `end`/`close` listeners exist (which would be a false
  * reproduction of the very race under test).
  */
-import { stderrLoggerLayer } from '@codeforbreakfast/core/logging'
-import { type MemoryAdapter, memoryAdapter } from '@codeforbreakfast/memory/adapter'
-import type { ZulipAdapter } from '@codeforbreakfast/zulip/adapter'
+import { stderrLoggerLayer } from '@commy/core/logging'
+import { type MemoryAdapter, memoryAdapter } from '@commy/memory/adapter'
+import type { ZulipAdapter } from '@commy/zulip/adapter'
 import { FetchHttpClient } from '@effect/platform'
 import { BunFileSystem, BunRuntime } from '@effect/platform-bun'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'

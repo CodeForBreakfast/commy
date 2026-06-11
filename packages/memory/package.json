@@ -1,5 +1,5 @@
 {
-  "name": "@codeforbreakfast/memory",
+  "name": "@commy/memory",
   "version": "0.7.0",
   "license": "Apache-2.0",
   "type": "module",
@@ -7,9 +7,9 @@
     "./*": "./*.ts"
   },
   "dependencies": {
-    "@codeforbreakfast/core": "workspace:*"
+    "@commy/core": "workspace:*"
   },
   "devDependencies": {
-    "@codeforbreakfast/testing": "workspace:*"
+    "@commy/testing": "workspace:*"
   }
 }

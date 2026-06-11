@@ -1,13 +1,8 @@
 import { basename, join } from 'node:path'
-import { stderrLoggerLayer } from '@codeforbreakfast/core/logging'
-import type {
-  AcquiredIdentity,
-  AgentComms,
-  InboxError,
-  MessageInbox,
-} from '@codeforbreakfast/core/ports'
-import { decodeChannelName, decodeThreadName } from '@codeforbreakfast/core/ports'
-import { attachmentReference } from '@codeforbreakfast/zulip/adapter'
+import { stderrLoggerLayer } from '@commy/core/logging'
+import type { AcquiredIdentity, AgentComms, InboxError, MessageInbox } from '@commy/core/ports'
+import { decodeChannelName, decodeThreadName } from '@commy/core/ports'
+import { attachmentReference } from '@commy/zulip/adapter'
 import { FetchHttpClient, FileSystem, type HttpClient } from '@effect/platform'
 import { BunFileSystem, BunRuntime } from '@effect/platform-bun'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'

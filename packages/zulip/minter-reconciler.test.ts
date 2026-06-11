@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { type ChannelName, decodeChannelNameSync } from '@codeforbreakfast/core/ports'
+import { type ChannelName, decodeChannelNameSync } from '@commy/core/ports'
 import { Data, Effect } from 'effect'
 import type { ReconcilerDeps } from './minter-reconciler.ts'
 import { reconcileMinterSubscriptions } from './minter-reconciler.ts'

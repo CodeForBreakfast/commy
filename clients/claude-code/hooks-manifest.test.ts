@@ -58,9 +58,7 @@ function injectSessionIdMatcher(manifest: typeof hooksManifest): string {
 }
 
 test('PreToolUse matcher covers every ensureBoundFor caller in tools.ts', async () => {
-  const toolsSource = await Bun.file(
-    Bun.resolveSync('@codeforbreakfast/mcp/tools', import.meta.dir),
-  ).text()
+  const toolsSource = await Bun.file(Bun.resolveSync('@commy/mcp/tools', import.meta.dir)).text()
   const minting = mintingToolsFromToolsSource(toolsSource)
   const matched = alternationToolsFromMatcher(injectSessionIdMatcher(hooksManifest))
 

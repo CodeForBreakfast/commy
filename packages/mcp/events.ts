@@ -1,4 +1,4 @@
-import type { IdentityId, InboundEvent, Timestamp } from '@codeforbreakfast/core/ports'
+import type { IdentityId, InboundEvent, Timestamp } from '@commy/core/ports'
 import { Array as Arr, Option, Record as Rec } from 'effect'
 
 /**

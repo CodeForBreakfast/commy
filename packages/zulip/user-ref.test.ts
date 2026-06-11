@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { decodeIdentityIdSync } from '@codeforbreakfast/core/ports'
+import { decodeIdentityIdSync } from '@commy/core/ports'
 import { senderNarrow, userPresencePath, ZulipUserRef } from './user-ref.ts'
 
 test('ZulipUserRef is a structural pass-through of the integer user id', () => {

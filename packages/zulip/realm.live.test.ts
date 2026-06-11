@@ -30,7 +30,7 @@ import type {
   Identity,
   InboundEvent,
   ReleaseOpts,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import {
   type BotName,
   type DisplayName,
@@ -40,7 +40,7 @@ import {
   decodeDisplayNameSync,
   decodeEmojiSync,
   decodeMessageBodySync,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import { FetchHttpClient, HttpClient } from '@effect/platform'
 import {
   Context,

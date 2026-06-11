@@ -6,8 +6,8 @@ import type {
   IdentityId,
   Message,
   Timestamp,
-} from '@codeforbreakfast/core/ports'
-import { decodeChannelId, decodeTimestamp } from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
+import { decodeChannelId, decodeTimestamp } from '@commy/core/ports'
 import { Array as Arr, Clock, Effect, Match, Order } from 'effect'
 import type { Notifier } from './event-pump.ts'
 import { formatMessage } from './events.ts'

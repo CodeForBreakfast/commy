@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import type { ChannelRef } from '@codeforbreakfast/core/ports'
+import type { ChannelRef } from '@commy/core/ports'
 import {
   decodeBotNameSync,
   decodeChannelIdSync,
@@ -10,7 +10,7 @@ import {
   decodeTimestampSync,
   HistoryError,
   PublisherError,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import { Array as Arr, Cause, Duration, Effect, Exit, TestClock, TestContext } from 'effect'
 import { memoryAdapter } from './adapter.ts'
 

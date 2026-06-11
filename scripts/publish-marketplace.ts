@@ -18,15 +18,15 @@ const EXCLUDED = new Set(['node_modules', '.bun-result', '.worktrees', '.beads',
 const excludedFilter = (source: string): boolean => !EXCLUDED.has(basename(source))
 
 // Freeze the whole Bun workspace into stagingDir so the frozen install can
-// resolve the @codeforbreakfast/* workspace symlinks in-tree. We carry the repo-root
+// resolve the @commy/* workspace symlinks in-tree. We carry the repo-root
 // package.json + bun.lock (the lockfile the frozen install pins against) and
 // bunfig.toml (it governs install behaviour — exact pins, minimum release age),
 // the entire packages/ tree (the universal substrate — core, testing, zulip,
 // memory, mcp; including the test-only testing/memory — pruning is deferred,
 // disk is cheap), the clients/ tree (the per-client adapters; clients/claude-code
 // is the CC adapter the boot smoke test launches), and the root .claude-plugin/
-// marketplace manifest. The manifest identity is codeforbreakfast and
-// installers resolve the plugin as commy@codeforbreakfast (marketplace name +
+// marketplace manifest. The manifest identity is commy and
+// installers resolve the plugin as commy@commy (marketplace name +
 // plugin name).
 // tsconfig/biome are not copied: the boot runs the server at runtime, not under
 // tsc, so it needs module resolution, not typecheck config. No dependencies
@@ -48,7 +48,7 @@ export function stageMarketplace(repoRoot: string, stagingDir: string): void {
 
 // Install the workspace's pinned dependencies at the frozen workspace root,
 // network-free when bun's cache is warm. Running at the root (not a single
-// package) is what recreates the @codeforbreakfast/* workspace symlinks in-tree.
+// package) is what recreates the @commy/* workspace symlinks in-tree.
 // --frozen-lockfile fails loudly if the staged lockfile drifts. --ignore-scripts
 // skips lifecycle scripts: the only one is the root `prepare` (dev-env git-hooks
 // path + an editor-only effect-language-service patch), which is meaningless in a

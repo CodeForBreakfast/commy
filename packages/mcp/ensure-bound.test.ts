@@ -1,11 +1,11 @@
 import { expect, test } from 'bun:test'
-import type { AcquiredIdentity, Identity } from '@codeforbreakfast/core/ports'
+import type { AcquiredIdentity, Identity } from '@commy/core/ports'
 import {
   type BotName,
   decodeBotNameSync,
   decodeDisplayNameSync,
   decodeIdentityIdSync,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import { Data, Effect } from 'effect'
 import { createEnsureBound } from './ensure-bound.ts'
 

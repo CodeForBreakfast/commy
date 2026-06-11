@@ -1,7 +1,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { IdentityId, Timestamp } from '@codeforbreakfast/core/ports'
-import { TimestampSchema } from '@codeforbreakfast/core/ports'
+import type { IdentityId, Timestamp } from '@commy/core/ports'
+import { TimestampSchema } from '@commy/core/ports'
 import { FileSystem } from '@effect/platform'
 import type { PlatformError } from '@effect/platform/Error'
 import {

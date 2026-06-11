@@ -1,5 +1,5 @@
-import type { IdentityId, InboundEvent, MessageInbox } from '@codeforbreakfast/core/ports'
-import { decodeTimestamp } from '@codeforbreakfast/core/ports'
+import type { IdentityId, InboundEvent, MessageInbox } from '@commy/core/ports'
+import { decodeTimestamp } from '@commy/core/ports'
 import { Array as Arr, Clock, Data, Effect, Option, Order, Predicate } from 'effect'
 import type { CursorStore } from './cursor-store.ts'
 import type { Notifier } from './event-pump.ts'

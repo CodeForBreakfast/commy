@@ -43,7 +43,7 @@ import type {
   RecentThread,
   SubscriptionTarget,
   Timestamp as TimestampType,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import {
   type BotName,
   decodeChannelId,
@@ -57,7 +57,7 @@ import {
   PublisherError,
   UnknownChannel,
   UnknownIdentity,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import {
   Array as Arr,
   Clock,

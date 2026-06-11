@@ -1,5 +1,5 @@
 {
-  "name": "@codeforbreakfast/mcp",
+  "name": "@commy/mcp",
   "version": "0.11.1",
   "license": "Apache-2.0",
   "type": "module",
@@ -7,11 +7,11 @@
     "./*": "./*.ts"
   },
   "dependencies": {
-    "@codeforbreakfast/core": "workspace:*",
-    "@codeforbreakfast/zulip": "workspace:*"
+    "@commy/core": "workspace:*",
+    "@commy/zulip": "workspace:*"
   },
   "devDependencies": {
-    "@codeforbreakfast/memory": "workspace:*",
-    "@codeforbreakfast/testing": "workspace:*"
+    "@commy/memory": "workspace:*",
+    "@commy/testing": "workspace:*"
   }
 }

@@ -1,13 +1,13 @@
-import type { BotName, InboxError, MessageInbox } from '@codeforbreakfast/core/ports'
-import { decodeBotNameSync } from '@codeforbreakfast/core/ports'
-import type { ZulipAdapter } from '@codeforbreakfast/zulip/adapter'
-import { zulipAdapter } from '@codeforbreakfast/zulip/adapter'
+import type { BotName, InboxError, MessageInbox } from '@commy/core/ports'
+import { decodeBotNameSync } from '@commy/core/ports'
+import type { ZulipAdapter } from '@commy/zulip/adapter'
+import { zulipAdapter } from '@commy/zulip/adapter'
 import type {
   ApiKey as ApiKeyType,
   BotEmail as BotEmailType,
   RealmUrl as RealmUrlType,
-} from '@codeforbreakfast/zulip/http'
-import { apiKeySchema, botEmailSchema, realmUrlSchema } from '@codeforbreakfast/zulip/http'
+} from '@commy/zulip/http'
+import { apiKeySchema, botEmailSchema, realmUrlSchema } from '@commy/zulip/http'
 import type { HttpClient } from '@effect/platform'
 import {
   Config,
@@ -80,7 +80,7 @@ export const parseSessionId = (raw: unknown): Option.Option<SessionId> => {
   return Option.some(raw as SessionId)
 }
 
-export type { BotName } from '@codeforbreakfast/core/ports'
+export type { BotName } from '@commy/core/ports'
 
 const BOT_NAME_RE = /^[a-z][a-z0-9_-]*$/
 

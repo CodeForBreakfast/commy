@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import type { AcquiredIdentity, Identity } from '@codeforbreakfast/core/ports'
+import type { AcquiredIdentity, Identity } from '@commy/core/ports'
 import {
   type BotName,
   decodeBotNameSync,
   decodeDisplayNameSync,
   decodeIdentityIdSync,
   IdentityError,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import { Clock, Duration, Effect, Option, TestClock, TestContext } from 'effect'
 import type { ProjectSlug, SessionId } from './bootstrap.ts'
 import { parseSessionId, sanitiseProjectSlug } from './bootstrap.ts'

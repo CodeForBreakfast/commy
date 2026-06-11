@@ -25,11 +25,11 @@ SDK boundary.** The codebase is built on [Effect][effect].
 
 | Workspace package | Role |
 |---|---|
-| `@codeforbreakfast/core` | Domain ports, branded value types, and errors. No I/O, no Zulip. |
-| `@codeforbreakfast/zulip` | Driven adapter — implements the ports against a Zulip realm's HTTP + events APIs. |
-| `@codeforbreakfast/mcp` | Driving adapter — exposes the ports as MCP tools, plus bootstrap/identity lifecycle and the inbound event pump. |
-| `@codeforbreakfast/memory` | In-memory adapter used as a fast contract-test double for the ports. |
-| `@codeforbreakfast/testing` | Shared port contract tests, run against every adapter. |
+| `@commy/core` | Domain ports, branded value types, and errors. No I/O, no Zulip. |
+| `@commy/zulip` | Driven adapter — implements the ports against a Zulip realm's HTTP + events APIs. |
+| `@commy/mcp` | Driving adapter — exposes the ports as MCP tools, plus bootstrap/identity lifecycle and the inbound event pump. |
+| `@commy/memory` | In-memory adapter used as a fast contract-test double for the ports. |
+| `@commy/testing` | Shared port contract tests, run against every adapter. |
 | `commy-plugin` | The Claude Code client adapter that packages the MCP server. Lives under `clients/` as a peer to future per-client adapters. See [`clients/claude-code/README.md`](clients/claude-code/README.md). |
 
 The plugin README documents the tool surface, the inbound `<channel>` event
@@ -53,7 +53,7 @@ The plugin ships from this repo's marketplace
 claude plugin marketplace add CodeForBreakfast/commy
 
 # Install the plugin.
-claude plugin install commy@codeforbreakfast
+claude plugin install commy@commy
 ```
 
 On first enable the plugin prompts for the three realm credentials
@@ -63,7 +63,7 @@ non-interactively, pass `--config ZULIP_SITE=… --config ZULIP_MINTER_EMAIL=…
 (repeatable) on `install`. After install, `/mcp` lists `commy` in any Claude
 Code session running as the same user.
 
-`claude plugin update commy@codeforbreakfast` pulls the latest released tag.
+`claude plugin update commy@commy` pulls the latest released tag.
 The plugin requires [Nix](https://nixos.org/download) on the host PATH — it
 launches its pinned Bun via the plugin's own flake. Full configuration,
 run-shapes, and troubleshooting are in
@@ -218,7 +218,7 @@ is specified in [`docs/claude-channel-inbound-contract.md`](docs/claude-channel-
 The project's version is the plugin release version: annotated git tags
 `commy-vX.Y.Z`, mirrored across the release manifests
 (`clients/claude-code/.claude-plugin/plugin.json` and its lockstep group,
-enforced by `clients/claude-code/manifests.test.ts`). The `@codeforbreakfast/*`
+enforced by `clients/claude-code/manifests.test.ts`). The `@commy/*`
 workspace packages are not published to npm; their `package.json` versions are
 internal. Each release's changelog is the curated notes on its GitHub Release.
 
