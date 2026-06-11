@@ -1,0 +1,12 @@
+{
+  "name": "@codeforbreakfast/testing",
+  "version": "0.7.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    "./*": "./*.ts"
+  },
+  "dependencies": {
+    "@codeforbreakfast/core": "workspace:*"
+  }
+}

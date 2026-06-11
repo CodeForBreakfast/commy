@@ -1,0 +1,1734 @@
+import { expect, test } from 'bun:test'
+import { rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  decodeBotNameSync,
+  decodeChannelIdSync,
+  decodeChannelNameSync,
+  decodeMessageBodySync,
+  decodeThreadNameSync,
+  HistoryError,
+} from '@codeforbreakfast/core/ports'
+import { type MemoryAdapter, memoryAdapter } from '@codeforbreakfast/memory/adapter'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
+import { Effect, type Scope } from 'effect'
+import type { EnsureBound } from './ensure-bound.ts'
+import { createEnsureBound } from './ensure-bound.ts'
+import type { IdentityCache } from './identity-cache.ts'
+import { createSingleIdentityCache } from './identity-cache.ts'
+import { buildMcpServer } from './mcp-server.ts'
+import type { NarrowSet } from './narrow-set.ts'
+import { createNarrowSet } from './narrow-set.ts'
+import type { ToolsCache } from './tools.ts'
+import { registerTools } from './tools.ts'
+
+type MemoryAdapterRig = MemoryAdapter
+
+const buildDeps = (
+  adapter: MemoryAdapterRig,
+): {
+  ensureBound: EnsureBound
+  identityCache: IdentityCache
+  narrowSet: NarrowSet
+} => {
+  const ensureBound = createEnsureBound({
+    acquire: adapter.identity.acquire,
+    name: decodeBotNameSync('test-bot'),
+  })
+  return {
+    ensureBound,
+    identityCache: createSingleIdentityCache({ ensureBound }),
+    narrowSet: createNarrowSet(),
+  }
+}
+
+interface ConnectedRig {
+  readonly adapter: MemoryAdapterRig
+  readonly ensureBound: EnsureBound
+  readonly narrowSet: NarrowSet
+  readonly cache: ToolsCache
+  readonly client: Client
+}
+
+type ExtraToolDeps = Partial<{
+  downloadFile: (
+    urlPath: string,
+  ) => Effect.Effect<{ filePath: string; contentType: string; size: number }>
+  upload: (path: string) => Effect.Effect<{ reference: string; filename: string; size: number }>
+}>
+
+/**
+ * Mount server + client around an already-built adapter and deps. Used by
+ * withRig / withRigAndCache and by bespoke tests that monkey-patch the
+ * adapter before mounting. Releases client+server when the scope closes.
+ */
+const mountAndConnect = (
+  adapter: MemoryAdapterRig,
+  deps: { identityCache: IdentityCache; narrowSet: NarrowSet; ensureBound: EnsureBound },
+  extra: ExtraToolDeps = {},
+): Effect.Effect<ConnectedRig, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const server = buildMcpServer()
+    const cache = registerTools(server, {
+      adapter,
+      identityCache: deps.identityCache,
+      narrowSet: deps.narrowSet,
+      ...extra,
+    })
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair()
+    const client = new Client({ name: 'commy-tools-test', version: '0.0.0' }, { capabilities: {} })
+    yield* Effect.promise(() =>
+      Promise.all([server.connect(serverTransport), client.connect(clientTransport)]),
+    )
+    yield* Effect.addFinalizer(() =>
+      Effect.promise(async () => {
+        await client.close()
+        await server.close()
+      }),
+    )
+    return {
+      adapter,
+      ensureBound: deps.ensureBound,
+      narrowSet: deps.narrowSet,
+      cache,
+      client,
+    }
+  })
+
+const withRig = <E>(
+  setup: (adapter: MemoryAdapterRig, ensureBound: EnsureBound) => Effect.Effect<void, E>,
+): Effect.Effect<ConnectedRig, E, Scope.Scope> =>
+  Effect.gen(function* () {
+    const adapter = yield* memoryAdapter()
+    const deps = buildDeps(adapter)
+    yield* setup(adapter, deps.ensureBound)
+    return yield* mountAndConnect(adapter, deps)
+  })
+
+const withRigAndCache = <E>(
+  setup: (
+    adapter: MemoryAdapterRig,
+    cache: ToolsCache,
+    ensureBound: EnsureBound,
+  ) => Effect.Effect<void, E>,
+): Effect.Effect<ConnectedRig, E, Scope.Scope> =>
+  Effect.gen(function* () {
+    const adapter = yield* memoryAdapter()
+    const deps = buildDeps(adapter)
+    const rig = yield* mountAndConnect(adapter, deps)
+    yield* setup(adapter, rig.cache, deps.ensureBound)
+    return rig
+  })
+
+test('tools/list advertises current_identity with optional session_id (ass-2dhb)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) =>
+          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
+        )
+        const result = yield* Effect.promise(() => rig.client.listTools())
+        const tool = result.tools.find((t) => t.name === 'current_identity')
+        expect(tool).toBeDefined()
+        expect(tool?.description).toBeTruthy()
+        expect(tool?.inputSchema).toMatchObject({
+          type: 'object',
+          properties: {
+            session_id: { type: 'string', description: expect.any(String) },
+          },
+          additionalProperties: false,
+        })
+        // session_id is optional (not in required[]).
+        const inputSchema = tool?.inputSchema as { required?: ReadonlyArray<string> }
+        expect(inputSchema.required ?? []).not.toContain('session_id')
+      }),
+    ),
+  ))
+
+test('current_identity returns the bound identity after ensureBound resolves', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) =>
+          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
+        )
+        const expected = yield* rig.adapter.identity.currentIdentity()
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'current_identity', arguments: {} }),
+        )
+        expect(result.isError).toBeFalsy()
+        expect(result.structuredContent).toEqual({
+          state: 'bound',
+          identity: {
+            id: expected.id,
+            name: expected.name,
+            kind: expected.kind,
+          },
+          recent_threads: [],
+        })
+      }),
+    ),
+  ))
+
+test('current_identity before acquire returns the unbound sentinel (passive, never triggers acquire)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig(() => Effect.void)
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'current_identity', arguments: {} }),
+        )
+        expect(result.isError).toBeFalsy()
+        expect(result.structuredContent).toEqual({ state: 'unbound', identity: null })
+        // The passive accessor MUST NOT have triggered acquire.
+        expect(rig.ensureBound.current()).toBeUndefined()
+      }),
+    ),
+  ))
+
+test('current_identity flips to bound after a post triggers ensureBound', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache) =>
+          Effect.gen(function* () {
+            cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
+          }),
+        )
+        const before = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'current_identity', arguments: {} }),
+        )
+        expect(before.structuredContent).toEqual({ state: 'unbound', identity: null })
+
+        yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: { channel_name: 'home', body: 'first attribution' },
+          }),
+        )
+
+        const after = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'current_identity', arguments: {} }),
+        )
+        const sc = after.structuredContent as {
+          state: string
+          identity: { id: string; name: string; kind: string } | null
+        }
+        expect(sc.state).toBe('bound')
+        expect(sc.identity?.name).toBe('test-bot')
+      }),
+    ),
+  ))
+
+test('current_identity includes recent_threads showing where the bot posted (comms-esu)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            cache.rememberChannel(yield* adapter.seedChannel('project-x').pipe(Effect.orDie))
+            yield* Effect.promise(() => ensureBound())
+            yield* adapter.publisher.post(
+              { id: decodeChannelIdSync('1'), name: decodeChannelNameSync('project-x') },
+              decodeMessageBodySync('first response'),
+              { thread: { name: decodeThreadNameSync('bug-report') } },
+            )
+            yield* adapter.publisher.post(
+              { id: decodeChannelIdSync('1'), name: decodeChannelNameSync('project-x') },
+              decodeMessageBodySync('second response'),
+              { thread: { name: decodeThreadNameSync('feature-request') } },
+            )
+          }),
+        )
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'current_identity', arguments: {} }),
+        )
+        expect(result.isError).toBeFalsy()
+        const sc = result.structuredContent as {
+          state: string
+          identity: unknown
+          recent_threads: ReadonlyArray<{
+            channel: string
+            thread: string
+            last_post_ts: number
+            last_post_body: string
+          }>
+        }
+        expect(sc.recent_threads).toBeDefined()
+        expect(sc.recent_threads).toHaveLength(2)
+        const [first, second] = sc.recent_threads
+        expect(first?.channel).toBe('project-x')
+        expect(first?.thread).toBe('feature-request')
+        expect(first?.last_post_body).toBe('second response')
+        expect(second?.thread).toBe('bug-report')
+        expect(second?.last_post_body).toBe('first response')
+      }),
+    ),
+  ))
+
+test('current_identity fails soft when the recent_threads enrichment throws — still returns bound (comms-wpp)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const base = yield* memoryAdapter()
+        const adapter: MemoryAdapterRig = {
+          ...base,
+          history: {
+            ...base.history,
+            recentThreads: () =>
+              Effect.fail(
+                new HistoryError({
+                  operation: 'recentThreads',
+                  cause: new Error('ZulipApiError: unknown user 473'),
+                }),
+              ),
+          },
+        }
+        const deps = buildDeps(adapter)
+        yield* Effect.promise(() => deps.ensureBound())
+        const rig = yield* mountAndConnect(adapter, deps)
+
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'current_identity', arguments: {} }),
+        )
+        expect(result.isError).toBeFalsy()
+        const sc = result.structuredContent as {
+          state: string
+          identity: { id: string; name: string; kind: string } | null
+          recent_threads?: unknown
+        }
+        expect(sc.state).toBe('bound')
+        expect(sc.identity?.name).toBe('test-bot')
+        expect(sc.recent_threads).toBeUndefined()
+      }),
+    ),
+  ))
+
+test('calling an unknown tool surfaces a protocol error', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) =>
+          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
+        )
+        const error = yield* Effect.flip(
+          Effect.tryPromise({
+            try: () => rig.client.callTool({ name: 'no_such_tool', arguments: {} }),
+            catch: (e) => e as { message: string },
+          }),
+        )
+        expect(error.message).toContain('no_such_tool')
+      }),
+    ),
+  ))
+
+test('tools/list advertises resolve with a name argument', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) =>
+          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
+        )
+        const result = yield* Effect.promise(() => rig.client.listTools())
+        const tool = result.tools.find((t) => t.name === 'resolve')
+        expect(tool).toBeDefined()
+        expect(tool?.inputSchema).toEqual({
+          type: 'object',
+          properties: { name: { type: 'string', description: expect.any(String) } },
+          required: ['name'],
+          additionalProperties: false,
+        })
+      }),
+    ),
+  ))
+
+test('resolve returns the matching identity by name', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((adapter, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            yield* adapter.seedAgent('peer-bot').pipe(Effect.orDie)
+          }),
+        )
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'resolve',
+            arguments: { name: 'peer-bot' },
+          }),
+        )
+        expect(result.isError).toBeFalsy()
+        expect(result.structuredContent).toMatchObject({
+          identity: { name: 'peer-bot', kind: 'agent' },
+        })
+      }),
+    ),
+  ))
+
+test('resolve returns identity=null when nothing matches', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) =>
+          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
+        )
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'resolve',
+            arguments: { name: 'no-such-name' },
+          }),
+        )
+        expect(result.isError).toBeFalsy()
+        expect(result.structuredContent).toEqual({ identity: null })
+      }),
+    ),
+  ))
+
+test('list_agents returns only agent-kind identities seeded in the directory', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((adapter, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            yield* adapter.seedAgent('peer-a').pipe(Effect.orDie)
+            yield* adapter.seedAgent('peer-b').pipe(Effect.orDie)
+            yield* adapter.seedHuman('graeme').pipe(Effect.orDie)
+          }),
+        )
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'list_agents', arguments: {} }),
+        )
+        expect(result.isError).toBeFalsy()
+        const sc = result.structuredContent as {
+          identities: Array<{ name: string; kind: string }>
+        }
+        const names = sc.identities.map((i) => i.name).sort()
+        expect(names).toContain('peer-a')
+        expect(names).toContain('peer-b')
+        expect(names).not.toContain('graeme')
+        for (const identity of sc.identities) {
+          expect(identity.kind).toBe('agent')
+        }
+      }),
+    ),
+  ))
+
+test('presence reads cache after list_agents populates it', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((adapter, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            yield* adapter.seedAgent('peer-a').pipe(Effect.orDie)
+          }),
+        )
+        const listed = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'list_agents', arguments: {} }),
+        )
+        const sc = listed.structuredContent as { identities: Array<{ id: string }> }
+        const peer = sc.identities.find(
+          (i) =>
+            // peer-a is the seeded agent
+            i.id.length > 0,
+        )
+        expect(peer).toBeDefined()
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'presence',
+            arguments: { identity_id: peer?.id ?? '' },
+          }),
+        )
+        expect(result.isError).toBeFalsy()
+        const psc = result.structuredContent as { presence: string }
+        expect(['online', 'idle', 'offline']).toContain(psc.presence)
+      }),
+    ),
+  ))
+
+test('presence reads cache after resolve populates it', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((adapter, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            yield* adapter.seedAgent('peer-b').pipe(Effect.orDie)
+          }),
+        )
+        const resolved = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'resolve',
+            arguments: { name: 'peer-b' },
+          }),
+        )
+        const rsc = resolved.structuredContent as { identity: { id: string } | null }
+        const peerId = rsc.identity?.id ?? ''
+        expect(peerId.length).toBeGreaterThan(0)
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'presence',
+            arguments: { identity_id: peerId },
+          }),
+        )
+        expect(result.isError).toBeFalsy()
+        const psc = result.structuredContent as { presence: string }
+        expect(['online', 'idle', 'offline']).toContain(psc.presence)
+      }),
+    ),
+  ))
+
+test('presence for an unknown id surfaces UnknownIdentity', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) =>
+          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
+        )
+        const error = yield* Effect.flip(
+          Effect.tryPromise({
+            try: () =>
+              rig.client.callTool({
+                name: 'presence',
+                arguments: { identity_id: 'never-cached-or-seeded' },
+              }),
+            catch: (e) => e as { message: string },
+          }),
+        )
+        expect(error.message).toContain('UnknownIdentity')
+      }),
+    ),
+  ))
+
+test('list_humans returns only human-kind identities', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((adapter, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            yield* adapter.seedAgent('peer-a').pipe(Effect.orDie)
+            yield* adapter.seedHuman('graeme').pipe(Effect.orDie)
+            yield* adapter.seedHuman('mhairi').pipe(Effect.orDie)
+          }),
+        )
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'list_humans', arguments: {} }),
+        )
+        expect(result.isError).toBeFalsy()
+        const sc = result.structuredContent as {
+          identities: Array<{ name: string; kind: string }>
+        }
+        const names = sc.identities.map((i) => i.name).sort()
+        expect(names).toContain('graeme')
+        expect(names).toContain('mhairi')
+        expect(names).not.toContain('peer-a')
+        for (const identity of sc.identities) {
+          expect(identity.kind).toBe('human')
+        }
+      }),
+    ),
+  ))
+
+test('list_channels returns every channel seeded in the substrate', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((adapter, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            yield* adapter.seedChannel('home').pipe(Effect.orDie)
+            yield* adapter.seedChannel('general').pipe(Effect.orDie)
+            yield* adapter.seedChannel('commy').pipe(Effect.orDie)
+          }),
+        )
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'list_channels', arguments: {} }),
+        )
+        expect(result.isError).toBeFalsy()
+        const sc = result.structuredContent as { channels: Array<{ id: string; name: string }> }
+        const names = sc.channels.map((c) => c.name).sort()
+        expect(names).toEqual(['commy', 'general', 'home'])
+        for (const channel of sc.channels) {
+          expect(typeof channel.id).toBe('string')
+          expect(channel.id.length).toBeGreaterThan(0)
+        }
+      }),
+    ),
+  ))
+
+test('read_channel returns posted messages within the given range', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+            cache.rememberChannel(channelRef)
+            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('hello one'))
+            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('hello two'))
+          }),
+        )
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'read_channel',
+            arguments: { channel_name: 'home' },
+          }),
+        )
+        expect(result.isError).toBeFalsy()
+        const sc = result.structuredContent as { messages: Array<{ body: string }> }
+        const bodies = sc.messages.map((m) => m.body).sort()
+        expect(bodies).toEqual(['hello one', 'hello two'])
+      }),
+    ),
+  ))
+
+test('read_channel honours the limit argument', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+            cache.rememberChannel(channelRef)
+            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('one'))
+            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('two'))
+            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('three'))
+          }),
+        )
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'read_channel',
+            arguments: { channel_name: 'home', limit: 2 },
+          }),
+        )
+        const sc = result.structuredContent as { messages: Array<{ body: string }> }
+        expect(sc.messages).toHaveLength(2)
+      }),
+    ),
+  ))
+
+test('subscribe with channel:<name> calls inbox.subscribe with a matching ChannelRef', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const subscribed: Array<unknown> = []
+        const adapter = yield* memoryAdapter()
+        // wrap inbox.subscribe to capture targets
+        const originalSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
+        adapter.inbox.subscribe = (target) =>
+          Effect.sync(() => {
+            subscribed.push(target)
+          }).pipe(Effect.flatMap(() => originalSubscribe(target)))
+        const deps = buildDeps(adapter)
+        const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+        const rig = yield* mountAndConnect(adapter, deps)
+
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'subscribe',
+            arguments: { target: 'channel:home' },
+          }),
+        )
+        expect(result.isError).toBeFalsy()
+        expect(subscribed).toHaveLength(1)
+        expect(subscribed[0]).toMatchObject({ name: channelRef.name })
+        // narrowSet is updated alongside the substrate call (ass-220u).
+        expect(rig.narrowSet.size()).toBe(1)
+      }),
+    ),
+  ))
+
+test('subscribe with malformed target surfaces a protocol error', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) =>
+          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
+        )
+        const error = yield* Effect.flip(
+          Effect.tryPromise({
+            try: () =>
+              rig.client.callTool({
+                name: 'subscribe',
+                arguments: { target: 'not-a-valid-token' },
+              }),
+            catch: (e) => e as { message: string },
+          }),
+        )
+        expect(error.message).toContain('SubscribeTokenError')
+      }),
+    ),
+  ))
+
+test('unsubscribe routes through inbox.unsubscribe with the parsed target', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const unsubscribed: Array<unknown> = []
+        const adapter = yield* memoryAdapter()
+        const originalUnsubscribe = adapter.inbox.unsubscribe.bind(adapter.inbox)
+        adapter.inbox.unsubscribe = (target) =>
+          Effect.sync(() => {
+            unsubscribed.push(target)
+          }).pipe(Effect.flatMap(() => originalUnsubscribe(target)))
+        const deps = buildDeps(adapter)
+        const rig = yield* mountAndConnect(adapter, deps)
+
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'unsubscribe',
+            arguments: { target: 'mentions' },
+          }),
+        )
+        expect(result.isError).toBeFalsy()
+        expect(unsubscribed).toEqual(['mentions'])
+      }),
+    ),
+  ))
+
+test('post returns message_id + channel_name and posts via the adapter', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+            cache.rememberChannel(channelRef)
+          }),
+        )
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: { channel_name: 'home', body: 'hello from tool' },
+          }),
+        )
+        expect(result.isError).toBeFalsy()
+        const sc = result.structuredContent as {
+          message_id: string
+          channel_name: string
+          channel_id: string
+          thread: { name: string } | null
+        }
+        expect(sc.message_id.length).toBeGreaterThan(0)
+        expect(sc.channel_name).toBe('home')
+        expect(sc.thread).toBeNull()
+        const channelRef = yield* rig.adapter.seedChannel('home').pipe(Effect.orDie)
+        const history = yield* rig.adapter.history.readChannel(channelRef, {})
+        expect(history.map((m) => m.body)).toContain(decodeMessageBodySync('hello from tool'))
+      }),
+    ),
+  ))
+
+test('post supports thread arg', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
+          }),
+        )
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: { channel_name: 'home', body: 'thread reply', thread: 'payments' },
+          }),
+        )
+        const sc = result.structuredContent as { thread: { name: string } | null }
+        expect(sc.thread).toEqual({ name: 'payments' })
+      }),
+    ),
+  ))
+
+test('post to a thread auto-subscribes the poster to that thread (comms-1q8)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const subscribed: Array<unknown> = []
+        const adapter = yield* memoryAdapter()
+        const originalSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
+        adapter.inbox.subscribe = (target) =>
+          Effect.sync(() => {
+            subscribed.push(target)
+          }).pipe(Effect.flatMap(() => originalSubscribe(target)))
+        const deps = buildDeps(adapter)
+        const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+        const rig = yield* mountAndConnect(adapter, deps)
+        rig.cache.rememberChannel(channelRef)
+
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: { channel_name: 'home', body: 'opening message', thread: 'topic-X' },
+          }),
+        )
+        expect(result.isError).toBeFalsy()
+        expect(subscribed).toEqual([
+          expect.objectContaining({
+            channel: expect.objectContaining({ name: 'home' }),
+            thread: expect.objectContaining({ name: 'topic-X' }),
+          }),
+        ])
+        expect(rig.narrowSet.size()).toBe(1)
+      }),
+    ),
+  ))
+
+test('post without a thread does NOT auto-subscribe (comms-1q8)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const subscribed: Array<unknown> = []
+        const adapter = yield* memoryAdapter()
+        const originalSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
+        adapter.inbox.subscribe = (target) =>
+          Effect.sync(() => {
+            subscribed.push(target)
+          }).pipe(Effect.flatMap(() => originalSubscribe(target)))
+        const deps = buildDeps(adapter)
+        const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+        const rig = yield* mountAndConnect(adapter, deps)
+        rig.cache.rememberChannel(channelRef)
+
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: { channel_name: 'home', body: 'channel-level post' },
+          }),
+        )
+        expect(result.isError).toBeFalsy()
+        expect(subscribed).toEqual([])
+        expect(rig.narrowSet.size()).toBe(0)
+      }),
+    ),
+  ))
+
+test('posting to the same thread twice subscribes only once (comms-1q8 idempotency)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const subscribed: Array<unknown> = []
+        const adapter = yield* memoryAdapter()
+        const originalSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
+        adapter.inbox.subscribe = (target) =>
+          Effect.sync(() => {
+            subscribed.push(target)
+          }).pipe(Effect.flatMap(() => originalSubscribe(target)))
+        const deps = buildDeps(adapter)
+        const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+        const rig = yield* mountAndConnect(adapter, deps)
+        rig.cache.rememberChannel(channelRef)
+
+        yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: { channel_name: 'home', body: 'first', thread: 'topic-X' },
+          }),
+        )
+        yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: { channel_name: 'home', body: 'second', thread: 'topic-X' },
+          }),
+        )
+        expect(rig.narrowSet.size()).toBe(1)
+        void subscribed
+      }),
+    ),
+  ))
+
+test('react after a prior post hits the MessageRef cache without channel_name', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
+          }),
+        )
+        const posted = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: { channel_name: 'home', body: 'reactable' },
+          }),
+        )
+        const messageId = (posted.structuredContent as { message_id: string }).message_id
+        const reacted = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'react',
+            arguments: { message_id: messageId, emoji: 'tada' },
+          }),
+        )
+        expect(reacted.isError).toBeFalsy()
+      }),
+    ),
+  ))
+
+test('react with explicit channel_name works on a cache-miss id', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+            cache.rememberChannel(channelRef)
+            // post directly via adapter — bypasses the plugin's MessageRef cache
+            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('pre-existing message'))
+          }),
+        )
+        // We don't know the adapter-allocated message id externally, so reach in.
+        const homeRef = yield* rig.adapter.seedChannel('home').pipe(Effect.orDie)
+        const history = yield* rig.adapter.history.readChannel(homeRef, {})
+        const messageId = history[0]?.ref.id
+        expect(messageId).toBeDefined()
+        const reacted = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'react',
+            arguments: { message_id: String(messageId), emoji: 'tada', channel_name: 'home' },
+          }),
+        )
+        expect(reacted.isError).toBeFalsy()
+      }),
+    ),
+  ))
+
+test('react with cache miss and no channel_name surfaces UnknownMessage', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) =>
+          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
+        )
+        const error = yield* Effect.flip(
+          Effect.tryPromise({
+            try: () =>
+              rig.client.callTool({
+                name: 'react',
+                arguments: { message_id: 'made-up-id', emoji: 'tada' },
+              }),
+            catch: (e) => e as { message: string },
+          }),
+        )
+        expect(error.message).toContain('UnknownMessage')
+      }),
+    ),
+  ))
+
+test('react with a malformed emoji arg yields a typed ParseError tool error, not a crash (comms-spj3.36)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        // MCP args are untrusted: a colon-wrapped emoji shortcode fails the
+        // Emoji brand decode. Its ParseError must thread through runEdge as a
+        // typed tool-error response rather than surfacing as a defect/crash.
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
+          }),
+        )
+        const posted = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: { channel_name: 'home', body: 'react target' },
+          }),
+        )
+        const messageId = (posted.structuredContent as { message_id: string }).message_id
+        const error = yield* Effect.flip(
+          Effect.tryPromise({
+            try: () =>
+              rig.client.callTool({
+                name: 'react',
+                arguments: { message_id: messageId, emoji: ':smile:' },
+              }),
+            catch: (e) => e as { message: string },
+          }),
+        )
+        expect(error.message).toContain('ParseError')
+      }),
+    ),
+  ))
+
+test('edit_message rewrites the body, visible via history.readChannel', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
+          }),
+        )
+        const posted = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: { channel_name: 'home', body: 'original' },
+          }),
+        )
+        const messageId = (posted.structuredContent as { message_id: string }).message_id
+        const edited = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'edit_message',
+            arguments: { message_id: messageId, body: 'replacement' },
+          }),
+        )
+        expect(edited.isError).toBeFalsy()
+        const homeRef = yield* rig.adapter.seedChannel('home').pipe(Effect.orDie)
+        const history = yield* rig.adapter.history.readChannel(homeRef, {})
+        expect(history.map((m) => m.body)).toContain(decodeMessageBodySync('replacement'))
+        expect(history.map((m) => m.body)).not.toContain(decodeMessageBodySync('original'))
+      }),
+    ),
+  ))
+
+test('edit_message with explicit channel_name works on a cache-miss id', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+            cache.rememberChannel(channelRef)
+            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('pre-existing'))
+          }),
+        )
+        const homeRef = yield* rig.adapter.seedChannel('home').pipe(Effect.orDie)
+        const history = yield* rig.adapter.history.readChannel(homeRef, {})
+        const messageId = history[0]?.ref.id
+        expect(messageId).toBeDefined()
+        const edited = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'edit_message',
+            arguments: { message_id: String(messageId), body: 'amended', channel_name: 'home' },
+          }),
+        )
+        expect(edited.isError).toBeFalsy()
+        const afterRef = yield* rig.adapter.seedChannel('home').pipe(Effect.orDie)
+        const after = yield* rig.adapter.history.readChannel(afterRef, {})
+        expect(after[0]?.body).toBe(decodeMessageBodySync('amended'))
+      }),
+    ),
+  ))
+
+test('edit_message with cache miss and no channel_name surfaces UnknownMessage', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) =>
+          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
+        )
+        const error = yield* Effect.flip(
+          Effect.tryPromise({
+            try: () =>
+              rig.client.callTool({
+                name: 'edit_message',
+                arguments: { message_id: 'made-up-id', body: 'nope' },
+              }),
+            catch: (e) => e as { message: string },
+          }),
+        )
+        expect(error.message).toContain('UnknownMessage')
+      }),
+    ),
+  ))
+
+test('unreact mirrors react: routes through publisher.unreact', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
+          }),
+        )
+        const posted = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: { channel_name: 'home', body: 'unreact-me' },
+          }),
+        )
+        const messageId = (posted.structuredContent as { message_id: string }).message_id
+        yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'react',
+            arguments: { message_id: messageId, emoji: 'tada' },
+          }),
+        )
+        const unreacted = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'unreact',
+            arguments: { message_id: messageId, emoji: 'tada' },
+          }),
+        )
+        expect(unreacted.isError).toBeFalsy()
+      }),
+    ),
+  ))
+
+test('post into an existing thread (other agent posted first) auto-subscribes the poster (comms-iut)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const subscribed: Array<unknown> = []
+        const adapter = yield* memoryAdapter()
+        const originalSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
+        adapter.inbox.subscribe = (target) =>
+          Effect.sync(() => {
+            subscribed.push(target)
+          }).pipe(Effect.flatMap(() => originalSubscribe(target)))
+        const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+        // Seed the thread with a prior message from a different bot so the topic
+        // exists before our agent participates. ensureBound below acquires a
+        // separate name ("test-bot") — we acquire-then-release a peer first.
+        yield* adapter.identity.acquire(decodeBotNameSync('peer-bot'))
+        yield* adapter.publisher.post(channelRef, decodeMessageBodySync('opening line from peer'), {
+          thread: { name: decodeThreadNameSync('joint-topic') },
+        })
+        yield* adapter.identity.release()
+
+        const deps = buildDeps(adapter)
+        const rig = yield* mountAndConnect(adapter, deps)
+        rig.cache.rememberChannel(channelRef)
+
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: {
+              channel_name: 'home',
+              body: 'replying into existing topic',
+              thread: 'joint-topic',
+            },
+          }),
+        )
+        expect(result.isError).toBeFalsy()
+        expect(subscribed).toEqual([
+          expect.objectContaining({
+            channel: expect.objectContaining({ name: 'home' }),
+            thread: expect.objectContaining({ name: 'joint-topic' }),
+          }),
+        ])
+        expect(rig.narrowSet.size()).toBe(1)
+      }),
+    ),
+  ))
+
+test('react to a message in a thread auto-subscribes the reactor (comms-iut)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const subscribed: Array<unknown> = []
+        const adapter = yield* memoryAdapter()
+        const originalSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
+        adapter.inbox.subscribe = (target) =>
+          Effect.sync(() => {
+            subscribed.push(target)
+          }).pipe(Effect.flatMap(() => originalSubscribe(target)))
+        const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+        // Pre-existing thread message authored by a peer — bypasses the tool so
+        // no post-side auto-sub fires before the react under test.
+        yield* adapter.identity.acquire(decodeBotNameSync('peer-bot'))
+        const targetRef = yield* adapter.publisher.post(
+          channelRef,
+          decodeMessageBodySync('reactable in thread'),
+          {
+            thread: { name: decodeThreadNameSync('payments') },
+          },
+        )
+        yield* adapter.identity.release()
+
+        const deps = buildDeps(adapter)
+        const rig = yield* mountAndConnect(adapter, deps)
+        rig.cache.rememberChannel(channelRef)
+
+        const reacted = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'react',
+            arguments: {
+              message_id: String(targetRef.id),
+              emoji: 'tada',
+              channel_name: 'home',
+              thread: 'payments',
+            },
+          }),
+        )
+        expect(reacted.isError).toBeFalsy()
+        expect(subscribed).toEqual([
+          expect.objectContaining({
+            channel: expect.objectContaining({ name: 'home' }),
+            thread: expect.objectContaining({ name: 'payments' }),
+          }),
+        ])
+        expect(rig.narrowSet.size()).toBe(1)
+      }),
+    ),
+  ))
+
+test('react to a top-level (no-thread) message does NOT auto-subscribe (comms-iut)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const subscribed: Array<unknown> = []
+        const adapter = yield* memoryAdapter()
+        const originalSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
+        adapter.inbox.subscribe = (target) =>
+          Effect.sync(() => {
+            subscribed.push(target)
+          }).pipe(Effect.flatMap(() => originalSubscribe(target)))
+        const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+        yield* adapter.identity.acquire(decodeBotNameSync('peer-bot'))
+        const targetRef = yield* adapter.publisher.post(
+          channelRef,
+          decodeMessageBodySync('top-level reactable'),
+        )
+        yield* adapter.identity.release()
+
+        const deps = buildDeps(adapter)
+        const rig = yield* mountAndConnect(adapter, deps)
+        rig.cache.rememberChannel(channelRef)
+
+        const reacted = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'react',
+            arguments: {
+              message_id: String(targetRef.id),
+              emoji: 'tada',
+              channel_name: 'home',
+            },
+          }),
+        )
+        expect(reacted.isError).toBeFalsy()
+        expect(subscribed).toEqual([])
+        expect(rig.narrowSet.size()).toBe(0)
+      }),
+    ),
+  ))
+
+test('reacting to the same thread twice subscribes only once (comms-iut idempotency)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const subscribed: Array<unknown> = []
+        const adapter = yield* memoryAdapter()
+        const originalSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
+        adapter.inbox.subscribe = (target) =>
+          Effect.sync(() => {
+            subscribed.push(target)
+          }).pipe(Effect.flatMap(() => originalSubscribe(target)))
+        const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+        yield* adapter.identity.acquire(decodeBotNameSync('peer-bot'))
+        const a = yield* adapter.publisher.post(channelRef, decodeMessageBodySync('one'), {
+          thread: { name: decodeThreadNameSync('payments') },
+        })
+        const b = yield* adapter.publisher.post(channelRef, decodeMessageBodySync('two'), {
+          thread: { name: decodeThreadNameSync('payments') },
+        })
+        yield* adapter.identity.release()
+
+        const deps = buildDeps(adapter)
+        const rig = yield* mountAndConnect(adapter, deps)
+        rig.cache.rememberChannel(channelRef)
+
+        yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'react',
+            arguments: {
+              message_id: String(a.id),
+              emoji: 'tada',
+              channel_name: 'home',
+              thread: 'payments',
+            },
+          }),
+        )
+        yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'react',
+            arguments: {
+              message_id: String(b.id),
+              emoji: 'plus_one',
+              channel_name: 'home',
+              thread: 'payments',
+            },
+          }),
+        )
+        expect(rig.narrowSet.size()).toBe(1)
+        void subscribed
+      }),
+    ),
+  ))
+
+test('unreact does not change subscription state (comms-iut: no unsub-on-disengage)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const subscribed: Array<unknown> = []
+        const unsubscribed: Array<unknown> = []
+        const adapter = yield* memoryAdapter()
+        const originalSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
+        const originalUnsubscribe = adapter.inbox.unsubscribe.bind(adapter.inbox)
+        adapter.inbox.subscribe = (target) =>
+          Effect.sync(() => {
+            subscribed.push(target)
+          }).pipe(Effect.flatMap(() => originalSubscribe(target)))
+        adapter.inbox.unsubscribe = (target) =>
+          Effect.sync(() => {
+            unsubscribed.push(target)
+          }).pipe(Effect.flatMap(() => originalUnsubscribe(target)))
+        const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+        yield* adapter.identity.acquire(decodeBotNameSync('peer-bot'))
+        const targetRef = yield* adapter.publisher.post(
+          channelRef,
+          decodeMessageBodySync('reactable'),
+          {
+            thread: { name: decodeThreadNameSync('payments') },
+          },
+        )
+        yield* adapter.identity.release()
+
+        const deps = buildDeps(adapter)
+        const rig = yield* mountAndConnect(adapter, deps)
+        rig.cache.rememberChannel(channelRef)
+
+        yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'react',
+            arguments: {
+              message_id: String(targetRef.id),
+              emoji: 'tada',
+              channel_name: 'home',
+              thread: 'payments',
+            },
+          }),
+        )
+        expect(rig.narrowSet.size()).toBe(1)
+        yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'unreact',
+            arguments: {
+              message_id: String(targetRef.id),
+              emoji: 'tada',
+              channel_name: 'home',
+              thread: 'payments',
+            },
+          }),
+        )
+        expect(rig.narrowSet.size()).toBe(1)
+        expect(unsubscribed).toEqual([])
+        void subscribed
+      }),
+    ),
+  ))
+
+test('read_thread returns only messages in the given thread', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+            cache.rememberChannel(channelRef)
+            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('top-level message'))
+            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('thread message'), {
+              thread: { name: decodeThreadNameSync('payments') },
+            })
+          }),
+        )
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'read_thread',
+            arguments: { channel_name: 'home', thread: 'payments' },
+          }),
+        )
+        const sc = result.structuredContent as { messages: Array<{ body: string }> }
+        expect(sc.messages.map((m) => m.body)).toEqual(['thread message'])
+      }),
+    ),
+  ))
+
+test('read_thread schema uses thread not thread_name (comms-476)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) =>
+          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
+        )
+        const result = yield* Effect.promise(() => rig.client.listTools())
+        const tool = result.tools.find((t) => t.name === 'read_thread')
+        expect(tool).toBeDefined()
+        const props = tool?.inputSchema.properties as Record<string, unknown>
+        expect(props['thread']).toBeDefined()
+        expect(props['thread_name']).toBeUndefined()
+        const required = (tool?.inputSchema as { required?: ReadonlyArray<string> }).required ?? []
+        expect(required).toContain('thread')
+        expect(required).not.toContain('thread_name')
+      }),
+    ),
+  ))
+
+test('post with unknown argument rejects instead of silently dropping (comms-476)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
+          }),
+        )
+        const error = yield* Effect.flip(
+          Effect.tryPromise({
+            try: () =>
+              rig.client.callTool({
+                name: 'post',
+                arguments: { channel_name: 'home', body: 'hello', thread_name: 'oops' },
+              }),
+            catch: (e) => e as { message: string },
+          }),
+        )
+        expect(error.message).toContain('thread_name')
+      }),
+    ),
+  ))
+
+test('post with a non-string required arg rejects via the typed args decode (comms-o52)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        // The handler decodes the raw MCP args through a typed Schema.Struct
+        // once at its boundary rather than reaching in with args['k'] + typeof
+        // checks. A wrong-typed required field (channel_name as a number) must
+        // be rejected by that decode rather than flowing into the body as an
+        // unchecked value.
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
+          }),
+        )
+        const error = yield* Effect.flip(
+          Effect.tryPromise({
+            try: () =>
+              rig.client.callTool({
+                name: 'post',
+                arguments: { channel_name: 123, body: 'hello' },
+              }),
+            catch: (e) => e as { message: string },
+          }),
+        )
+        // The decode failure surfaces as a tool error threaded through runEdge,
+        // not a crash; it names the offending field.
+        expect(error.message).toContain('channel_name')
+      }),
+    ),
+  ))
+
+test('post with valid args decodes to the typed shape and posts (comms-o52)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        // Happy path for the typed args decode: a well-formed args object with
+        // both required strings and an optional thread decodes cleanly and the
+        // post lands with the parsed values.
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
+          }),
+        )
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: { channel_name: 'home', body: 'typed', thread: 'topic-typed' },
+          }),
+        )
+        expect(result.isError).toBeFalsy()
+        const sc = result.structuredContent as {
+          channel_name: string
+          thread: { name: string } | null
+        }
+        expect(sc.channel_name).toBe('home')
+        expect(sc.thread).toEqual({ name: 'topic-typed' })
+      }),
+    ),
+  ))
+
+test('react with unknown argument rejects (comms-476)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
+            const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+            const ref = yield* adapter.publisher.post(channelRef, decodeMessageBodySync('msg'))
+            cache.rememberMessage(ref)
+          }),
+        )
+        const homeRef = yield* rig.adapter.seedChannel('home').pipe(Effect.orDie)
+        const history = yield* rig.adapter.history.readChannel(homeRef, {})
+        const messageId = history[0]?.ref.id
+        const error = yield* Effect.flip(
+          Effect.tryPromise({
+            try: () =>
+              rig.client.callTool({
+                name: 'react',
+                arguments: { message_id: String(messageId), emoji: 'tada', bogus_field: true },
+              }),
+            catch: (e) => e as { message: string },
+          }),
+        )
+        expect(error.message).toContain('bogus_field')
+      }),
+    ),
+  ))
+
+// --- download_file (comms-xos) ---
+
+interface DownloadRig {
+  readonly client: Client
+}
+
+const withDownloadRig = (
+  downloadFile: (
+    urlPath: string,
+  ) => Effect.Effect<{ filePath: string; contentType: string; size: number }>,
+): Effect.Effect<DownloadRig, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const adapter = yield* memoryAdapter()
+    const deps = buildDeps(adapter)
+    yield* Effect.promise(() => deps.ensureBound())
+    const rig = yield* mountAndConnect(adapter, deps, { downloadFile })
+    return { client: rig.client }
+  })
+
+test('tools/list advertises download_file when downloadFile dep is provided (comms-xos)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withDownloadRig(() =>
+          Effect.succeed({
+            filePath: '/tmp/stub',
+            contentType: 'application/octet-stream',
+            size: 0,
+          }),
+        )
+        const result = yield* Effect.promise(() => rig.client.listTools())
+        const tool = result.tools.find((t) => t.name === 'download_file')
+        expect(tool).toBeDefined()
+        expect(tool?.inputSchema).toMatchObject({
+          type: 'object',
+          properties: {
+            url_path: { type: 'string' },
+          },
+          required: ['url_path'],
+          additionalProperties: false,
+        })
+      }),
+    ),
+  ))
+
+test('tools/list does not advertise download_file when downloadFile dep is missing (comms-xos)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) =>
+          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
+        )
+        const result = yield* Effect.promise(() => rig.client.listTools())
+        const tool = result.tools.find((t) => t.name === 'download_file')
+        expect(tool).toBeUndefined()
+      }),
+    ),
+  ))
+
+test('download_file returns the file path, content type, and size from the callback (comms-xos)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const pngHeader = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+        const tmpPath = join(tmpdir(), `comms-xos-test-${Date.now()}.png`)
+        writeFileSync(tmpPath, pngHeader)
+        yield* Effect.addFinalizer(() => Effect.sync(() => rmSync(tmpPath, { force: true })))
+        const rig = yield* withDownloadRig((urlPath) =>
+          Effect.sync(() => {
+            expect(urlPath).toBe('/user_uploads/2/56/image.png')
+            return { filePath: tmpPath, contentType: 'image/png', size: pngHeader.byteLength }
+          }),
+        )
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'download_file',
+            arguments: { url_path: '/user_uploads/2/56/image.png' },
+          }),
+        )
+        expect(result.isError).toBeFalsy()
+        const content = result.structuredContent as {
+          file_path: string
+          content_type: string
+          size: number
+        }
+        expect(content.content_type).toBe('image/png')
+        expect(content.size).toBe(8)
+        expect(content.file_path).toBe(tmpPath)
+      }),
+    ),
+  ))
+
+test('download_file rejects paths not starting with /user_uploads/ (comms-xos)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withDownloadRig(() =>
+          Effect.succeed({
+            filePath: '/tmp/stub',
+            contentType: 'application/octet-stream',
+            size: 0,
+          }),
+        )
+        const error = yield* Effect.flip(
+          Effect.tryPromise({
+            try: () =>
+              rig.client.callTool({
+                name: 'download_file',
+                arguments: { url_path: '/api/v1/messages' },
+              }),
+            catch: (e) => e as { message: string },
+          }),
+        )
+        // The reject is a typed ParseError threaded through runEdge (comms-spj3.36),
+        // not a defect/crash; its message names the user_uploads constraint.
+        expect(error.message).toContain('ParseError')
+        expect(error.message).toContain('user_uploads')
+      }),
+    ),
+  ))
+
+// --- upload_file (comms-nsa) ---
+
+interface UploadRig {
+  readonly client: Client
+}
+
+const withUploadRig = (
+  upload: (path: string) => Effect.Effect<{ reference: string; filename: string; size: number }>,
+): Effect.Effect<UploadRig, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const adapter = yield* memoryAdapter()
+    const deps = buildDeps(adapter)
+    yield* Effect.promise(() => deps.ensureBound())
+    const rig = yield* mountAndConnect(adapter, deps, { upload })
+    return { client: rig.client }
+  })
+
+test('tools/list advertises upload_file when the upload dep is provided (comms-nsa)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withUploadRig(() =>
+          Effect.succeed({
+            reference: '[x](/u)',
+            filename: 'x',
+            size: 0,
+          }),
+        )
+        const result = yield* Effect.promise(() => rig.client.listTools())
+        const tool = result.tools.find((t) => t.name === 'upload_file')
+        expect(tool).toBeDefined()
+        expect(tool?.inputSchema).toMatchObject({
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+          },
+          required: ['path'],
+          additionalProperties: false,
+        })
+      }),
+    ),
+  ))
+
+test('tools/list does not advertise upload_file when the upload dep is missing (comms-nsa)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) =>
+          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
+        )
+        const result = yield* Effect.promise(() => rig.client.listTools())
+        const tool = result.tools.find((t) => t.name === 'upload_file')
+        expect(tool).toBeUndefined()
+      }),
+    ),
+  ))
+
+test('upload_file passes the path through and returns reference, filename, and size (comms-nsa)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withUploadRig((path) =>
+          Effect.sync(() => {
+            expect(path).toBe('/tmp/chart.png')
+            return {
+              reference: '[chart.png](/user_uploads/1/ab/chart.png)',
+              filename: 'chart.png',
+              size: 42,
+            }
+          }),
+        )
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'upload_file',
+            arguments: { path: '/tmp/chart.png' },
+          }),
+        )
+        expect(result.isError).toBeFalsy()
+        const content = result.structuredContent as {
+          reference: string
+          filename: string
+          size: number
+        }
+        expect(content.reference).toBe('[chart.png](/user_uploads/1/ab/chart.png)')
+        expect(content.filename).toBe('chart.png')
+        expect(content.size).toBe(42)
+      }),
+    ),
+  ))
+
+test('upload_file rejects a relative path (comms-nsa)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withUploadRig(() =>
+          Effect.succeed({
+            reference: '[x](/u)',
+            filename: 'x',
+            size: 0,
+          }),
+        )
+        const error = yield* Effect.flip(
+          Effect.tryPromise({
+            try: () =>
+              rig.client.callTool({
+                name: 'upload_file',
+                arguments: { path: 'chart.png' },
+              }),
+            catch: (e) => e as { message: string },
+          }),
+        )
+        expect(error.message).toContain('absolute')
+      }),
+    ),
+  ))

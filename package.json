@@ -1,0 +1,40 @@
+{
+  "name": "commy",
+  "license": "Apache-2.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "clients/*"
+  ],
+  "packageManager": "bun@1.3.13",
+  "bin": "./server.ts",
+  "scripts": {
+    "prepare": "git config core.hooksPath .hooks && effect-language-service patch",
+    "start": "bun install --no-summary && bun server.ts",
+    "check": "bun install --no-summary && bunx turbo run test",
+    "test": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check (via turbo) instead of bun run test directly' >&2; exit 1; } && bun test",
+    "test:hermes": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check (via turbo) instead of bun run test:hermes directly' >&2; exit 1; } && clients/hermes/scripts/test.sh",
+    "test:live": "bun test --path-ignore-patterns='' packages/zulip/realm.live.test.ts packages/mcp/server.live.test.ts",
+    "typecheck": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check (via turbo) instead of bun run typecheck directly' >&2; exit 1; } && tsc --noEmit",
+    "lint": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check (via turbo) instead of bun run lint directly' >&2; exit 1; } && bunx biome check .",
+    "lint:fix": "bunx biome check --fix ."
+  },
+  "dependencies": {
+    "@codeforbreakfast/core": "workspace:*",
+    "@codeforbreakfast/mcp": "workspace:*",
+    "@codeforbreakfast/memory": "workspace:*",
+    "@codeforbreakfast/zulip": "workspace:*",
+    "@effect/platform": "0.96.1",
+    "@effect/platform-bun": "0.89.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "effect": "3.21.2"
+  },
+  "devDependencies": {
+    "@codeforbreakfast/testing": "workspace:*",
+    "@biomejs/biome": "2.4.15",
+    "@effect/language-service": "0.86.2",
+    "bun-types": "1.3.13",
+    "turbo": "2.9.14",
+    "typescript": "5.9.3"
+  }
+}

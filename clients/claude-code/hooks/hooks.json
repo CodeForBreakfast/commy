@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__plugin_commy_commy__(post|edit_message|react|unreact|current_identity)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bun-wrap.sh",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/inject-session-id.ts"]
+          }
+        ]
+      }
+    ]
+  }
+}

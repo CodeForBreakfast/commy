@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      # Actions pinned to commit-SHA digests, not mutable tags/branches, to
+      # close the supply-chain hole a force-pushed tag/branch would open. The
+      # trailing comment tracks the human-readable version; Dependabot
+      # (.github/dependabot.yml) bumps the SHAs so the pins don't rot.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      # All gate tooling (bun + uv) comes from the flake's lean .#ci shell, so
+      # the Python gate (//#test:hermes) resolves uv the same way locally and
+      # in CI. No setup-bun: bun is in the shell too.
+      - run: nix develop .#ci --command bash -euo pipefail -c 'bun install --frozen-lockfile && bun run check'

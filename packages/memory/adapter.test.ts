@@ -1,0 +1,173 @@
+import { expect, test } from 'bun:test'
+import type { ChannelRef } from '@codeforbreakfast/core/ports'
+import {
+  decodeBotNameSync,
+  decodeChannelIdSync,
+  decodeChannelNameSync,
+  decodeMessageBodySync,
+  decodeMessageIdSync,
+  decodeThreadNameSync,
+  decodeTimestampSync,
+  HistoryError,
+  PublisherError,
+} from '@codeforbreakfast/core/ports'
+import { Array as Arr, Cause, Duration, Effect, Exit, TestClock, TestContext } from 'effect'
+import { memoryAdapter } from './adapter.ts'
+
+const acquired = async () => {
+  const adapter = await Effect.runPromise(memoryAdapter())
+  await Effect.runPromise(adapter.identity.acquire(decodeBotNameSync('hermes-agent')))
+  return adapter
+}
+
+const phantomChannel: ChannelRef = {
+  id: decodeChannelIdSync('999999999'),
+  name: decodeChannelNameSync('phantom-channel-never-seeded'),
+}
+
+// The bead: history reads against an unknown channel were throwing
+// UnknownChannel inside Effect.sync, landing as a DEFECT on the Cause
+// channel rather than a typed failure on E. The port types these reads as
+// Effect<…, HistoryError>; the memory adapter must honour that. Zulip's
+// history reads return [] for an unknown channel (the narrow matches
+// nothing), so this typed-failure shape is memory-specific and lives here
+// rather than in the shared contract.
+test('history.readChannel on an unknown channel fails with a typed HistoryError, not a defect', async () => {
+  const adapter = await acquired()
+  const exit = await Effect.runPromiseExit(adapter.history.readChannel(phantomChannel, {}))
+  expect(Exit.isFailure(exit)).toBe(true)
+  if (Exit.isFailure(exit)) {
+    expect(Cause.isDie(exit.cause)).toBe(false)
+    const failure = Cause.failureOption(exit.cause)
+    expect(failure._tag).toBe('Some')
+    if (failure._tag === 'Some') {
+      expect(failure.value).toBeInstanceOf(HistoryError)
+      expect(failure.value.operation).toBe('readChannel')
+    }
+  }
+})
+
+test('history.readThread on an unknown channel fails with a typed HistoryError, not a defect', async () => {
+  const adapter = await acquired()
+  const exit = await Effect.runPromiseExit(
+    adapter.history.readThread(phantomChannel, decodeThreadNameSync('design'), {}),
+  )
+  expect(Exit.isFailure(exit)).toBe(true)
+  if (Exit.isFailure(exit)) {
+    expect(Cause.isDie(exit.cause)).toBe(false)
+    const failure = Cause.failureOption(exit.cause)
+    expect(failure._tag).toBe('Some')
+    if (failure._tag === 'Some') {
+      expect(failure.value).toBeInstanceOf(HistoryError)
+      expect(failure.value.operation).toBe('readThread')
+    }
+  }
+})
+
+// editing a message the store has never seen is a non-fatal domain failure:
+// it surfaces as a typed PublisherError on E, never as a thrown defect. This
+// mirrors the Zulip adapter, where a PATCH on an unknown id 400s into a
+// PublisherError; the assertion is duplicated in the shared contract, but
+// kept here too to pin that memory surfaces it on E (not the Cause channel).
+test('publisher.edit on an unknown message fails with a typed PublisherError, not a defect', async () => {
+  const adapter = await acquired()
+  const exit = await Effect.runPromiseExit(
+    adapter.publisher.edit(
+      { id: decodeMessageIdSync('999999999'), channel: phantomChannel },
+      decodeMessageBodySync('nope'),
+    ),
+  )
+  expect(Exit.isFailure(exit)).toBe(true)
+  if (Exit.isFailure(exit)) {
+    expect(Cause.isDie(exit.cause)).toBe(false)
+    const failure = Cause.failureOption(exit.cause)
+    expect(failure._tag).toBe('Some')
+    if (failure._tag === 'Some') {
+      expect(failure.value).toBeInstanceOf(PublisherError)
+      expect(failure.value.operation).toBe('edit')
+    }
+  }
+})
+
+// The mutable-state Refs (comms-ubo.19 / comms-2y4.8). These pin the
+// concurrency-safety the closure-`let`s could not guarantee: counter
+// allocation and the acquire check-then-set both span `yield*` suspension
+// points, so under `Effect.all` they must still allocate distinct ids and
+// bind exactly once. Sequential semantics are already covered by the
+// contract suite; these assert the interleaved case the Refs make correct.
+
+// In-memory store, no rate-limited substrate — unbounded concurrency is the
+// point here: it maximises interleaving against the message-id Ref.
+test('concurrent posts allocate distinct, monotonic message ids under Effect.all', async () => {
+  const adapter = await acquired()
+  const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
+  const refs = await Effect.runPromise(
+    Effect.all(
+      Arr.makeBy(25, (i) => adapter.publisher.post(channel, decodeMessageBodySync(`m${i}`))),
+      { concurrency: 'unbounded' },
+    ),
+  )
+  const ids = refs.map((r) => Number(r.id)).sort((a, b) => a - b)
+  expect(new Set(ids).size).toBe(25)
+  // Gapless run: ids 1..25 with no duplicates or holes.
+  expect(ids).toEqual(Arr.makeBy(25, (i) => i + 1))
+})
+
+test('concurrent acquire on a fresh adapter binds exactly one name', async () => {
+  const adapter = await Effect.runPromise(memoryAdapter())
+  const names = ['agent-a', 'agent-b', 'agent-c', 'agent-d'].map((n) => decodeBotNameSync(n))
+  const exits = await Effect.runPromise(
+    Effect.all(
+      names.map((name) => Effect.exit(adapter.identity.acquire(name))),
+      { concurrency: 'unbounded' },
+    ),
+  )
+  const successes = exits.filter(Exit.isSuccess)
+  expect(successes).toHaveLength(1)
+  const bound = await Effect.runPromise(adapter.identity.currentIdentity())
+  if (successes[0]?._tag === 'Success') {
+    expect(successes[0].value.identity.id).toEqual(bound.id)
+  }
+})
+
+test('counter state persists across operations within one constructed adapter', async () => {
+  const adapter = await acquired()
+  const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
+  const first = await Effect.runPromise(adapter.publisher.post(channel, decodeMessageBodySync('a')))
+  const second = await Effect.runPromise(
+    adapter.publisher.post(channel, decodeMessageBodySync('b')),
+  )
+  expect(Number(second.id)).toBe(Number(first.id) + 1)
+})
+
+// The timestamp seed is read from Effect's Clock, not Date.now(): under
+// TestClock the first post's ts is the deterministic floor(clockMs / 1000),
+// proving the seed flows through the default Clock service (comms-1jl).
+test("the timestamp seed reads from Effect's Clock (first post ts = floor(clockMs/1000))", () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      yield* TestClock.adjust(Duration.seconds(1_700_000_000))
+      const adapter = yield* memoryAdapter()
+      yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+      const channel = yield* adapter.seedChannel('lobby').pipe(Effect.orDie)
+      const ref = yield* adapter.publisher.post(channel, decodeMessageBodySync('a'))
+      const [message] = yield* adapter.history.readChannel(channel, {})
+      expect(message?.ref.id).toBe(ref.id)
+      expect(message?.ts).toBe(decodeTimestampSync(1_700_000_000))
+    }).pipe(Effect.provide(TestContext.TestContext)),
+  ))
+
+test('separate constructed adapters hold independent counter state', async () => {
+  const a = await Effect.runPromise(memoryAdapter())
+  await Effect.runPromise(a.identity.acquire(decodeBotNameSync('hermes-agent')))
+  const b = await Effect.runPromise(memoryAdapter())
+  await Effect.runPromise(b.identity.acquire(decodeBotNameSync('hermes-agent')))
+  const channelA = await Effect.runPromise(a.seedChannel('lobby').pipe(Effect.orDie))
+  const channelB = await Effect.runPromise(b.seedChannel('lobby').pipe(Effect.orDie))
+  const refA = await Effect.runPromise(a.publisher.post(channelA, decodeMessageBodySync('a')))
+  const refB = await Effect.runPromise(b.publisher.post(channelB, decodeMessageBodySync('b')))
+  // Each adapter starts its own message-id counter at 1 — state is
+  // per-construction, not shared across the module.
+  expect(Number(refA.id)).toBe(1)
+  expect(Number(refB.id)).toBe(1)
+})

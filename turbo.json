@@ -1,0 +1,34 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "tasks": {
+    "//#typecheck": {
+      "inputs": ["**/*.ts", "tsconfig*.json", "!**/node_modules/**", "!.worktrees/**"]
+    },
+    "//#lint": {
+      "dependsOn": ["//#typecheck"],
+      "inputs": [
+        "**/*.ts",
+        "**/*.json",
+        "!.beads/**",
+        "biome.json",
+        "!**/node_modules/**",
+        "!.worktrees/**"
+      ]
+    },
+    "//#test": {
+      "dependsOn": ["//#lint", "//#test:hermes"],
+      "inputs": [
+        "**/*.ts",
+        "**/*.json",
+        "!.beads/**",
+        "bunfig.toml",
+        "**/*.workflow.js",
+        "!**/node_modules/**",
+        "!.worktrees/**"
+      ]
+    },
+    "//#test:hermes": {
+      "inputs": ["clients/hermes/**", "!clients/hermes/.venv/**", "!**/__pycache__/**"]
+    }
+  }
+}

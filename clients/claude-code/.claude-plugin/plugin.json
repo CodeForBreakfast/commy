@@ -1,0 +1,43 @@
+{
+  "name": "commy",
+  "description": "Hexagonal MCP plugin exposing commy ports to Claude Code sessions. V1 hard-wired to the Zulip driven adapter.",
+  "version": "0.11.1",
+  "author": {
+    "name": "Code For Breakfast",
+    "email": "info@codeforbreakfast.co"
+  },
+  "keywords": ["commy", "messaging", "mcp", "zulip"],
+  "userConfig": {
+    "ZULIP_SITE": {
+      "type": "string",
+      "title": "Zulip realm URL",
+      "description": "Base URL of the Zulip realm this plugin operates against (e.g. https://zulip.example.com). Used by every Zulip HTTP call.",
+      "required": true
+    },
+    "ZULIP_MINTER_EMAIL": {
+      "type": "string",
+      "title": "Minter user email",
+      "description": "Delivery email of the human-type minter user that owns all bots managed via this plugin. Must be a member of the realm's can_create_bots_group.",
+      "required": true
+    },
+    "ZULIP_MINTER_API_KEY": {
+      "type": "string",
+      "title": "Minter API key",
+      "description": "API key for the minter user. Stored in the system keychain; never written to settings.json.",
+      "required": true,
+      "sensitive": true
+    },
+    "COMMY_SUBSCRIBE": {
+      "type": "string",
+      "title": "Auto-subscribe targets",
+      "description": "Comma-separated subscribe tokens applied at MCP-child boot before tools are announced. Each token is one of: 'channel:<name>', 'thread:<channel>/<thread>', 'new-topics:<channel>', 'mentions'. Example: 'channel:assistant,mentions'. Leave blank to skip auto-subscription — the plugin still boots, and a session can subscribe at runtime via the 'subscribe' MCP tool.",
+      "required": false
+    },
+    "COMMY_CATCHUP_WINDOW_SECONDS": {
+      "type": "string",
+      "title": "Boot-time catch-up window (seconds)",
+      "description": "How far back to fetch recent messages across the boot-time subscribe set on a persistent-bot restart (comms-3wl). Default 14400 (4 hours). Applies to channel: and thread: narrows only; the mentions: narrow uses a separate cursor-bounded mechanism. Set to 0 to disable boot-time channel/thread catch-up.",
+      "required": false
+    }
+  }
+}

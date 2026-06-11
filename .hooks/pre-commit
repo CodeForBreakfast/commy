@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+bun install --no-summary
+exec bunx turbo run test

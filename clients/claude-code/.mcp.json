@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "commy": {
+      "command": "nix",
+      "args": [
+        "run",
+        "path:${CLAUDE_PLUGIN_ROOT}#default",
+        "--",
+        "--cwd=${CLAUDE_PLUGIN_ROOT}",
+        "node_modules/@codeforbreakfast/mcp/server.ts"
+      ],
+      "env": {
+        "ZULIP_SITE": "${user_config.ZULIP_SITE}",
+        "ZULIP_MINTER_EMAIL": "${user_config.ZULIP_MINTER_EMAIL}",
+        "ZULIP_MINTER_API_KEY": "${user_config.ZULIP_MINTER_API_KEY}",
+        "COMMY_SUBSCRIBE": "${user_config.COMMY_SUBSCRIBE}",
+        "COMMY_CATCHUP_WINDOW_SECONDS": "${user_config.COMMY_CATCHUP_WINDOW_SECONDS}"
+      }
+    }
+  }
+}

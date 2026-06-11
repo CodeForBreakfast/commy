@@ -1,0 +1,14 @@
+node_modules/
+.direnv/
+result
+result-*
+.bun-result
+.env.local
+.worktrees/
+CLAUDE.local.md
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.turbo/

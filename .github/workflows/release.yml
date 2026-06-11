@@ -1,0 +1,39 @@
+name: Release
+
+# Verify-only on tag push. The curated GitHub Release is cut LOCALLY by the
+# `release-plugin` maintainer skill once this check is green (see that skill's
+# "Write the curated notes and cut the GitHub Release" step) — the notes are
+# written by hand, classified by impact, never drawn from raw `git log`. This
+# workflow no longer authors a Release; auto-generated commit-log notes are
+# exactly what the curated Release replaces. Its sole job is to re-check that a
+# pushed `commy-vX.Y.Z` tag matches the plugin manifest version, so the tag
+# can't drift from the six-site lockstep group
+# (clients/claude-code/manifests.test.ts) that ci.yml already enforces on the
+# tagged commit.
+
+on:
+  push:
+    tags:
+      - 'commy-v*'
+
+permissions:
+  contents: read
+
+jobs:
+  verify-tag:
+    runs-on: ubuntu-latest
+    steps:
+      # SHA-pinned like ci.yml; Dependabot (.github/dependabot.yml) bumps it.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Verify tag matches plugin manifest
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#commy-v}"
+          manifest="$(jq -r .version clients/claude-code/.claude-plugin/plugin.json)"
+          if [ "$version" != "$manifest" ]; then
+            echo "::error::Tag ${TAG} (version ${version}) does not match plugin.json version ${manifest} — release the bump through the release-plugin skill so the lockstep group and tag agree." >&2
+            exit 1
+          fi
+          echo "Tag ${TAG} matches plugin.json version ${manifest}; the curated GitHub Release is cut locally by the release-plugin skill."

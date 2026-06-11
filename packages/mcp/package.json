@@ -1,0 +1,17 @@
+{
+  "name": "@codeforbreakfast/mcp",
+  "version": "0.11.1",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    "./*": "./*.ts"
+  },
+  "dependencies": {
+    "@codeforbreakfast/core": "workspace:*",
+    "@codeforbreakfast/zulip": "workspace:*"
+  },
+  "devDependencies": {
+    "@codeforbreakfast/memory": "workspace:*",
+    "@codeforbreakfast/testing": "workspace:*"
+  }
+}

@@ -1,0 +1,9 @@
+name: commy-platform
+kind: platform
+version: 0.11.1
+description: >
+  commy gateway adapter for Hermes Agent (pattern B: inbound-axis
+  consumer for non-Claude-Code hosts). Registers the `commy` platform.
+  No-op skeleton — loads and registers only; the receive path lands in
+  comms-a7j.2 and per-topic connection lifecycle in comms-a7j.5.
+author: Code For Breakfast
