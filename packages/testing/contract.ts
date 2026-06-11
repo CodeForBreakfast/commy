@@ -16,13 +16,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import type {
-  AgentComms,
-  ChannelRef,
-  Identity,
-  InboundEvent,
-  MessageRef,
-} from '@codeforbreakfast/core/ports'
+import type { AgentComms, ChannelRef, Identity, InboundEvent, MessageRef } from '@commy/core/ports'
 import {
   decodeBotNameSync,
   decodeChannelIdSync,
@@ -36,7 +30,7 @@ import {
   PublisherError,
   UnknownChannel,
   UnknownIdentity,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import { Duration, Effect, Exit, Option, Queue, type Scope, Stream } from 'effect'
 
 export interface ContractEnv {

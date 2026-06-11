@@ -9,8 +9,8 @@ import {
   decodeMessageBodySync,
   decodeThreadNameSync,
   HistoryError,
-} from '@codeforbreakfast/core/ports'
-import { type MemoryAdapter, memoryAdapter } from '@codeforbreakfast/memory/adapter'
+} from '@commy/core/ports'
+import { type MemoryAdapter, memoryAdapter } from '@commy/memory/adapter'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { Effect, type Scope } from 'effect'

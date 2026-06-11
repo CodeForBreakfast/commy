@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { captureLogger } from '@codeforbreakfast/core/logging'
+import { captureLogger } from '@commy/core/logging'
 import { Effect } from 'effect'
 import { raceReleaseAgainstTimeout } from './release-shutdown.ts'
 

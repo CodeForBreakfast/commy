@@ -24,7 +24,7 @@ import type {
   SubscriptionTarget,
   ThreadName,
   Timestamp as TimestampType,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import {
   DirectoryError,
   decodeChannelId,
@@ -41,7 +41,7 @@ import {
   InboxError,
   PublisherError,
   UnknownChannel,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import { HttpClient } from '@effect/platform'
 import {
   Array as Arr,

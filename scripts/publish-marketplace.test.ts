@@ -52,7 +52,7 @@ test('DEFAULT_FIXED_PATH targets the commy marketplace dir', () => {
 
 // Build a minimal but faithful workspace-shaped source tree: the repo-root
 // package.json + bun.lock + bunfig.toml the frozen install pins against, the
-// root .claude-plugin/marketplace.json (its identity is codeforbreakfast — the
+// root .claude-plugin/marketplace.json (its identity is commy — the
 // public marketplace name),
 // the packages/ tree with the universal mcp substrate package, the clients/ tree
 // with the claude-code adapter (npm name commy-plugin, kept), plus
@@ -66,7 +66,7 @@ function makeSource(): string {
   writeFile(
     join(src, '.claude-plugin', 'marketplace.json'),
     JSON.stringify({
-      name: 'codeforbreakfast',
+      name: 'commy',
       plugins: [{ name: 'commy', source: './clients/claude-code' }],
     }),
   )
@@ -75,7 +75,7 @@ function makeSource(): string {
   writeFile(join(plugin, 'node_modules', 'junk.ts'), 'junk\n')
   const mcp = join(src, 'packages', 'mcp')
   writeFile(join(mcp, 'server.ts'), "import './bootstrap.ts'\n")
-  writeFile(join(mcp, 'package.json'), JSON.stringify({ name: '@codeforbreakfast/mcp' }))
+  writeFile(join(mcp, 'package.json'), JSON.stringify({ name: '@commy/mcp' }))
   // Dev-only state that the frozen tree must never carry.
   writeFile(join(src, 'node_modules', 'junk.ts'), 'junk\n')
   writeFile(join(src, '.beads', 'issues.jsonl'), '{}\n')
@@ -134,7 +134,7 @@ test('stageMarketplace copies marketplace.json verbatim, preserving its identity
   const manifest = JSON.parse(
     readFileSync(join(staging, '.claude-plugin', 'marketplace.json'), 'utf8'),
   )
-  expect(manifest.name).toBe('codeforbreakfast')
+  expect(manifest.name).toBe('commy')
   expect(manifest.plugins[0].name).toBe('commy')
   expect(manifest.plugins[0].source).toBe('./clients/claude-code')
 })

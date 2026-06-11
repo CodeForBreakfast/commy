@@ -7,7 +7,7 @@
         "path:${CLAUDE_PLUGIN_ROOT}#default",
         "--",
         "--cwd=${CLAUDE_PLUGIN_ROOT}",
-        "node_modules/@codeforbreakfast/mcp/server.ts"
+        "node_modules/@commy/mcp/server.ts"
       ],
       "env": {
         "ZULIP_SITE": "${user_config.ZULIP_SITE}",

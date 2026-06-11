@@ -5,8 +5,8 @@ import type {
   MessageId,
   MessageInbox,
   Timestamp,
-} from '@codeforbreakfast/core/ports'
-import { decodeTimestamp } from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
+import { decodeTimestamp } from '@commy/core/ports'
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import {
   Array as Arr,

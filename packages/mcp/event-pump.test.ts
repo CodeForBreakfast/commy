@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { captureLogger } from '@codeforbreakfast/core/logging'
+import { captureLogger } from '@commy/core/logging'
 import type {
   Identity,
   IdentityId as IdentityIdType,
@@ -7,7 +7,7 @@ import type {
   Message,
   MessageInbox,
   MessageRef,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import {
   decodeChannelIdSync,
   decodeChannelNameSync,
@@ -18,7 +18,7 @@ import {
   decodeMessageIdSync,
   decodeThreadNameSync,
   decodeTimestampSync,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { Effect, Ref, Schema, Stream, TestClock, TestContext } from 'effect'

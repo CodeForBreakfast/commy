@@ -6,7 +6,7 @@ import type {
   Message,
   Range,
   ThreadName,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import {
   decodeChannelIdSync,
   decodeChannelNameSync,
@@ -15,7 +15,7 @@ import {
   decodeMessageBodySync,
   decodeMessageIdSync,
   decodeTimestampSync,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import { Effect, TestClock, TestContext } from 'effect'
 import { type ChannelsCatchUpDeps, catchUpChannels } from './channels-catch-up.ts'
 

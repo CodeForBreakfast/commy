@@ -1,4 +1,4 @@
-import type { IdentityId, InboundEvent, MessageRef } from '@codeforbreakfast/core/ports'
+import type { IdentityId, InboundEvent, MessageRef } from '@commy/core/ports'
 import { Match } from 'effect'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 

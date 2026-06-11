@@ -6,7 +6,7 @@ import { join } from 'node:path'
 // (scripts/publish-marketplace.ts runs `bun install --frozen-lockfile` at the
 // frozen workspace root). At runtime a package is present in the frozen
 // node_modules iff it is declared either in this package's own dependencies
-// (the `@codeforbreakfast/*` workspace siblings) or in the workspace-root
+// (the `@commy/*` workspace siblings) or in the workspace-root
 // dependencies (the hoisted third-party packages — effect, @effect/*,
 // @modelcontextprotocol/sdk). Any runtime import declared in neither place
 // resolves in dev but is absent from the frozen node_modules, crashing the

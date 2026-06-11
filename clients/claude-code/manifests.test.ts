@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 
-import { PLUGIN_VERSION } from '@codeforbreakfast/mcp/mcp-server'
+import { PLUGIN_VERSION } from '@commy/mcp/mcp-server'
 import pluginManifest from './.claude-plugin/plugin.json'
 import packageManifest from './package.json'
 
@@ -32,7 +32,7 @@ const SEMVER_SHAPE = /^\d+\.\d+\.\d+$/
  */
 
 const mcpPackageManifest = (await Bun.file(
-  Bun.resolveSync('@codeforbreakfast/mcp/package.json', import.meta.dir),
+  Bun.resolveSync('@commy/mcp/package.json', import.meta.dir),
 ).json()) as { readonly version: string }
 
 const hermesPyproject = Bun.TOML.parse(

@@ -1,9 +1,5 @@
 import { expect, test } from 'bun:test'
-import {
-  decodeChannelIdSync,
-  decodeChannelNameSync,
-  decodeThreadNameSync,
-} from '@codeforbreakfast/core/ports'
+import { decodeChannelIdSync, decodeChannelNameSync, decodeThreadNameSync } from '@commy/core/ports'
 import { Effect } from 'effect'
 import { intentToTarget, parseSubscribeTarget, SubscribeTokenError } from './subscribe-parser.ts'
 

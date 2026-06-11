@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { readdirSync, readFileSync, rmSync, type Stats, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { captureLogger, stderrLoggerLayer } from '@codeforbreakfast/core/logging'
+import { captureLogger, stderrLoggerLayer } from '@commy/core/logging'
 import type {
   ChannelRef,
   Directory,
@@ -15,7 +15,7 @@ import type {
   MessageRef,
   SubscriptionTarget,
   Timestamp as TimestampType,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import {
   type ChannelName,
   decodeChannelIdSync,
@@ -26,10 +26,10 @@ import {
   decodeMessageIdSync,
   decodeTimestampSync,
   InboxError,
-} from '@codeforbreakfast/core/ports'
-import { memoryAdapter } from '@codeforbreakfast/memory/adapter'
-import type { ZulipAdapter } from '@codeforbreakfast/zulip/adapter'
-import { decodeUserUploadPathSync } from '@codeforbreakfast/zulip/http'
+} from '@commy/core/ports'
+import { memoryAdapter } from '@commy/memory/adapter'
+import type { ZulipAdapter } from '@commy/zulip/adapter'
+import { decodeUserUploadPathSync } from '@commy/zulip/http'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { Deferred, Effect, FiberId, Layer, Option, Stream } from 'effect'

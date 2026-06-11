@@ -9,7 +9,7 @@ import type {
   MessageRef,
   PostOpts,
   Timestamp,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import {
   decodeChannelId,
   decodeChannelName,
@@ -19,9 +19,9 @@ import {
   decodeMessageId,
   decodeThreadName,
   decodeTimestamp,
-} from '@codeforbreakfast/core/ports'
-import type { UserUploadPath, ZulipApiError } from '@codeforbreakfast/zulip/http'
-import { decodeUserUploadPath } from '@codeforbreakfast/zulip/http'
+} from '@commy/core/ports'
+import type { UserUploadPath, ZulipApiError } from '@commy/zulip/http'
+import { decodeUserUploadPath } from '@commy/zulip/http'
 import type { PlatformError } from '@effect/platform/Error'
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'

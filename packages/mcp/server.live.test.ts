@@ -26,10 +26,10 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { stderrLoggerLayer } from '@codeforbreakfast/core/logging'
-import type { ZulipAdapter } from '@codeforbreakfast/zulip/adapter'
-import { zulipAdapter } from '@codeforbreakfast/zulip/adapter'
-import { ApiKey, BotEmail, makeZulipHttp, RealmUrl } from '@codeforbreakfast/zulip/http'
+import { stderrLoggerLayer } from '@commy/core/logging'
+import type { ZulipAdapter } from '@commy/zulip/adapter'
+import { zulipAdapter } from '@commy/zulip/adapter'
+import { ApiKey, BotEmail, makeZulipHttp, RealmUrl } from '@commy/zulip/http'
 import { FetchHttpClient, HttpClient } from '@effect/platform'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'

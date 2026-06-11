@@ -1,5 +1,5 @@
-import { messageOf } from '@codeforbreakfast/core/messageOf'
-import type { ChannelName } from '@codeforbreakfast/core/ports'
+import { messageOf } from '@commy/core/messageOf'
+import type { ChannelName } from '@commy/core/ports'
 import { Effect } from 'effect'
 
 /**

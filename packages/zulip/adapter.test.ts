@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
-import type { ChannelRef, Identity, InboundEvent, MessageRef } from '@codeforbreakfast/core/ports'
+import type { ChannelRef, Identity, InboundEvent, MessageRef } from '@commy/core/ports'
 import {
   DirectoryError,
   decodeBotNameSync,
@@ -16,7 +16,7 @@ import {
   PublisherError,
   UnknownChannel,
   type UnknownIdentity,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import { FetchHttpClient, HttpClient } from '@effect/platform'
 import { Cause, Duration, Effect, Exit, Option, Queue, Redacted, type Scope, Stream } from 'effect'
 import type { ZulipAdapter, ZulipAdapterConfig } from './adapter.ts'

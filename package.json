@@ -20,17 +20,17 @@
     "lint:fix": "bunx biome check --fix ."
   },
   "dependencies": {
-    "@codeforbreakfast/core": "workspace:*",
-    "@codeforbreakfast/mcp": "workspace:*",
-    "@codeforbreakfast/memory": "workspace:*",
-    "@codeforbreakfast/zulip": "workspace:*",
+    "@commy/core": "workspace:*",
+    "@commy/mcp": "workspace:*",
+    "@commy/memory": "workspace:*",
+    "@commy/zulip": "workspace:*",
     "@effect/platform": "0.96.1",
     "@effect/platform-bun": "0.89.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "effect": "3.21.2"
   },
   "devDependencies": {
-    "@codeforbreakfast/testing": "workspace:*",
+    "@commy/testing": "workspace:*",
     "@biomejs/biome": "2.4.15",
     "@effect/language-service": "0.86.2",
     "bun-types": "1.3.13",

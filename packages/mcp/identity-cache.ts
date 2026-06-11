@@ -4,7 +4,7 @@ import type {
   IdentityError,
   IdentityId,
   UnknownIdentity,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import { Clock, Data, Effect } from 'effect'
 import type { ProjectSlug, SessionId } from './bootstrap.ts'
 import { composeBotName } from './bootstrap.ts'

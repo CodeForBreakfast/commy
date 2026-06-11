@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { Identity, InboundEvent, MessageInbox } from '@codeforbreakfast/core/ports'
+import type { Identity, InboundEvent, MessageInbox } from '@commy/core/ports'
 import {
   decodeChannelIdSync,
   decodeChannelNameSync,
@@ -9,7 +9,7 @@ import {
   decodeMessageIdSync,
   decodeTimestampSync,
   type Timestamp,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import { Effect, Option, TestClock, TestContext } from 'effect'
 import type { CursorStore } from './cursor-store.ts'
 import type { ChannelEventPayload } from './events.ts'

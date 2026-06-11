@@ -2,8 +2,8 @@ import type {
   ChannelName as ChannelNameType,
   SubscriptionTarget,
   ThreadName as ThreadNameType,
-} from '@codeforbreakfast/core/ports'
-import { decodeChannelId, decodeChannelName, decodeThreadName } from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
+import { decodeChannelId, decodeChannelName, decodeThreadName } from '@commy/core/ports'
 import { Data, Effect, Match } from 'effect'
 
 /**

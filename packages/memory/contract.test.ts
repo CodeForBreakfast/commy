@@ -1,5 +1,5 @@
-import { decodeBotNameSync } from '@codeforbreakfast/core/ports'
-import { runAgentCommsContract } from '@codeforbreakfast/testing/contract'
+import { decodeBotNameSync } from '@commy/core/ports'
+import { runAgentCommsContract } from '@commy/testing/contract'
 import { Effect } from 'effect'
 import { memoryAdapter } from './adapter.ts'
 

@@ -4,7 +4,7 @@ import type {
   IdentityId as IdentityIdType,
   InboundEvent,
   MessageRef,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import {
   decodeChannelIdSync,
   decodeChannelNameSync,
@@ -15,7 +15,7 @@ import {
   decodeMessageIdSync,
   decodeThreadNameSync,
   decodeTimestampSync,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import { createNarrowSet } from './narrow-set.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 

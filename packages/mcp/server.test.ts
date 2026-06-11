@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { EventEmitter } from 'node:events'
-import { captureLogger, stderrLoggerLayer } from '@codeforbreakfast/core/logging'
+import { captureLogger, stderrLoggerLayer } from '@commy/core/logging'
 import type {
   AcquiredIdentity,
   ChannelRef,
@@ -15,7 +15,7 @@ import type {
   Range,
   SubscriptionTarget,
   Timestamp as TimestampType,
-} from '@codeforbreakfast/core/ports'
+} from '@commy/core/ports'
 import {
   type ChannelName,
   decodeChannelIdSync,
@@ -24,10 +24,10 @@ import {
   decodeIdentityIdSync,
   decodeThreadNameSync,
   InboxError,
-} from '@codeforbreakfast/core/ports'
-import { memoryAdapter } from '@codeforbreakfast/memory/adapter'
-import type { ZulipAdapter } from '@codeforbreakfast/zulip/adapter'
-import { decodeUserUploadPathSync } from '@codeforbreakfast/zulip/http'
+} from '@commy/core/ports'
+import { memoryAdapter } from '@commy/memory/adapter'
+import type { ZulipAdapter } from '@commy/zulip/adapter'
+import { decodeUserUploadPathSync } from '@commy/zulip/http'
 import {
   Cause,
   Duration,
