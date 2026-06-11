@@ -9,18 +9,24 @@ exists.
 
 ## Requirements
 
-[Nix][nix] (with flakes enabled) on the host PATH. The plugin's `.mcp.json`
-invokes `nix run path:${CLAUDE_PLUGIN_ROOT}#default` to launch its own pinned
-Bun via the plugin's flake — no global `bun` install is needed, and the Bun
-version is reproducible across hosts because it tracks the plugin's
-`flake.lock`. The PreToolUse hook resolves the same Bun via a thin wrapper
-(`hooks/bun-wrap.sh`) that lazy-builds a GC-root symlink at
-`${CLAUDE_PLUGIN_ROOT}/.bun-result` on first call after install — direct
-exec thereafter (comms-f9n). Installing the plugin on a host without Nix
-will leave its MCP server unable to start and the PreToolUse hook unable
-to inject `session_id`.
+[Bun][bun] **≥ 1.3.13** on the host PATH — that's the whole prerequisite.
+(The pinned version is recorded in the repo-root `package.json` `packageManager`
+field; 1.3.13 is the floor the plugin is tested against.) Nix is not required:
+it's how this repo is *developed*, not how the plugin *runs*.
 
-[nix]: https://nixos.org/download
+Claude Code installs the plugin by cloning the marketplace repo; it does not
+install JS dependencies, so a fresh checkout has no `node_modules`. The plugin's
+`.mcp.json` launches the server through `launch.sh`, which stages the workspace
+dependencies once — `bun install --frozen-lockfile` at the workspace root,
+guarded by a portable `mkdir` mutex so concurrently-booting sessions can't race
+it — and then `exec`s `bun` against the server entrypoint. The `exec` keeps the
+server Claude Code's direct child (so a session disconnect actually reaches it);
+the stage runs only when `node_modules` is genuinely absent, so every launch
+after the first is a plain `exec` with no install. The PreToolUse hook
+(`inject-session-id.ts`) likewise runs under `bun` on PATH; it imports no
+workspace packages, so it needs nothing staged.
+
+[bun]: https://bun.sh
 
 ## Configuration
 

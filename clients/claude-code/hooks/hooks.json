@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/bun-wrap.sh",
+            "command": "bun",
             "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/inject-session-id.ts"]
           }
         ]

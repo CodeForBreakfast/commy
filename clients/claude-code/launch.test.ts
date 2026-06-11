@@ -13,30 +13,57 @@ import mcpConfig from './.mcp.json'
  * and accumulated until memory pressure starved fresh seats' 30s connect
  * handshake — the dead-front-desk failure (comms-4c26 / comms-8nkv).
  *
- * Collapsing the launch — point `bun` straight at the entrypoint file, no
- * `run`/`start` script indirection — removes the grandchild so the
- * disconnect signal lands. This pins that contract so a future edit can't
- * silently re-introduce the spawning indirection. The runtime proof that
- * the collapsed launch actually exits on disconnect lives in
+ * The launcher is now `launch.sh` (comms-ip4q): a bun-on-PATH bootstrap, no
+ * Nix, that stages the workspace deps once before `exec bun …/server.ts`.
+ * The `exec` is what keeps the server claude's direct child — it replaces the
+ * shell rather than spawning a grandchild. These tests pin both contracts so
+ * a future edit can't silently re-introduce the spawning indirection or a Nix
+ * requirement. The runtime proof that the launch exits on disconnect lives in
  * `packages/mcp/disconnect-exit.test.ts`.
  */
 
 const commyServer = mcpConfig.mcpServers['commy']
 
-const bunArgs = (() => {
-  const sep = commyServer.args.indexOf('--')
-  return sep === -1 ? [] : commyServer.args.slice(sep + 1)
-})()
+const launcherScript = await Bun.file(new URL('./launch.sh', import.meta.url)).text()
 
-test('the launcher invokes nix run (bun via the plugin flake)', () => {
-  expect(commyServer.command).toBe('nix')
-  expect(commyServer.args[0]).toBe('run')
+test('the launcher is the bun bootstrap script — no Nix in the launch metadata', () => {
+  expect(commyServer.command).toBe('${CLAUDE_PLUGIN_ROOT}/launch.sh')
+  expect('args' in commyServer).toBe(false)
+  expect(JSON.stringify(mcpConfig)).not.toContain('nix')
 })
 
-test('the launch runs the MCP server entrypoint file directly — no package-script indirection', () => {
-  // `bun run start` is what spawned the grandchild; a direct `bun <file>`
+test('a host with only bun on PATH can launch — the bootstrap shells out to bun, never nix', () => {
+  expect(launcherScript).not.toMatch(/\bnix\b/)
+  expect(launcherScript).toMatch(/exec bun /)
+})
+
+test('the launcher imposes no shell of our choosing — POSIX sh, no bashisms', () => {
+  // The standing principle (commy-no-environment-assumptions-on-consumers) is
+  // that our preferences never become consumer prerequisites. A bash shebang
+  // would foist bash; the script uses zero bashisms, so it runs under any
+  // POSIX sh (dash/ash/busybox/bash). `set -o pipefail` and fractional `sleep`
+  // are the easy bashism regressions — pin against them.
+  expect(launcherScript.startsWith('#!/bin/sh\n')).toBe(true)
+  expect(launcherScript).not.toContain('pipefail')
+  expect(launcherScript).not.toMatch(/sleep 0\.\d/)
+})
+
+test('the launch execs the MCP server entrypoint directly — no package-script indirection', () => {
+  // `bun run start` is what spawned the grandchild; a direct `exec bun <file>`
   // is one process whose stdin is claude's pipe.
-  expect(bunArgs).not.toContain('run')
-  expect(bunArgs).not.toContain('start')
-  expect(bunArgs.some((arg) => arg.endsWith('mcp/server.ts'))).toBe(true)
+  const execLine = launcherScript
+    .split('\n')
+    .find((line) => line.trimStart().startsWith('exec bun'))
+  expect(execLine).toBeDefined()
+  expect(execLine).toContain('mcp/server.ts')
+  expect(execLine).not.toContain(' run ')
+  expect(execLine).not.toContain(' start')
+})
+
+test('the one-time dep stage is guarded against the concurrent-cold-start race (comms-ae3)', () => {
+  // The original sin was an unguarded connect-time `bun install` racing to
+  // EEXIST across burst-booted seats. The stage must sit behind a mutex and
+  // only run when the entrypoint is genuinely absent.
+  expect(launcherScript).toContain('bun install --frozen-lockfile')
+  expect(launcherScript).toMatch(/mkdir .*LOCK|mkdir "\$\{LOCK\}"/)
 })

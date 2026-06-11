@@ -133,10 +133,12 @@ function killBootGroup(child: Bun.Subprocess): void {
   }
 }
 
-// Boot smoke test: launch the freshly installed server exactly as a session would
-// (the plugin package's `start` script, cwd = the frozen clients/claude-code dir,
-// mirroring how .mcp.json invokes `bun ... run ... start`), speak the MCP
-// initialize handshake, and require a serverInfo response. A tree whose
+// Boot smoke test: launch the freshly installed server via the plugin package's
+// `start` script (cwd = the frozen clients/claude-code dir), the same `bun`
+// against `@commy/mcp/server.ts` that the `.mcp.json` launcher (launch.sh) execs
+// once deps are staged — so this exercises the same module graph and proves the
+// frozen install resolves. Speak the MCP initialize handshake and require a
+// serverInfo response. A tree whose
 // dependencies didn't install crashes here — process exits before answering — so
 // the release aborts instead of shipping a server that fails to reconnect
 // (-32000). The real server runs an event pump and won't exit on stdin EOF, so we
