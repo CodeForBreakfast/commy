@@ -60,11 +60,13 @@ tests/
   test_adapter_connection.py
   _stub_mcp_server.py   # real stub MCP server for the transport tests
 scripts/test.sh   # build isolated env + lint + test
+pyproject.toml    # installable package + hermes_agent.plugins entry point
 ```
 
-The plugin payload is the `commy/` directory. Hermes loads it by
-directory scan (like the bundled platform plugins), not as a pip wheel — so
-this is a non-package uv project (tooling + tests only).
+The plugin payload is the `commy/` package. It ships as an installable Python
+package whose `pyproject.toml` declares the `hermes_agent.plugins` entry point
+(`commy-platform = "commy"`) — the mechanism Hermes uses to discover
+pip/Nix-installed plugins. See [Install / distribution](#install--distribution).
 
 ## Per-topic connection lifecycle (`comms-a7j.5`)
 
@@ -115,8 +117,40 @@ Tested against the latest `hermes-agent` on PyPI (range `>=0.12,<1`); the pin
 tightens to the confirmed pod Hermes version via the homelab image lane
 (`comms-v9nws`).
 
-## Pod install
+## Install / distribution
 
-Wiring the install into `~/.hermes/plugins/` is tracked separately
-(`comms-a7j.7`).
+Hermes discovers plugins by scanning the `hermes_agent.plugins` entry-point
+group (`importlib.metadata.entry_points` → `ep.load()` → `register(ctx)`), the
+[documented recommended distribution path](https://github.com/NousResearch/hermes-agent)
+for pip/Nix-installed plugins. This package declares that entry point, so it
+installs as a standard Python package — no out-of-tree checkout or `PYTHONPATH`
+injection. After install, activate it once:
+
+```bash
+hermes plugins enable commy-platform
 ```
+
+**NixOS.** The repo's flake builds this package as an output and exposes an
+overlay, so a NixOS host consumes it via
+`services.hermes-agent.extraPythonPackages` — built straight from this monorepo
+subdir:
+
+```nix
+{
+  inputs.commy.url = "github:CodeForBreakfast/commy";
+
+  # In the host config, with commy's overlay applied so `commy-hermes` lands in
+  # the same Python set as hermes-agent (version-matched):
+  nixpkgs.overlays = [ inputs.commy.overlays.default ];
+  services.hermes-agent.extraPythonPackages = ps: [ ps.commy-hermes ];
+}
+```
+
+`nix build github:CodeForBreakfast/commy#commy-hermes` builds the wheel
+directly for inspection.
+
+**pip.** `pip install` of the built wheel into Hermes' environment works the
+same way (auto-discovered on next startup, then `hermes plugins enable
+commy-platform`). Publishing the wheel to PyPI for public `pip install
+commy-hermes` is a future option (would use PyPI Trusted Publishing / OIDC); it
+is intentionally not wired until a public consumer needs it.

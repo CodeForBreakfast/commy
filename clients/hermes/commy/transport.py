@@ -35,7 +35,7 @@ import time
 from collections.abc import Mapping
 from typing import IO, Optional
 
-from commy.connection import (
+from .connection import (
     Clock,
     ConnectionSpec,
     Frame,
@@ -44,7 +44,7 @@ from commy.connection import (
     TopicConnectionManager,
     TransportFactory,
 )
-from commy.listener import ChannelListener, OwnedKeys, SpawnTrigger, build_listener_spec
+from .listener import ChannelListener, OwnedKeys, SpawnTrigger, build_listener_spec
 
 _STOP_GRACE_SECONDS = 5.0
 
@@ -115,7 +115,7 @@ class McpTopicTransport:
         from mcp import StdioServerParameters
         from mcp.client.stdio import stdio_client
 
-        from commy.session import ChannelAwareClientSession
+        from .session import ChannelAwareClientSession
 
         server = StdioServerParameters(
             command=self._spec.command,

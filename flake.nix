@@ -23,8 +23,68 @@
             pkgs = nixpkgs.legacyPackages.${system};
           }
         );
+
+      # Single source of truth for the plugin version — read from its pyproject
+      # so the flake and the package never drift.
+      pluginVersion =
+        (builtins.fromTOML (builtins.readFile ./clients/hermes/pyproject.toml)).project.version;
+
+      # The Hermes platform plugin (clients/hermes), built straight from the
+      # monorepo subdir as a pyproject package that exposes the
+      # `hermes_agent.plugins` entry point. Consumers add it to
+      # `services.hermes-agent.extraPythonPackages`; Hermes then discovers it via
+      # importlib.metadata and `hermes plugins enable commy-platform` activates
+      # it. `gateway` / `BasePlatformAdapter` come from the host Hermes at
+      # runtime, so there are no runtime deps and the Nix build neither imports
+      # nor tests the module — the repo gate (clients/hermes/scripts/test.sh)
+      # does that against a real `hermes-agent`.
+      commyHermesPlugin =
+        pythonPackages:
+        pythonPackages.buildPythonPackage {
+          pname = "commy-hermes";
+          version = pluginVersion;
+          pyproject = true;
+          src = nixpkgs.lib.cleanSourceWith {
+            src = ./clients/hermes;
+            filter =
+              path: _type:
+              let
+                base = baseNameOf path;
+              in
+              !(
+                builtins.elem base [
+                  ".venv"
+                  "dist"
+                  "build"
+                  "__pycache__"
+                  ".pytest_cache"
+                  ".ruff_cache"
+                ]
+                || nixpkgs.lib.hasSuffix ".pyc" base
+              );
+          };
+          build-system = [ pythonPackages.setuptools ];
+          doCheck = false;
+        };
     in
     {
+      packages = forAllSystems (
+        { pkgs, ... }:
+        rec {
+          commy-hermes = commyHermesPlugin pkgs.python3Packages;
+          default = commy-hermes;
+        }
+      );
+
+      # Adds `commy-hermes` to every Python package set, so a consumer can build
+      # it against the same Python as their `hermes-agent` (version-matched) and
+      # pass it to `services.hermes-agent.extraPythonPackages`.
+      overlays.default = _final: prev: {
+        pythonPackagesExtensions = (prev.pythonPackagesExtensions or [ ]) ++ [
+          (pyfinal: _pyprev: { commy-hermes = commyHermesPlugin pyfinal; })
+        ];
+      };
+
       devShells = forAllSystems (
         { pkgs, ... }:
         let

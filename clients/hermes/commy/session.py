@@ -29,7 +29,7 @@ import pydantic
 from mcp import ClientSession
 from mcp.types import Notification, ServerNotificationType
 
-from commy.receive import NOTIFICATION_METHOD
+from .receive import NOTIFICATION_METHOD
 
 
 class ChannelFrameParams(pydantic.BaseModel):

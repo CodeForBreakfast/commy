@@ -22,14 +22,14 @@ from __future__ import annotations
 
 from typing import Awaitable, Callable, Set, Tuple
 
-from commy.connection import (
+from .connection import (
     ConnectionSpec,
     Frame,
     SpawnConfig,
     TransportFactory,
 )
-from commy.naming import deterministic_listener_name
-from commy.receive import frame_from_params
+from .naming import deterministic_listener_name
+from .receive import frame_from_params
 
 # The boot listener owns no single topic, so its ConnectionSpec.topic is empty.
 _LISTENER_TOPIC = ""

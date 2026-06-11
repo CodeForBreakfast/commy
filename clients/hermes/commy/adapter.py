@@ -40,9 +40,9 @@ from gateway.platforms.base import (
 )
 from gateway.session import SessionSource
 
-from commy.connection import ConnectionSpec, SpawnConfig, TopicConnectionManager
-from commy.listener import ChannelListener
-from commy.receive import ChannelFrame, frame_from_params
+from .connection import ConnectionSpec, SpawnConfig, TopicConnectionManager
+from .listener import ChannelListener
+from .receive import ChannelFrame, frame_from_params
 
 PLATFORM_NAME = "commy"
 PLATFORM_LABEL = "Commy"
@@ -161,7 +161,7 @@ class CommyAdapter(BasePlatformAdapter):
         brings the listener up.
         """
         if self._connection_manager is None:
-            from commy.transport import make_listener, make_manager
+            from .transport import make_listener, make_manager
 
             config = SpawnConfig.from_env()
             self._connection_manager = make_manager(config, self.receive_channel_notification)

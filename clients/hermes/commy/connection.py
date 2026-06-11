@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Mapping, Optional, Protocol
 
-from commy.naming import deterministic_bot_name
+from .naming import deterministic_bot_name
 
 # A `{content, meta}` inbound frame — the same shape the receive path
 # (`CommyAdapter.receive_channel_notification`) consumes. It rides under
