@@ -142,15 +142,19 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         }),
       ))
 
+    // Compare against the refs `seedChannel` returns rather than the literal
+    // names: a substrate may namespace the underlying channel (the live Zulip
+    // factory prefixes per-test, comms-e5vm.5). The neutral invariant is that
+    // a seeded channel is enumerated, keyed by the name the substrate assigned.
     test('directory.listChannels enumerates seeded channels by name', () =>
       Effect.runPromise(
         Effect.gen(function* () {
-          yield* env.seedChannel('alpha')
-          yield* env.seedChannel('bravo')
+          const alpha = yield* env.seedChannel('alpha')
+          const bravo = yield* env.seedChannel('bravo')
           const channels = yield* env.comms.directory.listChannels()
-          const names = channels.map((c) => String(c.name)).sort()
-          expect(names).toContain('alpha')
-          expect(names).toContain('bravo')
+          const names = channels.map((c) => String(c.name))
+          expect(names).toContain(String(alpha.name))
+          expect(names).toContain(String(bravo.name))
         }),
       ))
 
@@ -543,11 +547,14 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         }),
       ))
 
+    // The returned name must reflect (derive from) the seed input; a substrate
+    // may namespace it (live Zulip prefixes per-test, comms-e5vm.5), so the
+    // neutral invariant is containment of the seed input, not exact equality.
     test('seedChannel returns a ChannelRef whose name matches the seed input', () =>
       Effect.runPromise(
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('design-talk')
-          expect(channel.name).toEqual(decodeChannelNameSync('design-talk'))
+          expect(String(channel.name)).toContain('design-talk')
         }),
       ))
 
