@@ -9,14 +9,17 @@ import { afterEach, beforeEach } from 'bun:test'
  * wrapping (comms-xwqm). 30s gives that contention wide headroom while still
  * failing if a hook genuinely wedges.
  *
- * This is headroom, not a cure-all: the long-poll teardown tests (the
- * gap-replay / scope-close-interrupt cases that drive an infinite server
- * handler and rely on AbortSignal unwinding a forked drain fiber) can still
- * exceed even this under aggressive contention. That residual is a fiber/scope
- * lifecycle problem, not a too-small-number problem, and is tracked for the
- * Effect-Scope-based realm rework (comms-4lz5 / comms-30hq) — running the whole
- * test, realm acquisition included, inside one scope with guaranteed finalizers
- * removes the leftover-fiber-starves-teardown failure mode structurally.
+ * The infinite-long-poll cases that used to strain even this headroom (the
+ * gap-replay / scope-close-interrupt drains whose forked fiber's AbortSignal
+ * unwinding could starve teardown under aggressive contention) no longer run
+ * here: comms-e5vm.2 moved that LOGIC onto the stub HttpClient + TestClock
+ * (deterministic, no socket, no forked drain), and the one genuinely-socket
+ * teardown assertion that remains is self-contained in
+ * `packages/zulip/scope-teardown.test.ts` with its own `Effect.acquireRelease`
+ * (comms-4lz5). So every fixture still wired through these hooks is a plain
+ * request/response realm that starts and stops in a few ms — the 30s is wide
+ * headroom for contention, not a cure for a teardown-starvation mode that is
+ * now structurally gone.
  */
 export const REALM_HOOK_TIMEOUT_MS = 30_000
 
