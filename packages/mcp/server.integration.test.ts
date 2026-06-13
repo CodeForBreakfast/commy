@@ -28,14 +28,17 @@ import {
   InboxError,
 } from '@commy/core/ports'
 import { memoryAdapter } from '@commy/memory/adapter'
-import type { ZulipAdapter } from '@commy/zulip/adapter'
-import { decodeUserUploadPathSync } from '@commy/zulip/http'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { Deferred, Effect, FiberId, Layer, Option, Stream } from 'effect'
 import { parseEnv, substrateAdapterLayer } from './bootstrap.ts'
 import type { CursorStore } from './cursor-store.ts'
 import { CursorStoreTag } from './cursor-store.ts'
+// Above-port unit tests drive the substrate through the in-memory adapter only —
+// never the real Zulip adapter (see docs/architecture.md § Test architecture).
+// `completeAsSubstrate` is the single seam that completes it to the Zulip-shaped
+// `SubstrateAdapter` port; no Zulip type or brand is named directly here.
+import { completeAsSubstrate } from './memory-substrate.ts'
 import { makeProgram } from './server.ts'
 import { testPlatformLayer } from './test-platform.ts'
 
@@ -271,24 +274,20 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
   }
   const composedDirectory: Directory = { ...base.directory, ...overrides.directoryOverrides }
 
-  const adapter: ZulipAdapter = {
-    identity: composedIdentity,
-    publisher: composedPublisher,
-    inbox: composedInbox,
-    history: composedHistory,
-    directory: composedDirectory,
-    reconcileMinterSubscriptions: () => Effect.succeed({ added: [], error: undefined }),
-    downloadFile: () =>
-      Effect.succeed({
-        data: new Uint8Array([]),
-        contentType: 'application/octet-stream',
-      }),
-    uploadFile: () =>
-      Effect.succeed({ url: decodeUserUploadPathSync('/user_uploads/0/stub'), filename: 'stub' }),
-    close: async () => {
-      closes.count += 1
+  const adapter = completeAsSubstrate(
+    {
+      identity: composedIdentity,
+      publisher: composedPublisher,
+      inbox: composedInbox,
+      history: composedHistory,
+      directory: composedDirectory,
     },
-  }
+    {
+      close: async () => {
+        closes.count += 1
+      },
+    },
+  )
 
   const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair()
   const client = new Client(
