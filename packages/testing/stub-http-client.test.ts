@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { HttpClient, HttpClientRequest } from '@effect/platform'
-import { Effect } from 'effect'
+import { Duration, Effect, Fiber, Option } from 'effect'
 import { makeStubHttpClient } from './stub-http-client.ts'
 
 const REALM = 'https://zulip.example.com/api/v1'
@@ -199,6 +199,29 @@ test('opens no socket — a request to an unroutable host still resolves', () =>
         HttpClientRequest.get('https://this-host-does-not-resolve.invalid/api/v1/users/me'),
       )
       expect(response.status).toBe(200)
+    }),
+  ))
+
+test('a hang response captures the request, then never resolves and stays interruptible', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      // The long-poll hold: the stub answers instantly for everything else, so
+      // a terminal hang is what stops an eager consumer draining the sequence.
+      yield* stub.respondSequence('GET', '/api/v1/events', [{ hang: true }])
+      const fiber = yield* Effect.fork(
+        stub.client.execute(HttpClientRequest.get(`${REALM}/events`)),
+      )
+      // Let the forked request issue and park on the hang.
+      yield* Effect.sleep(Duration.millis(10))
+      const captured = yield* stub.captured
+      expect(captured).toHaveLength(1)
+      expect(captured[0]?.url.pathname).toBe('/api/v1/events')
+      // Still parked — a hang resolves to no Exit.
+      expect(Option.isNone(yield* fiber.poll)).toBe(true)
+      // Interrupting unwinds it cleanly (the scope-close path).
+      const exit = yield* Fiber.interrupt(fiber)
+      expect(exit._tag).toBe('Failure')
     }),
   ))
 
