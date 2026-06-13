@@ -7,10 +7,10 @@
     "clients/*"
   ],
   "packageManager": "bun@1.3.13",
-  "bin": "./server.ts",
+  "bin": "./packages/mcp/server.ts",
   "scripts": {
     "prepare": "git config core.hooksPath .hooks && effect-language-service patch",
-    "start": "bun install --no-summary && bun server.ts",
+    "start": "bun install --no-summary && bun packages/mcp/server.ts",
     "check": "bun install --no-summary && bunx turbo run test",
     "test": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check (via turbo) instead of bun run test directly' >&2; exit 1; } && bun test",
     "test:hermes": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check (via turbo) instead of bun run test:hermes directly' >&2; exit 1; } && clients/hermes/scripts/test.sh",
