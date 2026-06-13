@@ -149,6 +149,26 @@ if (env === undefined) {
   // Persistent peer bots are find-or-created once and cached for the suite.
   const peerCache = new Map<string, Identity>()
 
+  // A peer bot bound to its own adapter so it can POST (not just resolve) —
+  // drives the contract's mention-floor tests, where a peer @-mentions self.
+  // Acquired once per peer name and reused for the suite (posting carries no
+  // per-test queue state, unlike the per-test self adapter); the regenerate
+  // costs one minter-paced acquire total.
+  const peerAdapterCache = new Map<string, ZulipAdapter>()
+
+  const postingPeerAdapter = (realName: string): Effect.Effect<ZulipAdapter> =>
+    Effect.gen(function* () {
+      const cached = peerAdapterCache.get(realName)
+      if (cached !== undefined) return cached
+      const peerAdapter = yield* buildAdapter()
+      builtAdapters.push(peerAdapter)
+      yield* Effect.sleep(MINTER_PACE).pipe(
+        Effect.zipRight(peerAdapter.identity.acquire(decodeBotNameSync(realName))),
+      )
+      peerAdapterCache.set(realName, peerAdapter)
+      return peerAdapter
+    }).pipe(Effect.orDie)
+
   // Adapters built per test, torn down by the module afterAll — the contract's
   // per-test dispose() releases the binding (persistent) but the underlying
   // event pump is unwound here so handles don't leak across the run.
@@ -224,14 +244,15 @@ if (env === undefined) {
       comms: adapter,
       seedChannel: (name) => ensureStream(minter, `${ns}-${name}`),
       seedAgent: (name) => ensurePeer(minter, adapter, name),
-      // Zulip stamps integer-second timestamps, so the range/replay tests that
-      // need distinct per-message ts can't hold here (covered by memory/fake).
-      coarseTimestamps: true,
-      // The shared realm doesn't surface a bot's own posts/mentions on its own
-      // events() within the contract's window (inline readiness too tight;
-      // minter-side `is:mentioned` narrow keyed to the queue owner).
-      // realm.live.test.ts owns the live event-delivery coverage proper.
-      noSelfEventDelivery: true,
+      // A seeded peer posts (mentioning self) through its own bound adapter so
+      // the mention-floor tests run cross-identity — the shape that surfaces on
+      // the real realm where a single-identity self-mention does not.
+      peerPost: (peer, channel, body, opts) =>
+        postingPeerAdapter(String(peer.name)).pipe(
+          Effect.flatMap((peerAdapter) => peerAdapter.publisher.post(channel, body, opts)),
+          Effect.asVoid,
+          Effect.orDie,
+        ),
       dispose: () =>
         Effect.sleep(MINTER_PACE).pipe(
           Effect.zipRight(adapter.identity.release({ persistent: true })),

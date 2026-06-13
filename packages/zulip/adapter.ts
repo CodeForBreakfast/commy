@@ -46,6 +46,7 @@ import { HttpClient } from '@effect/platform'
 import {
   Array as Arr,
   Data,
+  Duration,
   Effect,
   HashMap,
   HashSet,
@@ -1377,6 +1378,10 @@ export const zulipAdapter = (
       })
 
     return {
+      // Zulip stamps integer epoch seconds, so two posts inside the same
+      // second collide on `ts`; a caller needing distinct timestamps must
+      // space posts by ≥1s.
+      capabilities: { timestampGranularity: Duration.seconds(1) },
       identity,
       publisher,
       inbox,

@@ -10,7 +10,7 @@
  * ports.
  */
 
-import { Data, type Effect, type Option, Schema, type Stream } from 'effect'
+import { Data, type Duration, type Effect, type Option, Schema, type Stream } from 'effect'
 
 import { messageOf } from './messageOf.ts'
 
@@ -454,10 +454,33 @@ export interface Directory {
 }
 
 /**
+ * Static, substrate-derived properties of an adapter's message-ordering
+ * model that a consumer must adapt to. Not behaviour — these are facts about
+ * the substrate the ports can't make uniform, surfaced so the same code
+ * (tests AND production) reads them rather than branching on a substrate name.
+ * Deliberately minimal: one field per real consumer, never a junk drawer of
+ * substrate flags.
+ */
+export interface Capabilities {
+  /**
+   * The smallest real-time gap between two `post`s that the substrate will
+   * stamp with distinct `Timestamp`s — the resolution of the ordering model.
+   * Memory keys `ts` off a monotonic counter so any two posts differ
+   * (`Duration.zero`); Zulip stamps integer epoch seconds, so posts inside the
+   * same second collide (`Duration.seconds(1)`). The gap-replay watermark
+   * dedups on `ts`, so "`ts` is not a unique key below this resolution" is
+   * knowledge production consults, not only a test concern — a caller that
+   * needs two posts distinguishable by `ts` must space them by at least this.
+   */
+  readonly timestampGranularity: Duration.Duration
+}
+
+/**
  * Aggregate exposed by a driven adapter. Driving adapters depend on
  * this shape, never on substrate-specific extensions.
  */
 export interface AgentComms {
+  readonly capabilities: Capabilities
   readonly identity: IdentityPort
   readonly publisher: MessagePublisher
   readonly inbox: MessageInbox
