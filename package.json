@@ -14,7 +14,7 @@
     "check": "bun install --no-summary && bunx turbo run test",
     "test": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check (via turbo) instead of bun run test directly' >&2; exit 1; } && bun test",
     "test:hermes": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check (via turbo) instead of bun run test:hermes directly' >&2; exit 1; } && clients/hermes/scripts/test.sh",
-    "test:live": "bun test --path-ignore-patterns='' packages/zulip/realm.live.test.ts packages/zulip/contract.live.test.ts packages/mcp/server.live.test.ts",
+    "test:live": "bun test --path-ignore-patterns='' --timeout 45000 packages/zulip/realm.live.test.ts packages/zulip/contract.live.test.ts packages/mcp/server.live.test.ts",
     "typecheck": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check (via turbo) instead of bun run typecheck directly' >&2; exit 1; } && tsc --noEmit",
     "lint": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check (via turbo) instead of bun run lint directly' >&2; exit 1; } && bunx biome check .",
     "lint:fix": "bunx biome check --fix ."
