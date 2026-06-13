@@ -224,6 +224,14 @@ if (env === undefined) {
       comms: adapter,
       seedChannel: (name) => ensureStream(minter, `${ns}-${name}`),
       seedAgent: (name) => ensurePeer(minter, adapter, name),
+      // Zulip stamps integer-second timestamps, so the range/replay tests that
+      // need distinct per-message ts can't hold here (covered by memory/fake).
+      coarseTimestamps: true,
+      // The shared realm doesn't surface a bot's own posts/mentions on its own
+      // events() within the contract's window (inline readiness too tight;
+      // minter-side `is:mentioned` narrow keyed to the queue owner).
+      // realm.live.test.ts owns the live event-delivery coverage proper.
+      noSelfEventDelivery: true,
       dispose: () =>
         Effect.sleep(MINTER_PACE).pipe(
           Effect.zipRight(adapter.identity.release({ persistent: true })),

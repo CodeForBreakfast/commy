@@ -75,6 +75,29 @@ export interface ContractEnv {
    * allowlist mode) opt in by setting it.
    */
   readonly unacquirableName?: string
+  /**
+   * Optional. Set when the substrate's message timestamps are too coarse to
+   * distinguish messages posted back-to-back — Zulip stamps integer
+   * **seconds**, so three posts inside one second share a `ts` and the
+   * range-filter / single-timestamp assertions (which depend on distinct
+   * per-message timestamps) can't hold. Substrates with fine-grained
+   * timestamps (Memory) omit it and the suite runs those tests; the filtering
+   * logic stays covered there. (The `…past every message` range/replay tests
+   * offset by an hour, so they run regardless.)
+   */
+  readonly coarseTimestamps?: boolean
+  /**
+   * Optional. Set when the substrate does not deliver events about the
+   * current identity's *own* posts/mentions back to its own inbox within the
+   * contract's window — on the shared live Zulip realm the inline readiness
+   * window is too tight and the minter-side `is:mentioned` narrow is keyed to
+   * the queue owner, so a bot's self-authored post/mention doesn't surface on
+   * its own `events()`. Substrates that loop self-events back (Memory) omit
+   * it and the suite runs the readiness + self-mention tests; cross-identity
+   * event delivery and mention *suppression* are exercised regardless.
+   * `realm.live.test.ts` owns the live event-delivery coverage proper.
+   */
+  readonly noSelfEventDelivery?: boolean
   /** Tear down whatever the factory stood up. Called once per test. */
   readonly dispose: () => Effect.Effect<void>
 }
@@ -394,6 +417,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
     test('history.readChannel range.since is inclusive', () =>
       Effect.runPromise(
         Effect.gen(function* () {
+          if (env.coarseTimestamps) return
           const channel = yield* env.seedChannel('lobby')
           yield* env.comms.publisher.post(channel, decodeMessageBodySync('before'))
           yield* env.comms.publisher.post(channel, decodeMessageBodySync('pivot'))
@@ -411,6 +435,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
     test('history.readChannel range.until is inclusive', () =>
       Effect.runPromise(
         Effect.gen(function* () {
+          if (env.coarseTimestamps) return
           const channel = yield* env.seedChannel('lobby')
           yield* env.comms.publisher.post(channel, decodeMessageBodySync('before'))
           yield* env.comms.publisher.post(channel, decodeMessageBodySync('pivot'))
@@ -428,6 +453,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
     test('history.readChannel range.since == range.until selects exactly one timestamp', () =>
       Effect.runPromise(
         Effect.gen(function* () {
+          if (env.coarseTimestamps) return
           const channel = yield* env.seedChannel('lobby')
           yield* env.comms.publisher.post(channel, decodeMessageBodySync('before'))
           yield* env.comms.publisher.post(channel, decodeMessageBodySync('pivot'))
@@ -585,6 +611,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
       Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
+            if (env.noSelfEventDelivery) return
             const channel = yield* env.seedChannel('lobby')
             yield* env.comms.inbox.subscribe(channel)
             yield* env.comms.publisher.post(channel, decodeMessageBodySync('pre-iterate'))
@@ -609,6 +636,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
       Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
+            if (env.noSelfEventDelivery) return
             const channel = yield* env.seedChannel('lobby')
             const me = yield* env.comms.identity.currentIdentity()
             const queue = yield* eventQueue(env.comms)
@@ -634,6 +662,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
       Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
+            if (env.noSelfEventDelivery) return
             const channel = yield* env.seedChannel('lobby')
             const me = yield* env.comms.identity.currentIdentity()
             yield* env.comms.inbox.subscribe('mentions')
@@ -782,6 +811,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
     test('inbox.replay(since) returns past message-posted events with ts >= since', () =>
       Effect.runPromise(
         Effect.gen(function* () {
+          if (env.coarseTimestamps) return
           const channel = yield* env.seedChannel('lobby')
           yield* env.comms.publisher.post(channel, decodeMessageBodySync('before-pivot'))
           yield* env.comms.publisher.post(channel, decodeMessageBodySync('pivot'))
