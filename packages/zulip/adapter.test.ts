@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { expect, test } from 'bun:test'
 import type { ChannelRef, Identity, InboundEvent, MessageRef } from '@commy/core/ports'
 import {
   DirectoryError,
@@ -17,6 +17,7 @@ import {
   UnknownChannel,
   type UnknownIdentity,
 } from '@commy/core/ports'
+import { registerRealmHooks } from '@commy/testing/realm-hooks'
 import { FetchHttpClient, HttpClient } from '@effect/platform'
 import { Cause, Duration, Effect, Exit, Option, Queue, Redacted, type Scope, Stream } from 'effect'
 import type { ZulipAdapter, ZulipAdapterConfig } from './adapter.ts'
@@ -27,12 +28,8 @@ import { startTestRealm } from './test-server.ts'
 
 let realm: TestRealm
 
-beforeEach(() => {
-  realm = startTestRealm()
-})
-
-afterEach(async () => {
-  await realm.stop()
+registerRealmHooks(startTestRealm, (next) => {
+  realm = next
 })
 
 const HERMES = {
