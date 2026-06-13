@@ -23,9 +23,22 @@ import {
   type HttpClientRequest,
   HttpClientResponse,
 } from '@effect/platform'
-import { Data, Effect, HashMap, Option, Ref } from 'effect'
+import { Data, Effect, HashMap, Option, Predicate, Ref } from 'effect'
 
-export type StubResponse = {
+/**
+ * A response that never resolves — the request is captured, then the effect
+ * parks on `Effect.never`. Models the real Zulip long-poll *holding* the
+ * connection open: an in-memory stub answers instantly, so without a hold an
+ * eager consumer (the event-pump's `Stream.runDrain`) would burn through the
+ * whole response sequence in a hot loop. A fiber blocked on a hang is
+ * *interrupted* (not errored) when its scope closes — which is exactly the
+ * scope-close-interrupt path the event-pump tests exercise.
+ */
+export type StubHang = {
+  readonly hang: true
+}
+
+export type StubBody = {
   /** Object → JSON-encoded; string → verbatim; `Uint8Array` → raw bytes. */
   readonly body: unknown
   /** HTTP status; defaults to 200. */
@@ -33,6 +46,8 @@ export type StubResponse = {
   /** Extra response headers, merged over the default `content-type`. */
   readonly headers?: Readonly<Record<string, string>>
 }
+
+export type StubResponse = StubBody | StubHang
 
 export type CapturedHttpRequest = {
   readonly method: string
@@ -87,19 +102,19 @@ const requestBodyInit = (body: HttpBody.HttpBody): string | Uint8Array | FormDat
   }
 }
 
-const responseBodyInit = (response: StubResponse): string | Uint8Array => {
+const responseBodyInit = (response: StubBody): string | Uint8Array => {
   if (response.body instanceof Uint8Array) return response.body
   if (typeof response.body === 'string') return response.body
   return JSON.stringify(response.body)
 }
 
-const responseHeaders = (response: StubResponse): Record<string, string> => {
+const responseHeaders = (response: StubBody): Record<string, string> => {
   const base: Record<string, string> =
     response.body instanceof Uint8Array ? {} : { 'content-type': 'application/json' }
   return { ...base, ...response.headers }
 }
 
-const notFound = (method: string, path: string): StubResponse => ({
+const notFound = (method: string, path: string): StubBody => ({
   body: { result: 'error', code: 'NO_STUB_HANDLER', msg: `no stub handler for ${method} ${path}` },
   status: 404,
 })
@@ -155,14 +170,18 @@ export const makeStubHttpClient: Effect.Effect<StubHttpClient> = Effect.gen(func
   const client = HttpClient.make((request, url) =>
     capture(request, url).pipe(
       Effect.zipRight(nextResponse(request.method, url.pathname)),
-      Effect.map((response) =>
-        HttpClientResponse.fromWeb(
-          request,
-          new Response(responseBodyInit(response), {
-            status: response.status ?? 200,
-            headers: responseHeaders(response),
-          }),
-        ),
+      Effect.flatMap((response) =>
+        Predicate.hasProperty(response, 'hang')
+          ? Effect.never
+          : Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(responseBodyInit(response), {
+                  status: response.status ?? 200,
+                  headers: responseHeaders(response),
+                }),
+              ),
+            ),
       ),
     ),
   )
