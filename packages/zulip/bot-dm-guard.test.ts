@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { expect, test } from 'bun:test'
+import { registerRealmHooks } from '@commy/testing/realm-hooks'
 import { FetchHttpClient, HttpClient } from '@effect/platform'
 import { Cause, Effect, Exit, Option, Schema } from 'effect'
 import { BotToBotDirectMessageError, type RecipientDirectory, wrapBotHttp } from './bot-dm-guard.ts'
@@ -9,12 +10,8 @@ import { ZulipUserRef } from './user-ref.ts'
 
 let realm: TestRealm
 
-beforeEach(() => {
-  realm = startTestRealm()
-})
-
-afterEach(async () => {
-  await realm.stop()
+registerRealmHooks(startTestRealm, (next) => {
+  realm = next
 })
 
 const SELF_ID = ZulipUserRef(100)

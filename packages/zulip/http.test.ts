@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { expect, test } from 'bun:test'
+import { registerRealmHooks } from '@commy/testing/realm-hooks'
 import { FetchHttpClient, HttpClient } from '@effect/platform'
 import {
   Cause,
@@ -115,12 +116,8 @@ const startFixture = (): Fixture => {
 
 let fixture: Fixture
 
-beforeEach(() => {
-  fixture = startFixture()
-})
-
-afterEach(async () => {
-  await fixture.stop()
+registerRealmHooks(startFixture, (next) => {
+  fixture = next
 })
 
 const successSchema = Schema.Struct({ result: Schema.Literal('success') })

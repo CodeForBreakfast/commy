@@ -32,6 +32,7 @@ import {
   UnknownIdentity,
 } from '@commy/core/ports'
 import { Duration, Effect, Exit, Option, Queue, type Scope, Stream } from 'effect'
+import { REALM_HOOK_TIMEOUT_MS } from './realm-hooks.ts'
 
 export interface ContractEnv {
   /**
@@ -110,9 +111,9 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
 
     beforeEach(async () => {
       env = await factory()
-    })
+    }, REALM_HOOK_TIMEOUT_MS)
 
-    afterEach(() => Effect.runPromise(env.dispose()))
+    afterEach(() => Effect.runPromise(env.dispose()), REALM_HOOK_TIMEOUT_MS)
 
     test('publisher.post returns a MessageRef whose channel matches the destination', () =>
       Effect.runPromise(
