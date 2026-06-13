@@ -17,20 +17,23 @@ import {
   UnknownChannel,
   type UnknownIdentity,
 } from '@commy/core/ports'
-import { registerRealmHooks } from '@commy/testing/realm-hooks'
-import { FetchHttpClient, HttpClient } from '@effect/platform'
-import { Cause, Effect, Exit, Option, Redacted } from 'effect'
+import { effectTest } from '@commy/testing/effect-test'
+import { makeStubHttpClient, type StubHttpClient } from '@commy/testing/stub-http-client'
+import { HttpClient } from '@effect/platform'
+import { Cause, Effect, Exit, Redacted } from 'effect'
 import type { ZulipAdapter, ZulipAdapterConfig } from './adapter.ts'
 import { attachmentReference, zulipAdapter as zulipAdapterRaw } from './adapter.ts'
 import { ApiKey, BotEmail, decodeUserUploadPathSync, RealmUrl, ZulipApiError } from './http.ts'
-import type { TestRealm } from './test-server.ts'
-import { startTestRealm } from './test-server.ts'
 
-let realm: TestRealm
-
-registerRealmHooks(startTestRealm, (next) => {
-  realm = next
-})
+// Adapter-internal logic exercised on the owned-fake stub HttpClient — no
+// `Bun.serve`, no real socket. These are the request-shape / error-mapping
+// unit tests: they inspect the captured `HttpClientRequest`s (params, narrow
+// JSON, auth headers, call counts, paths) and the typed-error wrapping that
+// the substrate-agnostic live contract (`contract.ts`) deliberately never
+// asserts. The behavioural round-trips the contract DOES prove are not
+// duplicated here. The long-poll / reconnect logic lives in
+// `adapter-events.test.ts`; the genuine real-socket teardown is the Tier-3
+// residue (comms-4lz5).
 
 const HERMES = {
   user_id: 9,
@@ -71,337 +74,355 @@ const BOB = {
   role: 100,
 } as const
 
-const httpClient = Effect.runSync(HttpClient.HttpClient.pipe(Effect.provide(FetchHttpClient.layer)))
+const REALM_URL = 'https://zulip.example.com'
 
 // makeZulipHttp reads HttpClient from context (comms-0m8), so the adapter
-// Effect carries `HttpClient` in R. Provide the real fetch-backed client
-// here so every call site keeps a `never` requirements channel.
-const zulipAdapter = (config: ZulipAdapterConfig): Effect.Effect<ZulipAdapter> =>
-  zulipAdapterRaw(config).pipe(Effect.provideService(HttpClient.HttpClient, httpClient))
+// Effect carries `HttpClient` in R. Provide the owned-fake stub client here so
+// every call site keeps a `never` requirements channel.
+const zulipAdapter = (
+  stub: StubHttpClient,
+  config: ZulipAdapterConfig,
+): Effect.Effect<ZulipAdapter> =>
+  zulipAdapterRaw(config).pipe(Effect.provideService(HttpClient.HttpClient, stub.client))
 
 const makeConfig = (): Effect.Effect<ZulipAdapterConfig> =>
   Effect.gen(function* () {
     return {
-      realmUrl: yield* RealmUrl(realm.url),
+      realmUrl: yield* RealmUrl(REALM_URL),
       minterEmail: yield* BotEmail('minter@example.com'),
       minterApiKey: Redacted.make(yield* ApiKey('minter-key')),
     }
   }).pipe(Effect.orDie)
 
-const seedUsers = (members: ReadonlyArray<unknown>): void => {
-  realm.handle('GET', '/api/v1/users', () => ({
-    body: { result: 'success', members },
-  }))
-}
+const seedUsers = (stub: StubHttpClient, members: ReadonlyArray<unknown>): Effect.Effect<void> =>
+  stub.respond('GET', '/api/v1/users', { body: { result: 'success', members } })
 
-const seedRegenerate = (userId: number, apiKey = 'fresh-key'): void => {
-  realm.handle('POST', `/api/v1/bots/${userId}/api_key/regenerate`, () => ({
+const seedRegenerate = (
+  stub: StubHttpClient,
+  userId: number,
+  apiKey = 'fresh-key',
+): Effect.Effect<void> =>
+  stub.respond('POST', `/api/v1/bots/${userId}/api_key/regenerate`, {
     body: { result: 'success', api_key: apiKey },
-  }))
-}
+  })
 
-const seedMint = (userId = 9999, apiKey = 'minted-key'): void => {
+const seedMint = (
+  stub: StubHttpClient,
+  userId = 9999,
+  apiKey = 'minted-key',
+): Effect.Effect<void> =>
   // Match real Zulip's response shape — POST /bots returns
   // user_id + api_key but NOT email. The adapter reconstructs the
   // bot's delivery email from <short_name>-bot@<realm_host>.
-  realm.handle('POST', '/api/v1/bots', () => ({
+  stub.respond('POST', '/api/v1/bots', {
     body: { result: 'success', api_key: apiKey, user_id: userId },
-  }))
-}
+  })
 
-// Realm host the test ZulipHttp will see — used to verify the
-// adapter's client-side email construction. The test server binds
-// to localhost so the realmUrl host is always "localhost".
-const realmHost = (): string => new URL(realm.url).hostname
+// Realm host the test ZulipHttp will see — used to verify the adapter's
+// client-side email construction.
+const realmHost = (): string => new URL(REALM_URL).hostname
 
-const seedDeactivate = (userId: number): void => {
-  realm.handle('DELETE', `/api/v1/bots/${userId}`, () => ({
-    body: { result: 'success' },
-  }))
-}
+const seedDeactivate = (stub: StubHttpClient, userId: number): Effect.Effect<void> =>
+  stub.respond('DELETE', `/api/v1/bots/${userId}`, { body: { result: 'success' } })
 
 const buildAdapter = (
+  stub: StubHttpClient,
   configOverrides: Partial<ZulipAdapterConfig> = {},
   acquireName = decodeBotNameSync('hermes-agent'),
 ): Effect.Effect<ZulipAdapter, IdentityError | UnknownIdentity> =>
   Effect.gen(function* () {
-    seedUsers([HERMES])
-    seedRegenerate(HERMES.user_id)
+    yield* seedUsers(stub, [HERMES])
+    yield* seedRegenerate(stub, HERMES.user_id)
     const config = yield* makeConfig()
-    const adapter = yield* zulipAdapter({ ...config, ...configOverrides })
+    const adapter = yield* zulipAdapter(stub, { ...config, ...configOverrides })
     yield* adapter.identity.acquire(acquireName)
     return adapter
   })
 
-const findRequest = (method: string, pathname: string) => {
-  const req = realm.captured.find((r) => r.method === method && r.url.pathname === pathname)
-  if (req === undefined) throw new Error(`no captured ${method} ${pathname}`)
-  return req
-}
-
-test('identity.acquire on an existing bot regenerates its API key and binds', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedUsers([HERMES])
-      seedRegenerate(HERMES.user_id, 'rotated-key')
-      const config = yield* makeConfig()
-      const adapter = yield* zulipAdapter(config)
-      const result = yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-      expect(result.identity).toEqual({
-        id: decodeIdentityIdSync('9'),
-        name: decodeDisplayNameSync('hermes-agent'),
-        kind: 'agent',
-      })
-      expect(result.credentials).toEqual({
-        substrate: 'zulip',
-        realmUrl: config.realmUrl,
-        email: yield* BotEmail(HERMES.email).pipe(Effect.orDie),
-        apiKey: yield* ApiKey('rotated-key').pipe(Effect.orDie),
-      })
-      expect(findRequest('POST', `/api/v1/bots/${HERMES.user_id}/api_key/regenerate`)).toBeDefined()
+const findRequest = (stub: StubHttpClient, method: string, pathname: string) =>
+  stub.captured.pipe(
+    Effect.map((reqs) => {
+      const req = reqs.find((r) => r.method === method && r.url.pathname === pathname)
+      if (req === undefined) throw new Error(`no captured ${method} ${pathname}`)
+      return req
     }),
-  ))
+  )
 
-test('identity.acquire on a name with no existing bot mints fresh via POST /bots', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedUsers([GRAEME])
-      seedMint(42, 'fresh-mint-key')
-      const config = yield* makeConfig()
-      const adapter = yield* zulipAdapter(config)
-      const result = yield* adapter.identity.acquire(decodeBotNameSync('fresh-bot'))
-      expect(result.identity).toEqual({
-        id: decodeIdentityIdSync('42'),
-        name: decodeDisplayNameSync('fresh-bot'),
-        kind: 'agent',
-      })
-      expect(result.credentials).toEqual({
-        substrate: 'zulip',
-        realmUrl: config.realmUrl,
-        email: yield* BotEmail(`fresh-bot-bot@${realmHost()}`).pipe(Effect.orDie),
-        apiKey: yield* ApiKey('fresh-mint-key').pipe(Effect.orDie),
-      })
-      const mintReq = findRequest('POST', '/api/v1/bots')
-      const params = new URLSearchParams(mintReq.body)
-      expect(params.get('full_name')).toBe('fresh-bot')
-      expect(params.get('short_name')).toBe('fresh-bot')
-      expect(params.get('bot_type')).toBe('1')
-    }),
-  ))
+effectTest('identity.acquire on an existing bot regenerates its API key and binds', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedUsers(stub, [HERMES])
+    yield* seedRegenerate(stub, HERMES.user_id, 'rotated-key')
+    const config = yield* makeConfig()
+    const adapter = yield* zulipAdapter(stub, config)
+    const result = yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+    expect(result.identity).toEqual({
+      id: decodeIdentityIdSync('9'),
+      name: decodeDisplayNameSync('hermes-agent'),
+      kind: 'agent',
+    })
+    expect(result.credentials).toEqual({
+      substrate: 'zulip',
+      realmUrl: config.realmUrl,
+      email: yield* BotEmail(HERMES.email).pipe(Effect.orDie),
+      apiKey: yield* ApiKey('rotated-key').pipe(Effect.orDie),
+    })
+    expect(
+      yield* findRequest(stub, 'POST', `/api/v1/bots/${HERMES.user_id}/api_key/regenerate`),
+    ).toBeDefined()
+  }),
+)
 
-test('identity.acquire on a deactivated bot reactivates and regenerates (does NOT mint)', () =>
-  Effect.runPromise(
+effectTest('identity.acquire on a name with no existing bot mints fresh via POST /bots', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedUsers(stub, [GRAEME])
+    yield* seedMint(stub, 42, 'fresh-mint-key')
+    const config = yield* makeConfig()
+    const adapter = yield* zulipAdapter(stub, config)
+    const result = yield* adapter.identity.acquire(decodeBotNameSync('fresh-bot'))
+    expect(result.identity).toEqual({
+      id: decodeIdentityIdSync('42'),
+      name: decodeDisplayNameSync('fresh-bot'),
+      kind: 'agent',
+    })
+    expect(result.credentials).toEqual({
+      substrate: 'zulip',
+      realmUrl: config.realmUrl,
+      email: yield* BotEmail(`fresh-bot-bot@${realmHost()}`).pipe(Effect.orDie),
+      apiKey: yield* ApiKey('fresh-mint-key').pipe(Effect.orDie),
+    })
+    const mintReq = yield* findRequest(stub, 'POST', '/api/v1/bots')
+    const params = new URLSearchParams(mintReq.body)
+    expect(params.get('full_name')).toBe('fresh-bot')
+    expect(params.get('short_name')).toBe('fresh-bot')
+    expect(params.get('bot_type')).toBe('1')
+  }),
+)
+
+effectTest(
+  'identity.acquire on a deactivated bot reactivates and regenerates (does NOT mint)',
+  () =>
     Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
       const deactivated = { ...HERMES, is_active: false }
-      seedUsers([deactivated])
-      realm.handle('POST', `/api/v1/users/${HERMES.user_id}/reactivate`, () => ({
+      yield* seedUsers(stub, [deactivated])
+      yield* stub.respond('POST', `/api/v1/users/${HERMES.user_id}/reactivate`, {
         body: { result: 'success' },
-      }))
-      seedRegenerate(HERMES.user_id, 'rotated-key')
-      const adapter = yield* zulipAdapter(yield* makeConfig())
+      })
+      yield* seedRegenerate(stub, HERMES.user_id, 'rotated-key')
+      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
       const result = yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
       expect(result.identity.id).toEqual(decodeIdentityIdSync(String(HERMES.user_id)))
-      expect(findRequest('POST', `/api/v1/users/${HERMES.user_id}/reactivate`)).toBeDefined()
-      expect(findRequest('POST', `/api/v1/bots/${HERMES.user_id}/api_key/regenerate`)).toBeDefined()
+      expect(
+        yield* findRequest(stub, 'POST', `/api/v1/users/${HERMES.user_id}/reactivate`),
+      ).toBeDefined()
+      expect(
+        yield* findRequest(stub, 'POST', `/api/v1/bots/${HERMES.user_id}/api_key/regenerate`),
+      ).toBeDefined()
       // Must not have minted — the deactivated email is still reserved on
       // the realm; mint would fail with EmailAlreadyInUseError.
+      const reqs = yield* stub.captured
       expect(
-        realm.captured.find((r) => r.method === 'POST' && r.url.pathname === '/api/v1/bots'),
+        reqs.find((r) => r.method === 'POST' && r.url.pathname === '/api/v1/bots'),
       ).toBeUndefined()
     }),
-  ))
+)
 
-test('identity.acquire sanitises short_name by lowercasing and replacing non-email chars', () =>
-  Effect.runPromise(
+effectTest(
+  'identity.acquire sanitises short_name by lowercasing and replacing non-email chars',
+  () =>
     Effect.gen(function* () {
-      seedUsers([])
-      seedMint(50, 'k')
-      const adapter = yield* zulipAdapter(yield* makeConfig())
+      const stub = yield* makeStubHttpClient
+      yield* seedUsers(stub, [])
+      yield* seedMint(stub, 50, 'k')
+      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
       yield* adapter.identity.acquire(decodeBotNameSync('gas-town/witness'))
-      const params = new URLSearchParams(findRequest('POST', '/api/v1/bots').body)
+      const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/bots')).body)
       expect(params.get('full_name')).toBe('gas-town/witness')
       expect(params.get('short_name')).toBe('gas-town-witness')
     }),
-  ))
+)
 
-test('identity.acquire rejects with ZulipApiError when /users lookup fails', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      realm.handle('GET', '/api/v1/users', () => ({
-        body: { result: 'error', msg: 'Invalid API key', code: 'BAD_API_KEY' },
-        init: { status: 401 },
-      }))
-      const adapter = yield* zulipAdapter(yield* makeConfig())
-      const err = yield* Effect.flip(adapter.identity.acquire(decodeBotNameSync('hermes-agent')))
-      expect(err).toBeInstanceOf(IdentityError)
-      expect((err as { cause: unknown }).cause).toBeInstanceOf(ZulipApiError)
-    }),
-  ))
+effectTest('identity.acquire rejects with ZulipApiError when /users lookup fails', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* stub.respond('GET', '/api/v1/users', {
+      body: { result: 'error', msg: 'Invalid API key', code: 'BAD_API_KEY' },
+      status: 401,
+    })
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    const err = yield* Effect.flip(adapter.identity.acquire(decodeBotNameSync('hermes-agent')))
+    expect(err).toBeInstanceOf(IdentityError)
+    expect((err as { cause: unknown }).cause).toBeInstanceOf(ZulipApiError)
+  }),
+)
 
-test('zulipAdapter construction does NOT call /users — the call is deferred to acquire', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedUsers([HERMES])
-      yield* zulipAdapter(yield* makeConfig())
-      const usersCalls = realm.captured.filter(
-        (r) => r.method === 'GET' && r.url.pathname === '/api/v1/users',
-      )
-      expect(usersCalls).toHaveLength(0)
-    }),
-  ))
+effectTest('zulipAdapter construction does NOT call /users — the call is deferred to acquire', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedUsers(stub, [HERMES])
+    yield* zulipAdapter(stub, yield* makeConfig())
+    const reqs = yield* stub.captured
+    const usersCalls = reqs.filter((r) => r.method === 'GET' && r.url.pathname === '/api/v1/users')
+    expect(usersCalls).toHaveLength(0)
+  }),
+)
 
-test('currentIdentity before acquire throws — port is unauthenticated at construction', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const adapter = yield* zulipAdapter(yield* makeConfig())
-      const exit = yield* Effect.exit(adapter.identity.currentIdentity())
-      expect(Exit.isFailure(exit)).toBe(true)
-    }),
-  ))
+effectTest('currentIdentity before acquire throws — port is unauthenticated at construction', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    const exit = yield* Effect.exit(adapter.identity.currentIdentity())
+    expect(Exit.isFailure(exit)).toBe(true)
+  }),
+)
 
-test('identity.acquire on the bound name is idempotent and skips a second /users round-trip', () =>
-  Effect.runPromise(
+effectTest(
+  'identity.acquire on the bound name is idempotent and skips a second /users round-trip',
+  () =>
     Effect.gen(function* () {
-      seedUsers([HERMES])
-      seedRegenerate(HERMES.user_id)
-      const adapter = yield* zulipAdapter(yield* makeConfig())
+      const stub = yield* makeStubHttpClient
+      yield* seedUsers(stub, [HERMES])
+      yield* seedRegenerate(stub, HERMES.user_id)
+      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
       const first = yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
       const second = yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
       expect(second.identity.id).toEqual(first.identity.id)
-      const usersCalls = realm.captured.filter(
+      const reqs = yield* stub.captured
+      const usersCalls = reqs.filter(
         (r) => r.method === 'GET' && r.url.pathname === '/api/v1/users',
       )
       expect(usersCalls).toHaveLength(1)
-      const regenCalls = realm.captured.filter(
+      const regenCalls = reqs.filter(
         (r) =>
           r.method === 'POST' &&
           r.url.pathname === `/api/v1/bots/${HERMES.user_id}/api_key/regenerate`,
       )
       expect(regenCalls).toHaveLength(1)
     }),
-  ))
+)
 
-test('identity.acquire with a different name on a bound adapter rejects', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      const exit = yield* Effect.exit(adapter.identity.acquire(decodeBotNameSync('someone-else')))
-      expect(Exit.isFailure(exit)).toBe(true)
-    }),
-  ))
+effectTest('identity.release on a bound adapter deactivates the bot via DELETE /bots/{id}', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedUsers(stub, [HERMES])
+    yield* seedRegenerate(stub, HERMES.user_id)
+    yield* seedDeactivate(stub, HERMES.user_id)
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+    yield* adapter.identity.release()
+    expect(yield* findRequest(stub, 'DELETE', `/api/v1/bots/${HERMES.user_id}`)).toBeDefined()
+  }),
+)
 
-test('identity.release on a bound adapter deactivates the bot via DELETE /bots/{id}', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedUsers([HERMES])
-      seedRegenerate(HERMES.user_id)
-      seedDeactivate(HERMES.user_id)
-      const adapter = yield* zulipAdapter(yield* makeConfig())
-      yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-      yield* adapter.identity.release()
-      expect(findRequest('DELETE', `/api/v1/bots/${HERMES.user_id}`)).toBeDefined()
-    }),
-  ))
+effectTest('identity.release clears the binding — currentIdentity then throws', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedDeactivate(stub, HERMES.user_id)
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.identity.release()
+    const exit = yield* Effect.exit(adapter.identity.currentIdentity())
+    expect(Exit.isFailure(exit)).toBe(true)
+  }),
+)
 
-test('identity.release clears the binding — currentIdentity then throws', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedDeactivate(HERMES.user_id)
-      const adapter = yield* buildAdapter()
-      yield* adapter.identity.release()
-      const exit = yield* Effect.exit(adapter.identity.currentIdentity())
-      expect(Exit.isFailure(exit)).toBe(true)
-    }),
-  ))
+effectTest('identity.release on an unauthenticated adapter is a no-op', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    yield* adapter.identity.release()
+    const reqs = yield* stub.captured
+    const deletes = reqs.filter(
+      (r) => r.method === 'DELETE' && r.url.pathname.startsWith('/api/v1/bots/'),
+    )
+    expect(deletes).toHaveLength(0)
+  }),
+)
 
-test('identity.release on an unauthenticated adapter is a no-op', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const adapter = yield* zulipAdapter(yield* makeConfig())
-      yield* adapter.identity.release()
-      const deletes = realm.captured.filter(
-        (r) => r.method === 'DELETE' && r.url.pathname.startsWith('/api/v1/bots/'),
-      )
-      expect(deletes).toHaveLength(0)
-    }),
-  ))
+effectTest('identity.release is best-effort — deactivate failure does not throw', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedUsers(stub, [HERMES])
+    yield* seedRegenerate(stub, HERMES.user_id)
+    yield* stub.respond('DELETE', `/api/v1/bots/${HERMES.user_id}`, {
+      body: { result: 'error', msg: 'kaboom', code: 'INTERNAL_SERVER_ERROR' },
+      status: 500,
+    })
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+    yield* adapter.identity.release()
+    const exit = yield* Effect.exit(adapter.identity.currentIdentity())
+    expect(Exit.isFailure(exit)).toBe(true)
+  }),
+)
 
-test('identity.release is best-effort — deactivate failure does not throw', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedUsers([HERMES])
-      seedRegenerate(HERMES.user_id)
-      realm.handle('DELETE', `/api/v1/bots/${HERMES.user_id}`, () => ({
-        body: { result: 'error', msg: 'kaboom', code: 'INTERNAL_SERVER_ERROR' },
-        init: { status: 500 },
-      }))
-      const adapter = yield* zulipAdapter(yield* makeConfig())
-      yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-      yield* adapter.identity.release()
-      const exit = yield* Effect.exit(adapter.identity.currentIdentity())
-      expect(Exit.isFailure(exit)).toBe(true)
-    }),
-  ))
+effectTest('identity.release({ persistent: true }) does NOT deactivate the bot', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedUsers(stub, [HERMES])
+    yield* seedRegenerate(stub, HERMES.user_id)
+    yield* seedDeactivate(stub, HERMES.user_id)
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+    yield* adapter.identity.release({ persistent: true })
+    const reqs = yield* stub.captured
+    const deletes = reqs.filter(
+      (r) => r.method === 'DELETE' && r.url.pathname.startsWith('/api/v1/bots/'),
+    )
+    expect(deletes).toHaveLength(0)
+  }),
+)
 
-test('identity.release({ persistent: true }) does NOT deactivate the bot', () =>
-  Effect.runPromise(
+effectTest(
+  'identity.release({ persistent: true }) still clears the binding — currentIdentity throws',
+  () =>
     Effect.gen(function* () {
-      seedUsers([HERMES])
-      seedRegenerate(HERMES.user_id)
-      seedDeactivate(HERMES.user_id)
-      const adapter = yield* zulipAdapter(yield* makeConfig())
-      yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-      yield* adapter.identity.release({ persistent: true })
-      const deletes = realm.captured.filter(
-        (r) => r.method === 'DELETE' && r.url.pathname.startsWith('/api/v1/bots/'),
-      )
-      expect(deletes).toHaveLength(0)
-    }),
-  ))
-
-test('identity.release({ persistent: true }) still clears the binding — currentIdentity throws', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedUsers([HERMES])
-      seedRegenerate(HERMES.user_id)
-      const adapter = yield* zulipAdapter(yield* makeConfig())
+      const stub = yield* makeStubHttpClient
+      yield* seedUsers(stub, [HERMES])
+      yield* seedRegenerate(stub, HERMES.user_id)
+      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
       yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
       yield* adapter.identity.release({ persistent: true })
       const exit = yield* Effect.exit(adapter.identity.currentIdentity())
       expect(Exit.isFailure(exit)).toBe(true)
     }),
-  ))
+)
 
-test('identity.release (ephemeral default) still deactivates the bot via DELETE /bots/{id}', () =>
-  Effect.runPromise(
+effectTest(
+  'identity.release (ephemeral default) still deactivates the bot via DELETE /bots/{id}',
+  () =>
     Effect.gen(function* () {
-      seedUsers([HERMES])
-      seedRegenerate(HERMES.user_id)
-      seedDeactivate(HERMES.user_id)
-      const adapter = yield* zulipAdapter(yield* makeConfig())
+      const stub = yield* makeStubHttpClient
+      yield* seedUsers(stub, [HERMES])
+      yield* seedRegenerate(stub, HERMES.user_id)
+      yield* seedDeactivate(stub, HERMES.user_id)
+      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
       yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
       yield* adapter.identity.release({ persistent: false })
-      expect(findRequest('DELETE', `/api/v1/bots/${HERMES.user_id}`)).toBeDefined()
+      expect(yield* findRequest(stub, 'DELETE', `/api/v1/bots/${HERMES.user_id}`)).toBeDefined()
     }),
-  ))
+)
 
-test('identity.acquire surfaces a reactivate failure with the real cause, not a generic credential error', () =>
-  Effect.runPromise(
+effectTest(
+  'identity.acquire surfaces a reactivate failure with the real cause, not a generic credential error',
+  () =>
     Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
       const deactivated = { ...HERMES, is_active: false }
-      seedUsers([deactivated])
+      yield* seedUsers(stub, [deactivated])
       // A Member (non-admin) minter calling POST /users/{id}/reactivate gets
       // UNAUTHORIZED_PRINCIPAL ("Must be an organization administrator"), 400.
-      realm.handle('POST', `/api/v1/users/${HERMES.user_id}/reactivate`, () => ({
+      yield* stub.respond('POST', `/api/v1/users/${HERMES.user_id}/reactivate`, {
         body: {
           result: 'error',
           msg: 'Must be an organization administrator',
           code: 'UNAUTHORIZED_PRINCIPAL',
         },
-        init: { status: 400 },
-      }))
-      seedRegenerate(HERMES.user_id)
-      const adapter = yield* zulipAdapter(yield* makeConfig())
+        status: 400,
+      })
+      yield* seedRegenerate(stub, HERMES.user_id)
+      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
       const err = yield* Effect.flip(adapter.identity.acquire(decodeBotNameSync('hermes-agent')))
       expect(err).toBeInstanceOf(IdentityError)
       // The surfaced message must name the real cause (reactivate forbidden /
@@ -410,168 +431,140 @@ test('identity.acquire surfaces a reactivate failure with the real cause, not a 
       expect(err.message).toContain('reactivate')
       expect(err.message.toLowerCase()).toContain('administrator')
       // The regenerate must never have fired — reactivate failed first.
+      const reqs = yield* stub.captured
       expect(
-        realm.captured.find(
+        reqs.find(
           (r) =>
             r.method === 'POST' &&
             r.url.pathname === `/api/v1/bots/${HERMES.user_id}/api_key/regenerate`,
         ),
       ).toBeUndefined()
     }),
-  ))
+)
 
-test('identity.acquire after release rebinds via a fresh /users round-trip', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedDeactivate(HERMES.user_id)
-      const adapter = yield* buildAdapter()
-      yield* adapter.identity.release()
-      // After release, the regenerate seed is still in place — re-acquire
-      // takes the regenerate path again.
-      yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-      const usersCalls = realm.captured.filter(
-        (r) => r.method === 'GET' && r.url.pathname === '/api/v1/users',
-      )
-      expect(usersCalls).toHaveLength(2)
-    }),
-  ))
+effectTest('identity.acquire after release rebinds via a fresh /users round-trip', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedDeactivate(stub, HERMES.user_id)
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.identity.release()
+    // After release, the regenerate seed is still in place — re-acquire
+    // takes the regenerate path again.
+    yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+    const reqs = yield* stub.captured
+    const usersCalls = reqs.filter((r) => r.method === 'GET' && r.url.pathname === '/api/v1/users')
+    expect(usersCalls).toHaveLength(2)
+  }),
+)
 
-test('identity.resolve returns Identity for a known full_name', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      realm.handle('GET', '/api/v1/users', () => ({
-        body: { result: 'success', members: [HERMES, GRAEME, RIQ] },
-      }))
-      seedRegenerate(HERMES.user_id)
-      const adapter = yield* zulipAdapter(yield* makeConfig())
-      yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-      const found = yield* adapter.identity.resolve('Graeme Foster')
-      expect(found).toEqual(
-        Option.some({
-          id: decodeIdentityIdSync('5'),
-          name: decodeDisplayNameSync('Graeme Foster'),
-          kind: 'human',
-        }),
-      )
-    }),
-  ))
+effectTest('directory.listAgents returns only is_bot=true users', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* stub.respond('GET', '/api/v1/users', {
+      body: { result: 'success', members: [HERMES, GRAEME, RIQ] },
+    })
+    yield* seedRegenerate(stub, HERMES.user_id)
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+    const agents = yield* adapter.directory.listAgents()
+    expect(agents).toEqual([
+      {
+        id: decodeIdentityIdSync('9'),
+        name: decodeDisplayNameSync('hermes-agent'),
+        kind: 'agent',
+      },
+      { id: decodeIdentityIdSync('11'), name: decodeDisplayNameSync('riq6r230'), kind: 'agent' },
+    ])
+  }),
+)
 
-test('identity.resolve returns undefined for an unknown full_name', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      realm.handle('GET', '/api/v1/users', () => ({
-        body: { result: 'success', members: [HERMES, GRAEME] },
-      }))
-      seedRegenerate(HERMES.user_id)
-      const adapter = yield* zulipAdapter(yield* makeConfig())
-      yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-      const found = yield* adapter.identity.resolve('Nobody')
-      expect(found).toEqual(Option.none())
-    }),
-  ))
+effectTest('directory.listHumans returns only is_bot=false users', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* stub.respond('GET', '/api/v1/users', {
+      body: { result: 'success', members: [HERMES, GRAEME, RIQ] },
+    })
+    yield* seedRegenerate(stub, HERMES.user_id)
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+    const humans = yield* adapter.directory.listHumans()
+    expect(humans).toEqual([
+      {
+        id: decodeIdentityIdSync('5'),
+        name: decodeDisplayNameSync('Graeme Foster'),
+        kind: 'human',
+      },
+    ])
+  }),
+)
 
-test('directory.listAgents returns only is_bot=true users', () =>
-  Effect.runPromise(
+effectTest(
+  'directory.listHumans surfaces a /users fetch failure as DirectoryError (cause preserved)',
+  () =>
     Effect.gen(function* () {
-      realm.handle('GET', '/api/v1/users', () => ({
-        body: { result: 'success', members: [HERMES, GRAEME, RIQ] },
-      }))
-      seedRegenerate(HERMES.user_id)
-      const adapter = yield* zulipAdapter(yield* makeConfig())
-      yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-      const agents = yield* adapter.directory.listAgents()
-      expect(agents).toEqual([
-        {
-          id: decodeIdentityIdSync('9'),
-          name: decodeDisplayNameSync('hermes-agent'),
-          kind: 'agent',
-        },
-        { id: decodeIdentityIdSync('11'), name: decodeDisplayNameSync('riq6r230'), kind: 'agent' },
-      ])
-    }),
-  ))
-
-test('directory.listHumans returns only is_bot=false users', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      realm.handle('GET', '/api/v1/users', () => ({
-        body: { result: 'success', members: [HERMES, GRAEME, RIQ] },
-      }))
-      seedRegenerate(HERMES.user_id)
-      const adapter = yield* zulipAdapter(yield* makeConfig())
-      yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-      const humans = yield* adapter.directory.listHumans()
-      expect(humans).toEqual([
-        {
-          id: decodeIdentityIdSync('5'),
-          name: decodeDisplayNameSync('Graeme Foster'),
-          kind: 'human',
-        },
-      ])
-    }),
-  ))
-
-test('directory.listHumans surfaces a /users fetch failure as DirectoryError (cause preserved)', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      realm.handle('GET', '/api/v1/users', () => ({
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* stub.respond('GET', '/api/v1/users', {
         body: { result: 'error', msg: 'internal server error' },
-        init: { status: 500 },
-      }))
+        status: 500,
+      })
       const error = yield* Effect.flip(adapter.directory.listHumans())
       expect(error).toBeInstanceOf(DirectoryError)
       expect(error.operation).toBe('listHumans')
       expect(error.cause).toBeInstanceOf(ZulipApiError)
     }),
-  ))
+)
 
-test('directory.listChannels surfaces a /streams fetch failure as DirectoryError (cause preserved)', () =>
-  Effect.runPromise(
+effectTest(
+  'directory.listChannels surfaces a /streams fetch failure as DirectoryError (cause preserved)',
+  () =>
     Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      realm.handle('GET', '/api/v1/streams', () => ({
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* stub.respond('GET', '/api/v1/streams', {
         body: { result: 'error', msg: 'internal server error' },
-        init: { status: 500 },
-      }))
+        status: 500,
+      })
       const error = yield* Effect.flip(adapter.directory.listChannels())
       expect(error).toBeInstanceOf(DirectoryError)
       expect(error.operation).toBe('listChannels')
       expect(error.cause).toBeInstanceOf(ZulipApiError)
     }),
-  ))
+)
 
-test('directory.listAgents excludes inactive users', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      realm.handle('GET', '/api/v1/users', () => ({
-        body: {
-          result: 'success',
-          members: [HERMES, { ...RIQ, is_active: false }],
-        },
-      }))
-      seedRegenerate(HERMES.user_id)
-      const adapter = yield* zulipAdapter(yield* makeConfig())
-      yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-      const agents = yield* adapter.directory.listAgents()
-      expect(agents.map((a) => a.id)).toEqual([decodeIdentityIdSync('9')])
-    }),
-  ))
+effectTest('directory.listAgents excludes inactive users', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* stub.respond('GET', '/api/v1/users', {
+      body: {
+        result: 'success',
+        members: [HERMES, { ...RIQ, is_active: false }],
+      },
+    })
+    yield* seedRegenerate(stub, HERMES.user_id)
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+    const agents = yield* adapter.directory.listAgents()
+    expect(agents.map((a) => a.id)).toEqual([decodeIdentityIdSync('9')])
+  }),
+)
 
-test('directory.listAgents surfaces a /users fetch failure as DirectoryError (cause preserved)', () =>
-  Effect.runPromise(
+effectTest(
+  'directory.listAgents surfaces a /users fetch failure as DirectoryError (cause preserved)',
+  () =>
     Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      realm.handle('GET', '/api/v1/users', () => ({
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* stub.respond('GET', '/api/v1/users', {
         body: { result: 'error', msg: 'internal server error' },
-        init: { status: 500 },
-      }))
+        status: 500,
+      })
       const error = yield* Effect.flip(adapter.directory.listAgents())
       expect(error).toBeInstanceOf(DirectoryError)
       expect(error.operation).toBe('listAgents')
       expect(error.cause).toBeInstanceOf(ZulipApiError)
     }),
-  ))
+)
 
 const generalChannel: ChannelRef = {
   id: decodeChannelIdSync('1234'),
@@ -588,115 +581,119 @@ const bobHuman: Identity = {
   kind: 'human',
 }
 
-const seedSendMessage = (id: number): void => {
+const seedSendMessage = (stub: StubHttpClient, id: number): Effect.Effect<void> =>
   // publisher.post now pre-flights against GET /streams so unknown channels
   // surface as UnknownChannel instead of being silently routed to
   // Notification Bot. Helper bundles both stubs because every caller posts
   // to `generalChannel`.
-  realm.handle('GET', '/api/v1/streams', () => ({
-    body: {
-      result: 'success',
-      streams: [{ stream_id: 1234, name: 'general' }],
-    },
-  }))
-  realm.handle('POST', '/api/v1/messages', () => ({
-    body: { result: 'success', id },
-  }))
-}
+  Effect.gen(function* () {
+    yield* stub.respond('GET', '/api/v1/streams', {
+      body: {
+        result: 'success',
+        streams: [{ stream_id: 1234, name: 'general' }],
+      },
+    })
+    yield* stub.respond('POST', '/api/v1/messages', {
+      body: { result: 'success', id },
+    })
+  })
 
-test('publisher.post sends type=channel + to=channel.name + content; defaults topic to "(no topic)" when no thread', () =>
-  Effect.runPromise(
+effectTest(
+  'publisher.post sends type=channel + to=channel.name + content; defaults topic to "(no topic)" when no thread',
+  () =>
     Effect.gen(function* () {
-      seedSendMessage(42)
-      const adapter = yield* buildAdapter()
+      const stub = yield* makeStubHttpClient
+      yield* seedSendMessage(stub, 42)
+      const adapter = yield* buildAdapter(stub)
       yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hello world'))
-      const params = new URLSearchParams(findRequest('POST', '/api/v1/messages').body)
+      const params = new URLSearchParams(
+        (yield* findRequest(stub, 'POST', '/api/v1/messages')).body,
+      )
       expect(params.get('type')).toBe('channel')
       expect(params.get('to')).toBe('general')
       expect(params.get('content')).toBe('hello world')
       expect(params.get('topic')).toBe('(no topic)')
     }),
-  ))
+)
 
-test('publisher.post returns a MessageRef built from the response id', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedSendMessage(99)
-      const adapter = yield* buildAdapter()
-      const ref = yield* adapter.publisher.post(
-        generalChannel,
-        decodeMessageBodySync('hello world'),
-      )
-      expect(ref.id).toEqual(decodeMessageIdSync('99'))
-      expect(ref.channel).toEqual(generalChannel)
-      expect(ref.thread).toBeUndefined()
-    }),
-  ))
+effectTest('publisher.post returns a MessageRef built from the response id', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 99)
+    const adapter = yield* buildAdapter(stub)
+    const ref = yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hello world'))
+    expect(ref.id).toEqual(decodeMessageIdSync('99'))
+    expect(ref.channel).toEqual(generalChannel)
+    expect(ref.thread).toBeUndefined()
+  }),
+)
 
-test('publisher.post with thread sends topic and threads the returned MessageRef', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedSendMessage(100)
-      const adapter = yield* buildAdapter()
-      const ref = yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hi'), {
-        thread: { name: decodeThreadNameSync('ass-zsd9') },
-      })
-      const params = new URLSearchParams(findRequest('POST', '/api/v1/messages').body)
-      expect(params.get('topic')).toBe('ass-zsd9')
-      expect(ref.thread).toEqual({ name: decodeThreadNameSync('ass-zsd9') })
-    }),
-  ))
+effectTest('publisher.post with thread sends topic and threads the returned MessageRef', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 100)
+    const adapter = yield* buildAdapter(stub)
+    const ref = yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hi'), {
+      thread: { name: decodeThreadNameSync('ass-zsd9') },
+    })
+    const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
+    expect(params.get('topic')).toBe('ass-zsd9')
+    expect(ref.thread).toEqual({ name: decodeThreadNameSync('ass-zsd9') })
+  }),
+)
 
-test('publisher.post leaves body unchanged when opts.mentions is set — mentions[] is metadata-only', () =>
-  Effect.runPromise(
+effectTest(
+  'publisher.post leaves body unchanged when opts.mentions is set — mentions[] is metadata-only',
+  () =>
     Effect.gen(function* () {
-      seedSendMessage(101)
-      const adapter = yield* buildAdapter()
+      const stub = yield* makeStubHttpClient
+      yield* seedSendMessage(stub, 101)
+      const adapter = yield* buildAdapter(stub)
       yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('wake up'), {
         mentions: [aliceBot, bobHuman],
       })
-      const params = new URLSearchParams(findRequest('POST', '/api/v1/messages').body)
+      const params = new URLSearchParams(
+        (yield* findRequest(stub, 'POST', '/api/v1/messages')).body,
+      )
       expect(params.get('content')).toBe('wake up')
     }),
-  ))
+)
 
-test('publisher.post with body-only mention markup posts body verbatim', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedSendMessage(103)
-      const adapter = yield* buildAdapter()
-      yield* adapter.publisher.post(
-        generalChannel,
-        decodeMessageBodySync('hey @**alice** look'),
-        {},
-      )
-      const params = new URLSearchParams(findRequest('POST', '/api/v1/messages').body)
-      expect(params.get('content')).toBe('hey @**alice** look')
-    }),
-  ))
+effectTest('publisher.post with body-only mention markup posts body verbatim', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 103)
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hey @**alice** look'), {})
+    const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
+    expect(params.get('content')).toBe('hey @**alice** look')
+  }),
+)
 
 // Regression for comms-izp: body containing `@**Name**` + mentions[] for the
 // same identity used to double-render the mention. Under the metadata-only
 // contract the adapter never folds mentions[] into body, so this case posts
 // body verbatim with exactly one rendered @-mention.
-test('publisher.post with both body markup AND opts.mentions does not double-render', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedSendMessage(104)
-      const adapter = yield* buildAdapter()
-      yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('@**alice** wake up'), {
-        mentions: [aliceBot],
-      })
-      const params = new URLSearchParams(findRequest('POST', '/api/v1/messages').body)
-      expect(params.get('content')).toBe('@**alice** wake up')
-    }),
-  ))
+effectTest('publisher.post with both body markup AND opts.mentions does not double-render', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 104)
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('@**alice** wake up'), {
+      mentions: [aliceBot],
+    })
+    const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
+    expect(params.get('content')).toBe('@**alice** wake up')
+  }),
+)
 
-test('publisher.post drops opts.replyTo silently (Zulip has no in-topic reply primitive)', () =>
-  Effect.runPromise(
+effectTest(
+  'publisher.post drops opts.replyTo silently (Zulip has no in-topic reply primitive)',
+  () =>
     Effect.gen(function* () {
-      seedSendMessage(102)
-      const adapter = yield* buildAdapter()
+      const stub = yield* makeStubHttpClient
+      yield* seedSendMessage(stub, 102)
+      const adapter = yield* buildAdapter(stub)
       const parent: MessageRef = {
         id: decodeMessageIdSync('1'),
         channel: generalChannel,
@@ -705,71 +702,73 @@ test('publisher.post drops opts.replyTo silently (Zulip has no in-topic reply pr
       yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('still here'), {
         replyTo: parent,
       })
-      const params = new URLSearchParams(findRequest('POST', '/api/v1/messages').body)
+      const params = new URLSearchParams(
+        (yield* findRequest(stub, 'POST', '/api/v1/messages')).body,
+      )
       expect(params.get('content')).toBe('still here')
       expect(params.has('reply_to')).toBe(false)
     }),
-  ))
+)
 
 // Pre-flight invariants for the publisher.post path — substrate-specific
 // because Zulip silently routes "channel doesn't exist" to Notification Bot
 // DMs and returns a success-shaped reply. The adapter must catch this with
 // a GET /streams check before issuing POST /messages so callers see
 // UnknownChannel instead of a silent void-send.
-test('publisher.post pre-flights GET /streams before issuing POST /messages', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedSendMessage(42)
-      const adapter = yield* buildAdapter()
-      yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hello world'))
-      const streamsIndex = realm.captured.findIndex(
-        (r) => r.method === 'GET' && r.url.pathname === '/api/v1/streams',
-      )
-      const messagesIndex = realm.captured.findIndex(
-        (r) => r.method === 'POST' && r.url.pathname === '/api/v1/messages',
-      )
-      expect(streamsIndex).toBeGreaterThanOrEqual(0)
-      expect(messagesIndex).toBeGreaterThanOrEqual(0)
-      expect(streamsIndex).toBeLessThan(messagesIndex)
-    }),
-  ))
+effectTest('publisher.post pre-flights GET /streams before issuing POST /messages', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 42)
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hello world'))
+    const reqs = yield* stub.captured
+    const streamsIndex = reqs.findIndex(
+      (r) => r.method === 'GET' && r.url.pathname === '/api/v1/streams',
+    )
+    const messagesIndex = reqs.findIndex(
+      (r) => r.method === 'POST' && r.url.pathname === '/api/v1/messages',
+    )
+    expect(streamsIndex).toBeGreaterThanOrEqual(0)
+    expect(messagesIndex).toBeGreaterThanOrEqual(0)
+    expect(streamsIndex).toBeLessThan(messagesIndex)
+  }),
+)
 
-test('publisher.post refreshes /streams once on cache miss before throwing UnknownChannel', () =>
-  Effect.runPromise(
+effectTest(
+  'publisher.post refreshes /streams once on cache miss before throwing UnknownChannel',
+  () =>
     Effect.gen(function* () {
-      let streamsCallCount = 0
-      realm.handle('GET', '/api/v1/streams', () => {
-        streamsCallCount++
-        return { body: { result: 'success', streams: [] } }
-      })
-      const adapter = yield* buildAdapter()
+      const stub = yield* makeStubHttpClient
+      yield* stub.respond('GET', '/api/v1/streams', { body: { result: 'success', streams: [] } })
+      const adapter = yield* buildAdapter(stub)
       const error = yield* Effect.flip(
         adapter.publisher.post(generalChannel, decodeMessageBodySync('should fail')),
       )
       expect(error).toBeInstanceOf(UnknownChannel)
+      const reqs = yield* stub.captured
+      const streamsCallCount = reqs.filter(
+        (r) => r.method === 'GET' && r.url.pathname === '/api/v1/streams',
+      ).length
       expect(streamsCallCount).toBe(2)
     }),
-  ))
+)
 
-test('publisher.post does not issue POST /messages when pre-flight rejects the channel', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      realm.handle('GET', '/api/v1/streams', () => ({
-        body: { result: 'success', streams: [] },
-      }))
-      realm.handle('POST', '/api/v1/messages', () => ({
-        body: { result: 'success', id: 999 },
-      }))
-      const adapter = yield* buildAdapter()
-      const error = yield* Effect.flip(
-        adapter.publisher.post(generalChannel, decodeMessageBodySync('should fail')),
-      )
-      expect(error).toBeInstanceOf(UnknownChannel)
-      expect(
-        realm.captured.find((r) => r.method === 'POST' && r.url.pathname === '/api/v1/messages'),
-      ).toBeUndefined()
-    }),
-  ))
+effectTest('publisher.post does not issue POST /messages when pre-flight rejects the channel', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* stub.respond('GET', '/api/v1/streams', { body: { result: 'success', streams: [] } })
+    yield* stub.respond('POST', '/api/v1/messages', { body: { result: 'success', id: 999 } })
+    const adapter = yield* buildAdapter(stub)
+    const error = yield* Effect.flip(
+      adapter.publisher.post(generalChannel, decodeMessageBodySync('should fail')),
+    )
+    expect(error).toBeInstanceOf(UnknownChannel)
+    const reqs = yield* stub.captured
+    expect(
+      reqs.find((r) => r.method === 'POST' && r.url.pathname === '/api/v1/messages'),
+    ).toBeUndefined()
+  }),
+)
 
 // Typed failure channel for publisher.post (comms-oalxg). A substrate failure
 // on either the pre-flight `/streams` fetch or the `POST /messages` call is
@@ -777,17 +776,19 @@ test('publisher.post does not issue POST /messages when pre-flight rejects the c
 // substrate-agnostic — it never names ZulipApiError); an unknown channel is a
 // tagged UnknownChannel; calling before acquire is a defect, not a typed
 // failure (the bound-creds invariant is the caller's bug to fix).
-test('publisher.post wraps a POST /messages failure as a PublisherError (cause preserved)', () =>
-  Effect.runPromise(
+effectTest(
+  'publisher.post wraps a POST /messages failure as a PublisherError (cause preserved)',
+  () =>
     Effect.gen(function* () {
-      realm.handle('GET', '/api/v1/streams', () => ({
+      const stub = yield* makeStubHttpClient
+      yield* stub.respond('GET', '/api/v1/streams', {
         body: { result: 'success', streams: [{ stream_id: 1234, name: 'general' }] },
-      }))
-      realm.handle('POST', '/api/v1/messages', () => ({
+      })
+      yield* stub.respond('POST', '/api/v1/messages', {
         body: { result: 'error', msg: 'internal server error' },
-        init: { status: 500 },
-      }))
-      const adapter = yield* buildAdapter()
+        status: 500,
+      })
+      const adapter = yield* buildAdapter(stub)
       const error = yield* Effect.flip(
         adapter.publisher.post(generalChannel, decodeMessageBodySync('boom')),
       )
@@ -800,89 +801,86 @@ test('publisher.post wraps a POST /messages failure as a PublisherError (cause p
         expect(error.message).toBe('internal server error')
       }
     }),
-  ))
+)
 
-test('publisher.post fails with a tagged UnknownChannel on an unknown channel', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      realm.handle('GET', '/api/v1/streams', () => ({
-        body: { result: 'success', streams: [] },
-      }))
-      const adapter = yield* buildAdapter()
-      const error = yield* Effect.flip(
-        adapter.publisher.post(generalChannel, decodeMessageBodySync('should fail')),
-      )
-      expect(error).toBeInstanceOf(UnknownChannel)
-      if (error instanceof UnknownChannel) {
-        expect(error._tag).toBe('UnknownChannel')
-        expect(error.message).toContain('general')
-      }
-    }),
-  ))
+effectTest('publisher.post fails with a tagged UnknownChannel on an unknown channel', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* stub.respond('GET', '/api/v1/streams', { body: { result: 'success', streams: [] } })
+    const adapter = yield* buildAdapter(stub)
+    const error = yield* Effect.flip(
+      adapter.publisher.post(generalChannel, decodeMessageBodySync('should fail')),
+    )
+    expect(error).toBeInstanceOf(UnknownChannel)
+    if (error instanceof UnknownChannel) {
+      expect(error._tag).toBe('UnknownChannel')
+      expect(error.message).toContain('general')
+    }
+  }),
+)
 
-test('publisher.edit PATCHes /messages/{id} with the new content', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      realm.handle('PATCH', '/api/v1/messages/42', () => ({
-        body: { result: 'success' },
-      }))
-      const adapter = yield* buildAdapter()
-      const target: MessageRef = { id: decodeMessageIdSync('42'), channel: generalChannel }
-      yield* adapter.publisher.edit(target, decodeMessageBodySync('replacement body'))
-      const req = findRequest('PATCH', '/api/v1/messages/42')
-      expect(req.method).toBe('PATCH')
-      const params = new URLSearchParams(req.body)
-      expect(params.get('content')).toBe('replacement body')
-    }),
-  ))
+effectTest('publisher.edit PATCHes /messages/{id} with the new content', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* stub.respond('PATCH', '/api/v1/messages/42', { body: { result: 'success' } })
+    const adapter = yield* buildAdapter(stub)
+    const target: MessageRef = { id: decodeMessageIdSync('42'), channel: generalChannel }
+    yield* adapter.publisher.edit(target, decodeMessageBodySync('replacement body'))
+    const req = yield* findRequest(stub, 'PATCH', '/api/v1/messages/42')
+    expect(req.method).toBe('PATCH')
+    const params = new URLSearchParams(req.body)
+    expect(params.get('content')).toBe('replacement body')
+  }),
+)
 
-test('publisher.edit propagates ZulipApiError on permission failure', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      realm.handle('PATCH', '/api/v1/messages/42', () => ({
-        body: { result: 'error', msg: 'not allowed', code: 'BAD_REQUEST' },
-        init: { status: 400 },
-      }))
-      const adapter = yield* buildAdapter()
-      const target: MessageRef = { id: decodeMessageIdSync('42'), channel: generalChannel }
-      const err = yield* Effect.flip(adapter.publisher.edit(target, decodeMessageBodySync('nope')))
-      expect(err).toBeInstanceOf(PublisherError)
-      expect((err as { cause: unknown }).cause).toBeInstanceOf(ZulipApiError)
-    }),
-  ))
+effectTest('publisher.edit propagates ZulipApiError on permission failure', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* stub.respond('PATCH', '/api/v1/messages/42', {
+      body: { result: 'error', msg: 'not allowed', code: 'BAD_REQUEST' },
+      status: 400,
+    })
+    const adapter = yield* buildAdapter(stub)
+    const target: MessageRef = { id: decodeMessageIdSync('42'), channel: generalChannel }
+    const err = yield* Effect.flip(adapter.publisher.edit(target, decodeMessageBodySync('nope')))
+    expect(err).toBeInstanceOf(PublisherError)
+    expect((err as { cause: unknown }).cause).toBeInstanceOf(ZulipApiError)
+  }),
+)
 
-test('publisher.react POSTs /messages/{id}/reactions with emoji_name', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      realm.handle('POST', '/api/v1/messages/42/reactions', () => ({
-        body: { result: 'success' },
-      }))
-      const adapter = yield* buildAdapter()
-      const target: MessageRef = { id: decodeMessageIdSync('42'), channel: generalChannel }
-      yield* adapter.publisher.react(target, decodeEmojiSync('thumbs_up'))
-      const params = new URLSearchParams(findRequest('POST', '/api/v1/messages/42/reactions').body)
-      expect(params.get('emoji_name')).toBe('thumbs_up')
-    }),
-  ))
+effectTest('publisher.react POSTs /messages/{id}/reactions with emoji_name', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* stub.respond('POST', '/api/v1/messages/42/reactions', { body: { result: 'success' } })
+    const adapter = yield* buildAdapter(stub)
+    const target: MessageRef = { id: decodeMessageIdSync('42'), channel: generalChannel }
+    yield* adapter.publisher.react(target, decodeEmojiSync('thumbs_up'))
+    const params = new URLSearchParams(
+      (yield* findRequest(stub, 'POST', '/api/v1/messages/42/reactions')).body,
+    )
+    expect(params.get('emoji_name')).toBe('thumbs_up')
+  }),
+)
 
-test('publisher.unreact DELETEs /messages/{id}/reactions with emoji_name', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      realm.handle('DELETE', '/api/v1/messages/42/reactions', () => ({
-        body: { result: 'success' },
-      }))
-      const adapter = yield* buildAdapter()
-      const target: MessageRef = { id: decodeMessageIdSync('42'), channel: generalChannel }
-      yield* adapter.publisher.unreact(target, decodeEmojiSync('thumbs_up'))
-      const req = findRequest('DELETE', '/api/v1/messages/42/reactions')
-      const params = new URLSearchParams(req.body)
-      expect(req.method).toBe('DELETE')
-      expect(params.get('emoji_name')).toBe('thumbs_up')
-    }),
-  ))
+effectTest('publisher.unreact DELETEs /messages/{id}/reactions with emoji_name', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* stub.respond('DELETE', '/api/v1/messages/42/reactions', { body: { result: 'success' } })
+    const adapter = yield* buildAdapter(stub)
+    const target: MessageRef = { id: decodeMessageIdSync('42'), channel: generalChannel }
+    yield* adapter.publisher.unreact(target, decodeEmojiSync('thumbs_up'))
+    const req = yield* findRequest(stub, 'DELETE', '/api/v1/messages/42/reactions')
+    const params = new URLSearchParams(req.body)
+    expect(req.method).toBe('DELETE')
+    expect(params.get('emoji_name')).toBe('thumbs_up')
+  }),
+)
 
-const seedMessages = (messages: ReadonlyArray<Record<string, unknown>>): void => {
-  realm.handle('GET', '/api/v1/messages', () => ({
+const seedMessages = (
+  stub: StubHttpClient,
+  messages: ReadonlyArray<Record<string, unknown>>,
+): Effect.Effect<void> =>
+  stub.respond('GET', '/api/v1/messages', {
     body: {
       result: 'success',
       messages,
@@ -892,316 +890,324 @@ const seedMessages = (messages: ReadonlyArray<Record<string, unknown>>): void =>
       found_oldest: false,
       history_limited: false,
     },
-  }))
-}
+  })
 
-test('history.readChannel narrows by channel and maps each message to the port shape', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES, GRAEME])
-      seedMessages([
-        {
-          id: 555,
-          sender_id: 5,
-          sender_full_name: 'Graeme Foster',
-          stream_id: 1234,
-          display_recipient: 'general',
-          subject: 'lobby',
-          content: 'hi all',
-          timestamp: 1715000000,
-        },
-      ])
-      const messages = yield* adapter.history.readChannel(generalChannel, { limit: 50 })
-      expect(messages).toHaveLength(1)
-      expect(messages[0]).toEqual({
-        ref: {
-          id: decodeMessageIdSync('555'),
-          channel: generalChannel,
-          thread: { name: decodeThreadNameSync('lobby') },
-        },
-        sender: {
-          id: decodeIdentityIdSync('5'),
-          name: decodeDisplayNameSync('Graeme Foster'),
-          kind: 'human',
-        },
-        body: decodeMessageBodySync('hi all'),
-        ts: decodeTimestampSync(1715000000),
-        mentions: [],
-        reactions: [],
-      })
-    }),
-  ))
+effectTest('history.readChannel narrows by channel and maps each message to the port shape', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedMessages(stub, [
+      {
+        id: 555,
+        sender_id: 5,
+        sender_full_name: 'Graeme Foster',
+        stream_id: 1234,
+        display_recipient: 'general',
+        subject: 'lobby',
+        content: 'hi all',
+        timestamp: 1715000000,
+      },
+    ])
+    const messages = yield* adapter.history.readChannel(generalChannel, { limit: 50 })
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toEqual({
+      ref: {
+        id: decodeMessageIdSync('555'),
+        channel: generalChannel,
+        thread: { name: decodeThreadNameSync('lobby') },
+      },
+      sender: {
+        id: decodeIdentityIdSync('5'),
+        name: decodeDisplayNameSync('Graeme Foster'),
+        kind: 'human',
+      },
+      body: decodeMessageBodySync('hi all'),
+      ts: decodeTimestampSync(1715000000),
+      mentions: [],
+      reactions: [],
+    })
+  }),
+)
 
-test('history.readChannel sends narrow=[channel] with anchor=newest + num_before=range.limit', () =>
-  Effect.runPromise(
+effectTest(
+  'history.readChannel sends narrow=[channel] with anchor=newest + num_before=range.limit',
+  () =>
     Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES, GRAEME])
-      seedMessages([])
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* seedUsers(stub, [HERMES, GRAEME])
+      yield* seedMessages(stub, [])
       yield* adapter.history.readChannel(generalChannel, { limit: 25 })
-      const req = findRequest('GET', '/api/v1/messages')
+      const req = yield* findRequest(stub, 'GET', '/api/v1/messages')
       expect(req.url.searchParams.get('anchor')).toBe('newest')
       expect(req.url.searchParams.get('num_before')).toBe('25')
       expect(req.url.searchParams.get('num_after')).toBe('0')
       const narrow = JSON.parse(req.url.searchParams.get('narrow') ?? 'null') as unknown
       expect(narrow).toEqual([{ operator: 'channel', operand: 'general' }])
     }),
-  ))
+)
 
-test('history.readChannel resolves bot senders to kind=agent via the user directory', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES, GRAEME])
-      seedMessages([
-        {
-          id: 600,
-          sender_id: 9,
-          sender_full_name: 'hermes-agent',
-          stream_id: 1234,
-          display_recipient: 'general',
-          subject: 'lobby',
-          content: 'reporting in',
-          timestamp: 1715000100,
-        },
-      ])
-      const [msg] = yield* adapter.history.readChannel(generalChannel, { limit: 10 })
-      expect(msg?.sender.kind).toBe('agent')
-    }),
-  ))
+effectTest('history.readChannel resolves bot senders to kind=agent via the user directory', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedMessages(stub, [
+      {
+        id: 600,
+        sender_id: 9,
+        sender_full_name: 'hermes-agent',
+        stream_id: 1234,
+        display_recipient: 'general',
+        subject: 'lobby',
+        content: 'reporting in',
+        timestamp: 1715000100,
+      },
+    ])
+    const [msg] = yield* adapter.history.readChannel(generalChannel, { limit: 10 })
+    expect(msg?.sender.kind).toBe('agent')
+  }),
+)
 
-test('history.readChannel resolves deactivated bot senders to kind=agent', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      const deactivatedBot = { ...RIQ, is_active: false }
-      seedUsers([HERMES, GRAEME, deactivatedBot])
-      seedMessages([
-        {
-          id: 700,
-          sender_id: deactivatedBot.user_id,
-          sender_full_name: deactivatedBot.full_name,
-          stream_id: 1234,
-          display_recipient: 'general',
-          subject: 'lobby',
-          content: 'old hermes message',
-          timestamp: 1714000000,
-        },
-      ])
-      const [msg] = yield* adapter.history.readChannel(generalChannel, { limit: 10 })
-      expect(msg?.sender.kind).toBe('agent')
-      expect(msg?.sender.id).toBe(decodeIdentityIdSync(String(deactivatedBot.user_id)))
-    }),
-  ))
+effectTest('history.readChannel resolves deactivated bot senders to kind=agent', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    const deactivatedBot = { ...RIQ, is_active: false }
+    yield* seedUsers(stub, [HERMES, GRAEME, deactivatedBot])
+    yield* seedMessages(stub, [
+      {
+        id: 700,
+        sender_id: deactivatedBot.user_id,
+        sender_full_name: deactivatedBot.full_name,
+        stream_id: 1234,
+        display_recipient: 'general',
+        subject: 'lobby',
+        content: 'old hermes message',
+        timestamp: 1714000000,
+      },
+    ])
+    const [msg] = yield* adapter.history.readChannel(generalChannel, { limit: 10 })
+    expect(msg?.sender.kind).toBe('agent')
+    expect(msg?.sender.id).toBe(decodeIdentityIdSync(String(deactivatedBot.user_id)))
+  }),
+)
 
-test('history.readChannel filters by range.since (epoch seconds, inclusive)', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES, GRAEME])
-      seedMessages([
-        {
-          id: 1,
-          sender_id: 5,
-          sender_full_name: 'Graeme Foster',
-          stream_id: 1234,
-          display_recipient: 'general',
-          subject: 'a',
-          content: 'old',
-          timestamp: 1714000000,
-        },
-        {
-          id: 2,
-          sender_id: 5,
-          sender_full_name: 'Graeme Foster',
-          stream_id: 1234,
-          display_recipient: 'general',
-          subject: 'a',
-          content: 'mid',
-          timestamp: 1715000000,
-        },
-        {
-          id: 3,
-          sender_id: 5,
-          sender_full_name: 'Graeme Foster',
-          stream_id: 1234,
-          display_recipient: 'general',
-          subject: 'a',
-          content: 'new',
-          timestamp: 1716000000,
-        },
-      ])
-      const messages = yield* adapter.history.readChannel(generalChannel, {
-        since: decodeTimestampSync(1715000000),
-        limit: 50,
-      })
-      expect(messages.map((m) => m.body)).toEqual([
-        decodeMessageBodySync('mid'),
-        decodeMessageBodySync('new'),
-      ])
-    }),
-  ))
+effectTest('history.readChannel filters by range.since (epoch seconds, inclusive)', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedMessages(stub, [
+      {
+        id: 1,
+        sender_id: 5,
+        sender_full_name: 'Graeme Foster',
+        stream_id: 1234,
+        display_recipient: 'general',
+        subject: 'a',
+        content: 'old',
+        timestamp: 1714000000,
+      },
+      {
+        id: 2,
+        sender_id: 5,
+        sender_full_name: 'Graeme Foster',
+        stream_id: 1234,
+        display_recipient: 'general',
+        subject: 'a',
+        content: 'mid',
+        timestamp: 1715000000,
+      },
+      {
+        id: 3,
+        sender_id: 5,
+        sender_full_name: 'Graeme Foster',
+        stream_id: 1234,
+        display_recipient: 'general',
+        subject: 'a',
+        content: 'new',
+        timestamp: 1716000000,
+      },
+    ])
+    const messages = yield* adapter.history.readChannel(generalChannel, {
+      since: decodeTimestampSync(1715000000),
+      limit: 50,
+    })
+    expect(messages.map((m) => m.body)).toEqual([
+      decodeMessageBodySync('mid'),
+      decodeMessageBodySync('new'),
+    ])
+  }),
+)
 
-test('history.readChannel filters by range.until (epoch seconds, inclusive)', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES, GRAEME])
-      seedMessages([
-        {
-          id: 1,
-          sender_id: 5,
-          sender_full_name: 'Graeme Foster',
-          stream_id: 1234,
-          display_recipient: 'general',
-          subject: 'a',
-          content: 'old',
-          timestamp: 1714000000,
-        },
-        {
-          id: 2,
-          sender_id: 5,
-          sender_full_name: 'Graeme Foster',
-          stream_id: 1234,
-          display_recipient: 'general',
-          subject: 'a',
-          content: 'mid',
-          timestamp: 1715000000,
-        },
-        {
-          id: 3,
-          sender_id: 5,
-          sender_full_name: 'Graeme Foster',
-          stream_id: 1234,
-          display_recipient: 'general',
-          subject: 'a',
-          content: 'new',
-          timestamp: 1716000000,
-        },
-      ])
-      const messages = yield* adapter.history.readChannel(generalChannel, {
-        until: decodeTimestampSync(1715000000),
-        limit: 50,
-      })
-      expect(messages.map((m) => m.body)).toEqual([
-        decodeMessageBodySync('old'),
-        decodeMessageBodySync('mid'),
-      ])
-    }),
-  ))
+effectTest('history.readChannel filters by range.until (epoch seconds, inclusive)', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedMessages(stub, [
+      {
+        id: 1,
+        sender_id: 5,
+        sender_full_name: 'Graeme Foster',
+        stream_id: 1234,
+        display_recipient: 'general',
+        subject: 'a',
+        content: 'old',
+        timestamp: 1714000000,
+      },
+      {
+        id: 2,
+        sender_id: 5,
+        sender_full_name: 'Graeme Foster',
+        stream_id: 1234,
+        display_recipient: 'general',
+        subject: 'a',
+        content: 'mid',
+        timestamp: 1715000000,
+      },
+      {
+        id: 3,
+        sender_id: 5,
+        sender_full_name: 'Graeme Foster',
+        stream_id: 1234,
+        display_recipient: 'general',
+        subject: 'a',
+        content: 'new',
+        timestamp: 1716000000,
+      },
+    ])
+    const messages = yield* adapter.history.readChannel(generalChannel, {
+      until: decodeTimestampSync(1715000000),
+      limit: 50,
+    })
+    expect(messages.map((m) => m.body)).toEqual([
+      decodeMessageBodySync('old'),
+      decodeMessageBodySync('mid'),
+    ])
+  }),
+)
 
-test('history.readThread narrows by both channel and topic', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES, GRAEME])
-      seedMessages([])
-      yield* adapter.history.readThread(generalChannel, decodeThreadNameSync('ass-zsd9'), {
-        limit: 10,
-      })
-      const req = findRequest('GET', '/api/v1/messages')
-      const narrow = JSON.parse(req.url.searchParams.get('narrow') ?? 'null') as unknown
-      expect(narrow).toEqual([
-        { operator: 'channel', operand: 'general' },
-        { operator: 'topic', operand: 'ass-zsd9' },
-      ])
-    }),
-  ))
+effectTest('history.readThread narrows by both channel and topic', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedMessages(stub, [])
+    yield* adapter.history.readThread(generalChannel, decodeThreadNameSync('ass-zsd9'), {
+      limit: 10,
+    })
+    const req = yield* findRequest(stub, 'GET', '/api/v1/messages')
+    const narrow = JSON.parse(req.url.searchParams.get('narrow') ?? 'null') as unknown
+    expect(narrow).toEqual([
+      { operator: 'channel', operand: 'general' },
+      { operator: 'topic', operand: 'ass-zsd9' },
+    ])
+  }),
+)
 
-test('history.readChannel with no limit defaults num_before to 100', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES, GRAEME])
-      seedMessages([])
-      yield* adapter.history.readChannel(generalChannel, {})
-      const req = findRequest('GET', '/api/v1/messages')
-      expect(req.url.searchParams.get('num_before')).toBe('100')
-    }),
-  ))
+effectTest('history.readChannel with no limit defaults num_before to 100', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedMessages(stub, [])
+    yield* adapter.history.readChannel(generalChannel, {})
+    const req = yield* findRequest(stub, 'GET', '/api/v1/messages')
+    expect(req.url.searchParams.get('num_before')).toBe('100')
+  }),
+)
 
-test('history.recentThreads queries by sender and deduplicates per thread (comms-esu)', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES, GRAEME])
-      seedMessages([
-        {
-          id: 101,
-          sender_id: HERMES.user_id,
-          sender_full_name: HERMES.full_name,
-          stream_id: 1234,
-          display_recipient: 'project-x',
-          subject: 'feature-request',
-          content: 'latest reply',
-          timestamp: 1715000200,
-        },
-        {
-          id: 100,
-          sender_id: HERMES.user_id,
-          sender_full_name: HERMES.full_name,
-          stream_id: 1234,
-          display_recipient: 'project-x',
-          subject: 'feature-request',
-          content: 'earlier reply',
-          timestamp: 1715000100,
-        },
-        {
-          id: 99,
-          sender_id: HERMES.user_id,
-          sender_full_name: HERMES.full_name,
-          stream_id: 5678,
-          display_recipient: 'ops',
-          subject: 'deploy-issue',
-          content: 'investigating',
-          timestamp: 1715000050,
-        },
-      ])
-      const threads = yield* adapter.history.recentThreads(
-        decodeIdentityIdSync(String(HERMES.user_id)),
-      )
-      expect(threads).toHaveLength(2)
-      expect(threads[0]).toEqual({
-        channel: decodeChannelNameSync('project-x'),
-        thread: decodeThreadNameSync('feature-request'),
-        lastPostTs: decodeTimestampSync(1715000200),
-        lastPostBody: decodeMessageBodySync('latest reply'),
-      })
-      expect(threads[1]).toEqual({
-        channel: decodeChannelNameSync('ops'),
-        thread: decodeThreadNameSync('deploy-issue'),
-        lastPostTs: decodeTimestampSync(1715000050),
-        lastPostBody: decodeMessageBodySync('investigating'),
-      })
-      const req = findRequest('GET', '/api/v1/messages')
-      const narrow = JSON.parse(req.url.searchParams.get('narrow') ?? 'null') as ReadonlyArray<{
-        operator: string
-        operand: unknown
-      }>
-      // Zulip's `sender` narrow operand must be the INTEGER user id. A numeric
-      // string ("9") is rejected as BAD_NARROW "unknown user 9" (comms-wpp).
-      expect(narrow).toEqual([{ operator: 'sender', operand: HERMES.user_id }])
-      expect(typeof narrow[0]?.operand).toBe('number')
-    }),
-  ))
+effectTest('history.recentThreads queries by sender and deduplicates per thread (comms-esu)', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedMessages(stub, [
+      {
+        id: 101,
+        sender_id: HERMES.user_id,
+        sender_full_name: HERMES.full_name,
+        stream_id: 1234,
+        display_recipient: 'project-x',
+        subject: 'feature-request',
+        content: 'latest reply',
+        timestamp: 1715000200,
+      },
+      {
+        id: 100,
+        sender_id: HERMES.user_id,
+        sender_full_name: HERMES.full_name,
+        stream_id: 1234,
+        display_recipient: 'project-x',
+        subject: 'feature-request',
+        content: 'earlier reply',
+        timestamp: 1715000100,
+      },
+      {
+        id: 99,
+        sender_id: HERMES.user_id,
+        sender_full_name: HERMES.full_name,
+        stream_id: 5678,
+        display_recipient: 'ops',
+        subject: 'deploy-issue',
+        content: 'investigating',
+        timestamp: 1715000050,
+      },
+    ])
+    const threads = yield* adapter.history.recentThreads(
+      decodeIdentityIdSync(String(HERMES.user_id)),
+    )
+    expect(threads).toHaveLength(2)
+    expect(threads[0]).toEqual({
+      channel: decodeChannelNameSync('project-x'),
+      thread: decodeThreadNameSync('feature-request'),
+      lastPostTs: decodeTimestampSync(1715000200),
+      lastPostBody: decodeMessageBodySync('latest reply'),
+    })
+    expect(threads[1]).toEqual({
+      channel: decodeChannelNameSync('ops'),
+      thread: decodeThreadNameSync('deploy-issue'),
+      lastPostTs: decodeTimestampSync(1715000050),
+      lastPostBody: decodeMessageBodySync('investigating'),
+    })
+    const req = yield* findRequest(stub, 'GET', '/api/v1/messages')
+    const narrow = JSON.parse(req.url.searchParams.get('narrow') ?? 'null') as ReadonlyArray<{
+      operator: string
+      operand: unknown
+    }>
+    // Zulip's `sender` narrow operand must be the INTEGER user id. A numeric
+    // string ("9") is rejected as BAD_NARROW "unknown user 9" (comms-wpp).
+    expect(narrow).toEqual([{ operator: 'sender', operand: HERMES.user_id }])
+    expect(typeof narrow[0]?.operand).toBe('number')
+  }),
+)
 
-test('history.recentThreads short-circuits to [] when the sender is not a known directory member (comms-7ee)', () =>
-  Effect.runPromise(
+effectTest(
+  'history.recentThreads short-circuits to [] when the sender is not a known directory member (comms-7ee)',
+  () =>
     Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES])
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* seedUsers(stub, [HERMES])
       // identity '999' resolves to no ZulipUserRef, so there is no integer the
       // `sender` narrow could use — return [] rather than query with an operand
       // Zulip would reject.
       const threads = yield* adapter.history.recentThreads(decodeIdentityIdSync('999'))
       expect(threads).toEqual([])
-      expect(realm.captured.some((r) => r.url.pathname === '/api/v1/messages')).toBe(false)
+      const reqs = yield* stub.captured
+      expect(reqs.some((r) => r.url.pathname === '/api/v1/messages')).toBe(false)
     }),
-  ))
+)
 
-const seedPresence = (userId: string, aggregatedStatus: 'active' | 'idle' | 'offline'): void => {
-  realm.handle('GET', `/api/v1/users/${userId}/presence`, () => ({
+const seedPresence = (
+  stub: StubHttpClient,
+  userId: string,
+  aggregatedStatus: 'active' | 'idle' | 'offline',
+): Effect.Effect<void> =>
+  stub.respond('GET', `/api/v1/users/${userId}/presence`, {
     body: {
       result: 'success',
       msg: '',
@@ -1210,94 +1216,101 @@ const seedPresence = (userId: string, aggregatedStatus: 'active' | 'idle' | 'off
         aggregated: { status: aggregatedStatus, timestamp: 1715000000 },
       },
     },
-  }))
-}
+  })
 
-test('directory.presence maps aggregated status=active to online', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedPresence(bobHuman.id, 'active')
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES, BOB])
-      const presence = yield* adapter.directory.presence(bobHuman)
-      expect(presence).toBe('online')
-    }),
-  ))
+effectTest('directory.presence maps aggregated status=active to online', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedPresence(stub, bobHuman.id, 'active')
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, BOB])
+    const presence = yield* adapter.directory.presence(bobHuman)
+    expect(presence).toBe('online')
+  }),
+)
 
-test('directory.presence maps aggregated status=idle to idle', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedPresence(bobHuman.id, 'idle')
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES, BOB])
-      const presence = yield* adapter.directory.presence(bobHuman)
-      expect(presence).toBe('idle')
-    }),
-  ))
+effectTest('directory.presence maps aggregated status=idle to idle', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedPresence(stub, bobHuman.id, 'idle')
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, BOB])
+    const presence = yield* adapter.directory.presence(bobHuman)
+    expect(presence).toBe('idle')
+  }),
+)
 
-test('directory.presence maps aggregated status=offline to offline', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedPresence(bobHuman.id, 'offline')
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES, BOB])
-      const presence = yield* adapter.directory.presence(bobHuman)
-      expect(presence).toBe('offline')
-    }),
-  ))
+effectTest('directory.presence maps aggregated status=offline to offline', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedPresence(stub, bobHuman.id, 'offline')
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, BOB])
+    const presence = yield* adapter.directory.presence(bobHuman)
+    expect(presence).toBe('offline')
+  }),
+)
 
-test('directory.presence returns offline when user has never set presence (Zulip 400 BAD_REQUEST)', () =>
-  Effect.runPromise(
+effectTest(
+  'directory.presence returns offline when user has never set presence (Zulip 400 BAD_REQUEST)',
+  () =>
     Effect.gen(function* () {
-      realm.handle('GET', `/api/v1/users/${bobHuman.id}/presence`, () => ({
+      const stub = yield* makeStubHttpClient
+      yield* stub.respond('GET', `/api/v1/users/${bobHuman.id}/presence`, {
         body: { result: 'error', msg: `No presence data for ${bobHuman.id}`, code: 'BAD_REQUEST' },
-        init: { status: 400 },
-      }))
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES, BOB])
+        status: 400,
+      })
+      const adapter = yield* buildAdapter(stub)
+      yield* seedUsers(stub, [HERMES, BOB])
       const presence = yield* adapter.directory.presence(bobHuman)
       expect(presence).toBe('offline')
     }),
-  ))
+)
 
-test('directory.presence returns offline when the user no longer exists (Zulip 400 BAD_REQUEST: No such user)', () =>
-  Effect.runPromise(
+effectTest(
+  'directory.presence returns offline when the user no longer exists (Zulip 400 BAD_REQUEST: No such user)',
+  () =>
     Effect.gen(function* () {
-      realm.handle('GET', `/api/v1/users/${bobHuman.id}/presence`, () => ({
+      const stub = yield* makeStubHttpClient
+      yield* stub.respond('GET', `/api/v1/users/${bobHuman.id}/presence`, {
         body: { result: 'error', msg: 'No such user', code: 'BAD_REQUEST' },
-        init: { status: 400 },
-      }))
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES, BOB])
+        status: 400,
+      })
+      const adapter = yield* buildAdapter(stub)
+      yield* seedUsers(stub, [HERMES, BOB])
       const presence = yield* adapter.directory.presence(bobHuman)
       expect(presence).toBe('offline')
     }),
-  ))
+)
 
-test('directory.presence surfaces non-BAD_REQUEST errors as DirectoryError (cause preserved)', () =>
-  Effect.runPromise(
+effectTest(
+  'directory.presence surfaces non-BAD_REQUEST errors as DirectoryError (cause preserved)',
+  () =>
     Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
       // A non-BAD_REQUEST error must propagate (only the benign "no presence
       // data" 400 is swallowed to offline). Use a 500 rather than a 429 — the
       // adapter now rides out 429s internally (comms-nbz), so a 429 is no
       // longer an error the presence path surfaces.
-      realm.handle('GET', `/api/v1/users/${bobHuman.id}/presence`, () => ({
+      yield* stub.respond('GET', `/api/v1/users/${bobHuman.id}/presence`, {
         body: { result: 'error', msg: 'internal server error', code: 'INTERNAL_ERROR' },
-        init: { status: 500 },
-      }))
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES, BOB])
+        status: 500,
+      })
+      const adapter = yield* buildAdapter(stub)
+      yield* seedUsers(stub, [HERMES, BOB])
       const error = yield* Effect.flip(adapter.directory.presence(bobHuman))
       expect(error).toBeInstanceOf(DirectoryError)
       expect(error.cause).toBeInstanceOf(ZulipApiError)
     }),
-  ))
+)
 
-test('directory.presence short-circuits to offline for an identity that is not a known directory member (comms-7ee)', () =>
-  Effect.runPromise(
+effectTest(
+  'directory.presence short-circuits to offline for an identity that is not a known directory member (comms-7ee)',
+  () =>
     Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES])
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* seedUsers(stub, [HERMES])
       const stranger: Identity = {
         id: decodeIdentityIdSync('999'),
         name: decodeDisplayNameSync('stranger'),
@@ -1306,23 +1319,24 @@ test('directory.presence short-circuits to offline for an identity that is not a
       const presence = yield* adapter.directory.presence(stranger)
       expect(presence).toBe('offline')
       // No ZulipUserRef means no resolvable user — don't fire a doomed presence GET.
-      expect(realm.captured.some((r) => r.url.pathname === '/api/v1/users/999/presence')).toBe(
-        false,
-      )
+      const reqs = yield* stub.captured
+      expect(reqs.some((r) => r.url.pathname === '/api/v1/users/999/presence')).toBe(false)
     }),
-  ))
+)
 
-test("directory.presence returns 'unknown' for an agent identity without reading Zulip presence (comms-1mnb)", () =>
-  Effect.runPromise(
+effectTest(
+  "directory.presence returns 'unknown' for an agent identity without reading Zulip presence (comms-1mnb)",
+  () =>
     Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
       // Zulip presence is human-only by design (POST /users/me/presence is
       // @human_users_only), so a bot has no presence concept. Reading it would
       // 400 and collapse to 'offline', which lies about a bot we simply cannot
       // know. Short-circuit agents to 'unknown' before any directory lookup or
       // presence GET — even for a bot that IS a known directory member.
-      seedPresence('11', 'active')
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES, RIQ])
+      yield* seedPresence(stub, '11', 'active')
+      const adapter = yield* buildAdapter(stub)
+      yield* seedUsers(stub, [HERMES, RIQ])
       const riqBot: Identity = {
         id: decodeIdentityIdSync('11'),
         name: decodeDisplayNameSync('riq6r230'),
@@ -1330,9 +1344,10 @@ test("directory.presence returns 'unknown' for an agent identity without reading
       }
       const presence = yield* adapter.directory.presence(riqBot)
       expect(presence).toBe('unknown')
-      expect(realm.captured.some((r) => r.url.pathname === '/api/v1/users/11/presence')).toBe(false)
+      const reqs = yield* stub.captured
+      expect(reqs.some((r) => r.url.pathname === '/api/v1/users/11/presence')).toBe(false)
     }),
-  ))
+)
 
 // ─── comms-fpa: bots never write their own presence ─────────────────────────
 // Zulip's POST /users/me/presence is @human_users_only, so a bot self-presence
@@ -1342,210 +1357,216 @@ test("directory.presence returns 'unknown' for an agent identity without reading
 // wired back in. The presence READ — directory.presence, above — stays: a bot
 // reading a human's presence is supported.
 
-test('a bound adapter never writes its own presence (comms-fpa)', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      const presencePosts = realm.captured.filter(
-        (r) => r.method === 'POST' && r.url.pathname === '/api/v1/users/me/presence',
-      )
-      expect(presencePosts).toHaveLength(0)
-      yield* Effect.promise(() => adapter.close())
-    }),
-  ))
+effectTest('a bound adapter never writes its own presence (comms-fpa)', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    const reqs = yield* stub.captured
+    const presencePosts = reqs.filter(
+      (r) => r.method === 'POST' && r.url.pathname === '/api/v1/users/me/presence',
+    )
+    expect(presencePosts).toHaveLength(0)
+    yield* Effect.promise(() => adapter.close())
+  }),
+)
 
-const seedRegisterOk = (queueId = 'q1', lastEventId = 0): void => {
-  realm.handle('POST', '/api/v1/register', () => ({
+const seedRegisterOk = (
+  stub: StubHttpClient,
+  queueId = 'q1',
+  lastEventId = 0,
+): Effect.Effect<void> =>
+  stub.respond('POST', '/api/v1/register', {
     body: { result: 'success', queue_id: queueId, last_event_id: lastEventId },
-  }))
-}
+  })
 
-const seedSubscribeOk = (channelName: string): void => {
-  realm.handle('POST', '/api/v1/users/me/subscriptions', () => ({
-    body: {
-      result: 'success',
-      subscribed: { 'hermes-agent-bot@example.com': [channelName] },
-      already_subscribed: {},
-      unauthorized: [],
-    },
-  }))
-  // subscribe() also POSTs /register to satisfy the port's readiness
-  // contract (subscribe resolved → events() observes subsequent posts).
-  seedRegisterOk()
-}
+const seedSubscribeOk = (stub: StubHttpClient, channelName: string): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    yield* stub.respond('POST', '/api/v1/users/me/subscriptions', {
+      body: {
+        result: 'success',
+        subscribed: { 'hermes-agent-bot@example.com': [channelName] },
+        already_subscribed: {},
+        unauthorized: [],
+      },
+    })
+    // subscribe() also POSTs /register to satisfy the port's readiness
+    // contract (subscribe resolved → events() observes subsequent posts).
+    yield* seedRegisterOk(stub)
+  })
 
-const seedUnsubscribeOk = (channelName: string): void => {
-  realm.handle('DELETE', '/api/v1/users/me/subscriptions', () => ({
+const seedUnsubscribeOk = (stub: StubHttpClient, channelName: string): Effect.Effect<void> =>
+  stub.respond('DELETE', '/api/v1/users/me/subscriptions', {
     body: { result: 'success', removed: [channelName], not_removed: [] },
-  }))
-}
+  })
 
-test('inbox.subscribe(channel) POSTs /users/me/subscriptions with [{ name }]', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedSubscribeOk('general')
-      const adapter = yield* buildAdapter()
-      yield* adapter.inbox.subscribe(generalChannel)
-      const req = findRequest('POST', '/api/v1/users/me/subscriptions')
-      const params = new URLSearchParams(req.body)
-      const subs = JSON.parse(params.get('subscriptions') ?? '[]') as unknown
-      expect(subs).toEqual([{ name: 'general' }])
-    }),
-  ))
+effectTest('inbox.subscribe(channel) POSTs /users/me/subscriptions with [{ name }]', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSubscribeOk(stub, 'general')
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.inbox.subscribe(generalChannel)
+    const req = yield* findRequest(stub, 'POST', '/api/v1/users/me/subscriptions')
+    const params = new URLSearchParams(req.body)
+    const subs = JSON.parse(params.get('subscriptions') ?? '[]') as unknown
+    expect(subs).toEqual([{ name: 'general' }])
+  }),
+)
 
-test('inbox.subscribe is a no-op for already_subscribed', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      realm.handle('POST', '/api/v1/users/me/subscriptions', () => ({
-        body: {
-          result: 'success',
-          subscribed: {},
-          already_subscribed: { 'hermes-agent-bot@example.com': ['general'] },
-          unauthorized: [],
-        },
-      }))
-      seedRegisterOk()
-      const adapter = yield* buildAdapter()
-      yield* adapter.inbox.subscribe(generalChannel)
-    }),
-  ))
+effectTest('inbox.subscribe is a no-op for already_subscribed', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* stub.respond('POST', '/api/v1/users/me/subscriptions', {
+      body: {
+        result: 'success',
+        subscribed: {},
+        already_subscribed: { 'hermes-agent-bot@example.com': ['general'] },
+        unauthorized: [],
+      },
+    })
+    yield* seedRegisterOk(stub)
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.inbox.subscribe(generalChannel)
+  }),
+)
 
-test('inbox.subscribe with thread subscribes to its underlying channel', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedSubscribeOk('general')
-      const adapter = yield* buildAdapter()
-      yield* adapter.inbox.subscribe({
-        channel: generalChannel,
-        thread: { name: decodeThreadNameSync('design') },
-      })
-      const req = findRequest('POST', '/api/v1/users/me/subscriptions')
-      const subs = JSON.parse(new URLSearchParams(req.body).get('subscriptions') ?? '[]') as unknown
-      expect(subs).toEqual([{ name: 'general' }])
-    }),
-  ))
+effectTest('inbox.subscribe with thread subscribes to its underlying channel', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSubscribeOk(stub, 'general')
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.inbox.subscribe({
+      channel: generalChannel,
+      thread: { name: decodeThreadNameSync('design') },
+    })
+    const req = yield* findRequest(stub, 'POST', '/api/v1/users/me/subscriptions')
+    const subs = JSON.parse(new URLSearchParams(req.body).get('subscriptions') ?? '[]') as unknown
+    expect(subs).toEqual([{ name: 'general' }])
+  }),
+)
 
-test('inbox.subscribe with mentions target does not call /users/me/subscriptions', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedRegisterOk()
-      const adapter = yield* buildAdapter()
-      yield* adapter.inbox.subscribe('mentions')
-      expect(
-        realm.captured.find(
-          (r) => r.method === 'POST' && r.url.pathname === '/api/v1/users/me/subscriptions',
-        ),
-      ).toBeUndefined()
-    }),
-  ))
+effectTest('inbox.subscribe with mentions target does not call /users/me/subscriptions', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedRegisterOk(stub)
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.inbox.subscribe('mentions')
+    const reqs = yield* stub.captured
+    expect(
+      reqs.find((r) => r.method === 'POST' && r.url.pathname === '/api/v1/users/me/subscriptions'),
+    ).toBeUndefined()
+  }),
+)
 
-test('inbox.unsubscribe(channel) DELETEs /users/me/subscriptions with the stream name', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedUnsubscribeOk('general')
-      const adapter = yield* buildAdapter()
-      yield* adapter.inbox.unsubscribe(generalChannel)
-      const req = findRequest('DELETE', '/api/v1/users/me/subscriptions')
-      const params = new URLSearchParams(req.body)
-      const subs = JSON.parse(params.get('subscriptions') ?? '[]') as unknown
-      expect(subs).toEqual(['general'])
-    }),
-  ))
+effectTest('inbox.unsubscribe(channel) DELETEs /users/me/subscriptions with the stream name', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedUnsubscribeOk(stub, 'general')
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.inbox.unsubscribe(generalChannel)
+    const req = yield* findRequest(stub, 'DELETE', '/api/v1/users/me/subscriptions')
+    const params = new URLSearchParams(req.body)
+    const subs = JSON.parse(params.get('subscriptions') ?? '[]') as unknown
+    expect(subs).toEqual(['general'])
+  }),
+)
 
-test('inbox.unsubscribe with mentions target does not call /users/me/subscriptions', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      yield* adapter.inbox.unsubscribe('mentions')
-      expect(
-        realm.captured.find(
-          (r) => r.method === 'DELETE' && r.url.pathname === '/api/v1/users/me/subscriptions',
-        ),
-      ).toBeUndefined()
-    }),
-  ))
+effectTest('inbox.unsubscribe with mentions target does not call /users/me/subscriptions', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.inbox.unsubscribe('mentions')
+    const reqs = yield* stub.captured
+    expect(
+      reqs.find(
+        (r) => r.method === 'DELETE' && r.url.pathname === '/api/v1/users/me/subscriptions',
+      ),
+    ).toBeUndefined()
+  }),
+)
 
-test('inbox.replay(since) returns message-posted events for messages with ts >= since', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES, GRAEME])
-      realm.handle('GET', '/api/v1/messages', () => ({
-        body: {
-          result: 'success',
-          messages: [
-            {
-              id: 1,
-              sender_id: 5,
-              sender_full_name: 'Graeme Foster',
-              stream_id: 100,
-              display_recipient: 'general',
-              subject: 'lobby',
-              content: 'old',
-              timestamp: 1000,
-            },
-            {
-              id: 2,
-              sender_id: 5,
-              sender_full_name: 'Graeme Foster',
-              stream_id: 100,
-              display_recipient: 'general',
-              subject: 'lobby',
-              content: 'new',
-              timestamp: 3000,
-            },
-          ],
-          anchor: 0,
-          found_anchor: false,
-          found_newest: true,
-          found_oldest: false,
-          history_limited: false,
-        },
-      }))
-      const events = yield* adapter.inbox.replay(decodeTimestampSync(2000))
-      expect(events).toHaveLength(1)
-      expect(events[0]?.kind).toBe('message-posted')
-      if (events[0]?.kind === 'message-posted') {
-        expect(events[0].message.body).toBe(decodeMessageBodySync('new'))
-        expect(events[0].message.ref.channel.name).toEqual(decodeChannelNameSync('general'))
-      }
-    }),
-  ))
+effectTest('inbox.replay(since) returns message-posted events for messages with ts >= since', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* stub.respond('GET', '/api/v1/messages', {
+      body: {
+        result: 'success',
+        messages: [
+          {
+            id: 1,
+            sender_id: 5,
+            sender_full_name: 'Graeme Foster',
+            stream_id: 100,
+            display_recipient: 'general',
+            subject: 'lobby',
+            content: 'old',
+            timestamp: 1000,
+          },
+          {
+            id: 2,
+            sender_id: 5,
+            sender_full_name: 'Graeme Foster',
+            stream_id: 100,
+            display_recipient: 'general',
+            subject: 'lobby',
+            content: 'new',
+            timestamp: 3000,
+          },
+        ],
+        anchor: 0,
+        found_anchor: false,
+        found_newest: true,
+        found_oldest: false,
+        history_limited: false,
+      },
+    })
+    const events = yield* adapter.inbox.replay(decodeTimestampSync(2000))
+    expect(events).toHaveLength(1)
+    expect(events[0]?.kind).toBe('message-posted')
+    if (events[0]?.kind === 'message-posted') {
+      expect(events[0].message.body).toBe(decodeMessageBodySync('new'))
+      expect(events[0].message.ref.channel.name).toEqual(decodeChannelNameSync('general'))
+    }
+  }),
+)
 
-test('inbox.replay calls /messages with anchor=newest and a generous num_before', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES])
-      realm.handle('GET', '/api/v1/messages', () => ({
-        body: {
-          result: 'success',
-          messages: [],
-          anchor: 0,
-          found_anchor: false,
-          found_newest: true,
-          found_oldest: false,
-          history_limited: false,
-        },
-      }))
-      yield* adapter.inbox.replay(decodeTimestampSync(0))
-      const req = findRequest('GET', '/api/v1/messages')
-      expect(req.url.searchParams.get('anchor')).toBe('newest')
-      expect(Number(req.url.searchParams.get('num_before'))).toBeGreaterThanOrEqual(100)
-      expect(req.url.searchParams.get('num_after')).toBe('0')
-    }),
-  ))
+effectTest('inbox.replay calls /messages with anchor=newest and a generous num_before', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES])
+    yield* stub.respond('GET', '/api/v1/messages', {
+      body: {
+        result: 'success',
+        messages: [],
+        anchor: 0,
+        found_anchor: false,
+        found_newest: true,
+        found_oldest: false,
+        history_limited: false,
+      },
+    })
+    yield* adapter.inbox.replay(decodeTimestampSync(0))
+    const req = yield* findRequest(stub, 'GET', '/api/v1/messages')
+    expect(req.url.searchParams.get('anchor')).toBe('newest')
+    expect(Number(req.url.searchParams.get('num_before'))).toBeGreaterThanOrEqual(100)
+    expect(req.url.searchParams.get('num_after')).toBe('0')
+  }),
+)
 
 // The replay schema accepts the stream-message shape only — DMs in
 // `/messages` responses have no stream_id, a recipient-array
 // `display_recipient`, and an empty subject, so they explode the Zod
 // parse. Asking Zulip to filter at the source keeps the parser strict.
-test('inbox.replay narrows /messages to exclude DMs so PMs in minter history do not crash the parser', () =>
-  Effect.runPromise(
+effectTest(
+  'inbox.replay narrows /messages to exclude DMs so PMs in minter history do not crash the parser',
+  () =>
     Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES])
-      realm.handle('GET', '/api/v1/messages', () => ({
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* seedUsers(stub, [HERMES])
+      yield* stub.respond('GET', '/api/v1/messages', {
         body: {
           result: 'success',
           messages: [],
@@ -1555,9 +1576,9 @@ test('inbox.replay narrows /messages to exclude DMs so PMs in minter history do 
           found_oldest: false,
           history_limited: false,
         },
-      }))
+      })
       yield* adapter.inbox.replay(decodeTimestampSync(0))
-      const req = findRequest('GET', '/api/v1/messages')
+      const req = yield* findRequest(stub, 'GET', '/api/v1/messages')
       const narrowRaw = req.url.searchParams.get('narrow')
       if (narrowRaw === null) throw new Error('expected narrow param on /messages request')
       const narrow = JSON.parse(narrowRaw) as ReadonlyArray<unknown>
@@ -1568,14 +1589,16 @@ test('inbox.replay narrows /messages to exclude DMs so PMs in minter history do 
       })
       expect(excludesDms).toBe(true)
     }),
-  ))
+)
 
-test('inbox.replay surfaces mention-received alongside message-posted when flags include "mentioned"', () =>
-  Effect.runPromise(
+effectTest(
+  'inbox.replay surfaces mention-received alongside message-posted when flags include "mentioned"',
+  () =>
     Effect.gen(function* () {
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES])
-      realm.handle('GET', '/api/v1/messages', () => ({
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* seedUsers(stub, [HERMES])
+      yield* stub.respond('GET', '/api/v1/messages', {
         body: {
           result: 'success',
           messages: [
@@ -1597,32 +1620,33 @@ test('inbox.replay surfaces mention-received alongside message-posted when flags
           found_oldest: false,
           history_limited: false,
         },
-      }))
+      })
       const events = yield* adapter.inbox.replay(decodeTimestampSync(0))
       expect(events.map((e) => e.kind)).toEqual(['message-posted', 'mention-received'])
     }),
-  ))
+)
 
-test('inbox.events register includes narrow=[["is","mentioned"]] when subscribed mentions', () =>
-  Effect.runPromise(
+effectTest(
+  'inbox.events register includes narrow=[["is","mentioned"]] when subscribed mentions',
+  () =>
     Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
       // subscribe('mentions') eagerly registers the events queue (the
       // readiness contract — events() must see anything posted after
       // subscribe resolves). The narrow assertion lives here so the queue
       // used by events() is exclusive to mentions.
-      const adapter = yield* buildAdapter()
-      seedUsers([HERMES])
-      seedRegisterOk('queue-1', 0)
+      const adapter = yield* buildAdapter(stub)
+      yield* seedUsers(stub, [HERMES])
+      yield* seedRegisterOk(stub, 'queue-1', 0)
       yield* adapter.inbox.subscribe('mentions')
-      const reg = realm.captured.find(
-        (r) => r.method === 'POST' && r.url.pathname === '/api/v1/register',
-      )
+      const reqs = yield* stub.captured
+      const reg = reqs.find((r) => r.method === 'POST' && r.url.pathname === '/api/v1/register')
       if (reg === undefined) throw new Error('expected captured POST /api/v1/register')
       const params = new URLSearchParams(reg.body)
       const narrow = JSON.parse(params.get('narrow') ?? 'null') as unknown
       expect(narrow).toEqual([['is', 'mentioned']])
     }),
-  ))
+)
 
 // ─── ass-220u: pre-acquire surfaces run on minter creds ────────────────────
 
@@ -1638,78 +1662,81 @@ const decodeBasicAuth = (header: string | null): { email: string; apiKey: string
 
 const minterAuth = { email: 'minter@example.com', apiKey: 'minter-key' }
 
-test('history.readChannel runs pre-acquire and routes via minter creds', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedUsers([HERMES, GRAEME])
-      realm.handle('GET', '/api/v1/messages', () => ({
-        body: { result: 'success', messages: [] },
-      }))
-      const adapter = yield* zulipAdapter(yield* makeConfig())
-      yield* adapter.history.readChannel(generalChannel, {})
-      const req = findRequest('GET', '/api/v1/messages')
-      expect(decodeBasicAuth(req.headers.get('Authorization'))).toEqual(minterAuth)
-    }),
-  ))
+effectTest('history.readChannel runs pre-acquire and routes via minter creds', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* stub.respond('GET', '/api/v1/messages', {
+      body: { result: 'success', messages: [] },
+    })
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    yield* adapter.history.readChannel(generalChannel, {})
+    const req = yield* findRequest(stub, 'GET', '/api/v1/messages')
+    expect(decodeBasicAuth(req.headers.get('Authorization'))).toEqual(minterAuth)
+  }),
+)
 
-test('directory.listAgents runs pre-acquire and routes via minter creds', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedUsers([HERMES, GRAEME])
-      const adapter = yield* zulipAdapter(yield* makeConfig())
-      const agents = yield* adapter.directory.listAgents()
-      expect(agents.map((a) => a.name)).toEqual([decodeDisplayNameSync('hermes-agent')])
-      const usersCalls = realm.captured.filter(
-        (r) => r.method === 'GET' && r.url.pathname === '/api/v1/users',
-      )
-      expect(usersCalls).not.toHaveLength(0)
-      for (const call of usersCalls) {
-        expect(decodeBasicAuth(call.headers.get('Authorization'))).toEqual(minterAuth)
-      }
-    }),
-  ))
+effectTest('directory.listAgents runs pre-acquire and routes via minter creds', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedUsers(stub, [HERMES, GRAEME])
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    const agents = yield* adapter.directory.listAgents()
+    expect(agents.map((a) => a.name)).toEqual([decodeDisplayNameSync('hermes-agent')])
+    const reqs = yield* stub.captured
+    const usersCalls = reqs.filter((r) => r.method === 'GET' && r.url.pathname === '/api/v1/users')
+    expect(usersCalls).not.toHaveLength(0)
+    for (const call of usersCalls) {
+      expect(decodeBasicAuth(call.headers.get('Authorization'))).toEqual(minterAuth)
+    }
+  }),
+)
 
 // The presence read path runs for humans only (agents short-circuit to
 // 'unknown', comms-1mnb), so the minter-cred routing assertion uses a human.
-test('directory.presence runs pre-acquire and routes via minter creds', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedUsers([GRAEME])
-      realm.handle('GET', `/api/v1/users/${GRAEME.user_id}/presence`, () => ({
-        body: { result: 'success', presence: { aggregated: { status: 'active' } } },
-      }))
-      const adapter = yield* zulipAdapter(yield* makeConfig())
-      const presence = yield* adapter.directory.presence({
-        id: decodeIdentityIdSync(String(GRAEME.user_id)),
-        name: decodeDisplayNameSync(GRAEME.full_name),
-        kind: 'human',
-      })
-      expect(presence).toBe('online')
-      const req = findRequest('GET', `/api/v1/users/${GRAEME.user_id}/presence`)
-      expect(decodeBasicAuth(req.headers.get('Authorization'))).toEqual(minterAuth)
-    }),
-  ))
+effectTest('directory.presence runs pre-acquire and routes via minter creds', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedUsers(stub, [GRAEME])
+    yield* stub.respond('GET', `/api/v1/users/${GRAEME.user_id}/presence`, {
+      body: { result: 'success', presence: { aggregated: { status: 'active' } } },
+    })
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    const presence = yield* adapter.directory.presence({
+      id: decodeIdentityIdSync(String(GRAEME.user_id)),
+      name: decodeDisplayNameSync(GRAEME.full_name),
+      kind: 'human',
+    })
+    expect(presence).toBe('online')
+    const req = yield* findRequest(stub, 'GET', `/api/v1/users/${GRAEME.user_id}/presence`)
+    expect(decodeBasicAuth(req.headers.get('Authorization'))).toEqual(minterAuth)
+  }),
+)
 
-test('inbox.subscribe runs pre-acquire and routes /users/me/subscriptions via minter creds', () =>
-  Effect.runPromise(
+effectTest(
+  'inbox.subscribe runs pre-acquire and routes /users/me/subscriptions via minter creds',
+  () =>
     Effect.gen(function* () {
-      seedSubscribeOk('general')
-      const adapter = yield* zulipAdapter(yield* makeConfig())
+      const stub = yield* makeStubHttpClient
+      yield* seedSubscribeOk(stub, 'general')
+      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
       yield* adapter.inbox.subscribe(generalChannel)
-      const subReq = findRequest('POST', '/api/v1/users/me/subscriptions')
+      const subReq = yield* findRequest(stub, 'POST', '/api/v1/users/me/subscriptions')
       expect(decodeBasicAuth(subReq.headers.get('Authorization'))).toEqual(minterAuth)
       // The /register that arms the events queue must also be minter-creds —
       // the queue belongs to the minter so lurking sessions share it.
-      const regReq = findRequest('POST', '/api/v1/register')
+      const regReq = yield* findRequest(stub, 'POST', '/api/v1/register')
       expect(decodeBasicAuth(regReq.headers.get('Authorization'))).toEqual(minterAuth)
     }),
-  ))
+)
 
-test('publisher.post still requires acquire — pre-acquire call dies on the "not acquired" invariant', () =>
-  Effect.runPromise(
+effectTest(
+  'publisher.post still requires acquire — pre-acquire call dies on the "not acquired" invariant',
+  () =>
     Effect.gen(function* () {
-      seedUsers([])
-      const adapter = yield* zulipAdapter(yield* makeConfig())
+      const stub = yield* makeStubHttpClient
+      yield* seedUsers(stub, [])
+      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
       const exit = yield* Effect.exit(
         adapter.publisher.post(generalChannel, decodeMessageBodySync('hello')),
       )
@@ -1719,91 +1746,92 @@ test('publisher.post still requires acquire — pre-acquire call dies on the "no
         expect(String(Cause.squash(exit.cause))).toMatch(/not acquired/)
       }
     }),
-  ))
+)
 
-test('publisher.post after acquire uses BOUND bot creds, not minter creds', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      realm.handle('GET', '/api/v1/streams', () => ({
-        body: {
-          result: 'success',
-          streams: [{ stream_id: 1234, name: 'general' }],
-        },
-      }))
-      realm.handle('POST', '/api/v1/messages', () => ({
-        body: { result: 'success', id: 555 },
-      }))
-      const adapter = yield* buildAdapter() // acquires hermes-agent → rotates key to "fresh-key"
-      yield* adapter.publisher.post(
-        generalChannel,
-        decodeMessageBodySync('attribution-producing message'),
-      )
-      const req = findRequest('POST', '/api/v1/messages')
-      const auth = decodeBasicAuth(req.headers.get('Authorization'))
-      expect(auth.email).toBe(HERMES.email)
-      expect(auth.apiKey).toBe('fresh-key')
-      // And it must NOT be minter creds.
-      expect(auth).not.toEqual(minterAuth)
-    }),
-  ))
+effectTest('publisher.post after acquire uses BOUND bot creds, not minter creds', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* stub.respond('GET', '/api/v1/streams', {
+      body: {
+        result: 'success',
+        streams: [{ stream_id: 1234, name: 'general' }],
+      },
+    })
+    yield* stub.respond('POST', '/api/v1/messages', {
+      body: { result: 'success', id: 555 },
+    })
+    const adapter = yield* buildAdapter(stub) // acquires hermes-agent → rotates key to "fresh-key"
+    yield* adapter.publisher.post(
+      generalChannel,
+      decodeMessageBodySync('attribution-producing message'),
+    )
+    const req = yield* findRequest(stub, 'POST', '/api/v1/messages')
+    const auth = decodeBasicAuth(req.headers.get('Authorization'))
+    expect(auth.email).toBe(HERMES.email)
+    expect(auth.apiKey).toBe('fresh-key')
+    // And it must NOT be minter creds.
+    expect(auth).not.toEqual(minterAuth)
+  }),
+)
 
 const seedStreamsList = (
+  stub: StubHttpClient,
   streams: ReadonlyArray<{ readonly stream_id: number; readonly name: string }>,
-): void => {
-  realm.handle('GET', '/api/v1/streams', () => ({
+): Effect.Effect<void> =>
+  stub.respond('GET', '/api/v1/streams', {
     body: { result: 'success', streams },
-  }))
-}
+  })
 
-test('reconcileMinterSubscriptions GETs /streams filtered to public-not-subscribed', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedStreamsList([])
-      seedUsers([])
-      const adapter = yield* zulipAdapter(yield* makeConfig())
-      yield* adapter.reconcileMinterSubscriptions()
-      const req = findRequest('GET', '/api/v1/streams')
-      expect(req.url.searchParams.get('include_public')).toBe('true')
-      expect(req.url.searchParams.get('include_subscribed')).toBe('false')
-      yield* Effect.promise(() => adapter.close())
-    }),
-  ))
+effectTest('reconcileMinterSubscriptions GETs /streams filtered to public-not-subscribed', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedStreamsList(stub, [])
+    yield* seedUsers(stub, [])
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    yield* adapter.reconcileMinterSubscriptions()
+    const req = yield* findRequest(stub, 'GET', '/api/v1/streams')
+    expect(req.url.searchParams.get('include_public')).toBe('true')
+    expect(req.url.searchParams.get('include_subscribed')).toBe('false')
+    yield* Effect.promise(() => adapter.close())
+  }),
+)
 
-test('reconcileMinterSubscriptions returns empty added when the realm reports no gap', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedStreamsList([])
-      seedUsers([])
-      const adapter = yield* zulipAdapter(yield* makeConfig())
-      const report = yield* adapter.reconcileMinterSubscriptions()
-      expect(report).toEqual({ added: [], error: undefined })
-      expect(
-        realm.captured.find(
-          (r) => r.method === 'POST' && r.url.pathname === '/api/v1/users/me/subscriptions',
-        ),
-      ).toBeUndefined()
-      yield* Effect.promise(() => adapter.close())
-    }),
-  ))
+effectTest('reconcileMinterSubscriptions returns empty added when the realm reports no gap', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedStreamsList(stub, [])
+    yield* seedUsers(stub, [])
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    const report = yield* adapter.reconcileMinterSubscriptions()
+    expect(report).toEqual({ added: [], error: undefined })
+    const reqs = yield* stub.captured
+    expect(
+      reqs.find((r) => r.method === 'POST' && r.url.pathname === '/api/v1/users/me/subscriptions'),
+    ).toBeUndefined()
+    yield* Effect.promise(() => adapter.close())
+  }),
+)
 
-test('reconcileMinterSubscriptions batches every unsubscribed public stream into one POST', () =>
-  Effect.runPromise(
+effectTest(
+  'reconcileMinterSubscriptions batches every unsubscribed public stream into one POST',
+  () =>
     Effect.gen(function* () {
-      seedStreamsList([
+      const stub = yield* makeStubHttpClient
+      yield* seedStreamsList(stub, [
         { stream_id: 11, name: 'commy' },
         { stream_id: 12, name: 'assistant' },
         { stream_id: 13, name: 'homelab' },
       ])
-      realm.handle('POST', '/api/v1/users/me/subscriptions', () => ({
+      yield* stub.respond('POST', '/api/v1/users/me/subscriptions', {
         body: {
           result: 'success',
           subscribed: { 'minter@example.com': ['commy', 'assistant', 'homelab'] },
           already_subscribed: {},
           unauthorized: [],
         },
-      }))
-      seedUsers([])
-      const adapter = yield* zulipAdapter(yield* makeConfig())
+      })
+      yield* seedUsers(stub, [])
+      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
       const report = yield* adapter.reconcileMinterSubscriptions()
       expect(report.added).toEqual([
         decodeChannelNameSync('commy'),
@@ -1811,85 +1839,86 @@ test('reconcileMinterSubscriptions batches every unsubscribed public stream into
         decodeChannelNameSync('homelab'),
       ])
       expect(report.error).toBeUndefined()
-      const post = findRequest('POST', '/api/v1/users/me/subscriptions')
+      const post = yield* findRequest(stub, 'POST', '/api/v1/users/me/subscriptions')
       const subs = JSON.parse(
         new URLSearchParams(post.body).get('subscriptions') ?? '[]',
       ) as unknown
       expect(subs).toEqual([{ name: 'commy' }, { name: 'assistant' }, { name: 'homelab' }])
       yield* Effect.promise(() => adapter.close())
     }),
-  ))
+)
 
-test('reconcileMinterSubscriptions reports only the streams the realm confirms as newly subscribed', () =>
-  Effect.runPromise(
+effectTest(
+  'reconcileMinterSubscriptions reports only the streams the realm confirms as newly subscribed',
+  () =>
     Effect.gen(function* () {
-      seedStreamsList([
+      const stub = yield* makeStubHttpClient
+      yield* seedStreamsList(stub, [
         { stream_id: 11, name: 'commy' },
         { stream_id: 12, name: 'homelab' },
       ])
       // Race: another reconciler already subscribed `homelab` between
       // our list and post. Zulip puts it under already_subscribed and the
       // reconciler's report mirrors that.
-      realm.handle('POST', '/api/v1/users/me/subscriptions', () => ({
+      yield* stub.respond('POST', '/api/v1/users/me/subscriptions', {
         body: {
           result: 'success',
           subscribed: { 'minter@example.com': ['commy'] },
           already_subscribed: { 'minter@example.com': ['homelab'] },
           unauthorized: [],
         },
-      }))
-      seedUsers([])
-      const adapter = yield* zulipAdapter(yield* makeConfig())
+      })
+      yield* seedUsers(stub, [])
+      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
       const report = yield* adapter.reconcileMinterSubscriptions()
       expect(report.added).toEqual([decodeChannelNameSync('commy')])
       expect(report.error).toBeUndefined()
       yield* Effect.promise(() => adapter.close())
     }),
-  ))
+)
 
-test('reconcileMinterSubscriptions captures list failure without throwing', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      realm.handle('GET', '/api/v1/streams', () => ({
-        status: 500,
-        body: { result: 'error', msg: 'realm unreachable' },
-      }))
-      seedUsers([])
-      const adapter = yield* zulipAdapter(yield* makeConfig())
-      const report = yield* adapter.reconcileMinterSubscriptions()
-      expect(report.added).toEqual([])
-      expect(report.error).toBe('realm unreachable')
-      expect(
-        realm.captured.find(
-          (r) => r.method === 'POST' && r.url.pathname === '/api/v1/users/me/subscriptions',
-        ),
-      ).toBeUndefined()
-      yield* Effect.promise(() => adapter.close())
-    }),
-  ))
+effectTest('reconcileMinterSubscriptions captures list failure without throwing', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* stub.respond('GET', '/api/v1/streams', {
+      status: 500,
+      body: { result: 'error', msg: 'realm unreachable' },
+    })
+    yield* seedUsers(stub, [])
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    const report = yield* adapter.reconcileMinterSubscriptions()
+    expect(report.added).toEqual([])
+    expect(report.error).toBe('realm unreachable')
+    const reqs = yield* stub.captured
+    expect(
+      reqs.find((r) => r.method === 'POST' && r.url.pathname === '/api/v1/users/me/subscriptions'),
+    ).toBeUndefined()
+    yield* Effect.promise(() => adapter.close())
+  }),
+)
 
-test('reconcileMinterSubscriptions routes via minter creds', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      seedStreamsList([{ stream_id: 11, name: 'commy' }])
-      realm.handle('POST', '/api/v1/users/me/subscriptions', () => ({
-        body: {
-          result: 'success',
-          subscribed: { 'minter@example.com': ['commy'] },
-          already_subscribed: {},
-          unauthorized: [],
-        },
-      }))
-      seedUsers([])
-      const adapter = yield* zulipAdapter(yield* makeConfig())
-      yield* adapter.reconcileMinterSubscriptions()
-      const listReq = findRequest('GET', '/api/v1/streams')
-      const postReq = findRequest('POST', '/api/v1/users/me/subscriptions')
-      expect(decodeBasicAuth(listReq.headers.get('Authorization'))).toEqual(minterAuth)
-      expect(decodeBasicAuth(postReq.headers.get('Authorization'))).toEqual(minterAuth)
-      yield* Effect.promise(() => adapter.close())
-    }),
-  ))
+effectTest('reconcileMinterSubscriptions routes via minter creds', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedStreamsList(stub, [{ stream_id: 11, name: 'commy' }])
+    yield* stub.respond('POST', '/api/v1/users/me/subscriptions', {
+      body: {
+        result: 'success',
+        subscribed: { 'minter@example.com': ['commy'] },
+        already_subscribed: {},
+        unauthorized: [],
+      },
+    })
+    yield* seedUsers(stub, [])
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    yield* adapter.reconcileMinterSubscriptions()
+    const listReq = yield* findRequest(stub, 'GET', '/api/v1/streams')
+    const postReq = yield* findRequest(stub, 'POST', '/api/v1/users/me/subscriptions')
+    expect(decodeBasicAuth(listReq.headers.get('Authorization'))).toEqual(minterAuth)
+    expect(decodeBasicAuth(postReq.headers.get('Authorization'))).toEqual(minterAuth)
+    yield* Effect.promise(() => adapter.close())
+  }),
+)
 
 // --- attachmentReference (comms-nsa) ---
 
