@@ -26,8 +26,6 @@ import {
   InboxError,
 } from '@commy/core/ports'
 import { memoryAdapter } from '@commy/memory/adapter'
-import type { ZulipAdapter } from '@commy/zulip/adapter'
-import { decodeUserUploadPathSync } from '@commy/zulip/http'
 import {
   Cause,
   Duration,
@@ -44,6 +42,13 @@ import { EnvConfigError, NotInRepo, parseEnv, substrateAdapterLayer } from './bo
 import type { CursorStore } from './cursor-store.ts'
 import { CursorStoreTag } from './cursor-store.ts'
 import type { IdentityCache } from './identity-cache.ts'
+// Above-port unit tests drive the substrate through hand-rolled port fakes and
+// the in-memory adapter only — never the real Zulip adapter (see
+// docs/architecture.md § Test architecture). `completeAsSubstrate` is the single
+// seam that completes either to the Zulip-shaped `SubstrateAdapter` port, and it
+// re-exports the `ZulipAdapter` type so this file names no `@commy/zulip` module
+// directly.
+import { completeAsSubstrate, type ZulipAdapter } from './memory-substrate.ts'
 import { clientDisconnect, forkIdleSweep, makeProgram, type ProgramParams } from './server.ts'
 import { testPlatformLayer } from './test-platform.ts'
 
@@ -178,29 +183,20 @@ const buildFakeAdapter = (
     added: [] as ReadonlyArray<ChannelName>,
     error: undefined as string | undefined,
   }
-  const adapter: ZulipAdapter = {
-    identity: identityPort,
-    publisher,
-    inbox,
-    history,
-    directory,
-    reconcileMinterSubscriptions: () =>
-      Effect.sync(() => {
-        events.push('reconcile')
-        reconcileCalls.count += 1
-        return options.reconcileReport ?? defaultReconcileReport
-      }),
-    downloadFile: () =>
-      Effect.succeed({
-        data: new Uint8Array([]),
-        contentType: 'application/octet-stream',
-      }),
-    uploadFile: () =>
-      Effect.succeed({ url: decodeUserUploadPathSync('/user_uploads/0/stub'), filename: 'stub' }),
-    close: async () => {
-      closes.count += 1
+  const adapter = completeAsSubstrate(
+    { identity: identityPort, publisher, inbox, history, directory },
+    {
+      reconcileMinterSubscriptions: () =>
+        Effect.sync(() => {
+          events.push('reconcile')
+          reconcileCalls.count += 1
+          return options.reconcileReport ?? defaultReconcileReport
+        }),
+      close: async () => {
+        closes.count += 1
+      },
     },
-  }
+  )
   return { adapter, calls: { acquired, closes, subscribed, reconcileCalls, events } }
 }
 
@@ -314,21 +310,14 @@ test('main drives a real memory adapter through acquire + env subscribe + close'
     }).pipe(Effect.flatMap(() => realSubscribe(target)))
   let closes = 0
   const oneShotEvents: MessageInbox['events'] = () => Stream.empty
-  const memoryAdapterAsZulipShape: ZulipAdapter = {
-    ...adapter,
-    inbox: { ...adapter.inbox, subscribe: spy, events: oneShotEvents },
-    reconcileMinterSubscriptions: () => Effect.succeed({ added: [], error: undefined }),
-    downloadFile: () =>
-      Effect.succeed({
-        data: new Uint8Array([]),
-        contentType: 'application/octet-stream',
-      }),
-    uploadFile: () =>
-      Effect.succeed({ url: decodeUserUploadPathSync('/user_uploads/0/stub'), filename: 'stub' }),
-    close: async () => {
-      closes += 1
+  const memoryAdapterAsZulipShape = completeAsSubstrate(
+    { ...adapter, inbox: { ...adapter.inbox, subscribe: spy, events: oneShotEvents } },
+    {
+      close: async () => {
+        closes += 1
+      },
     },
-  }
+  )
   const env = {
     ...validEnv,
     COMMY_SUBSCRIBE: 'channel:home,thread:home/payments,mentions',

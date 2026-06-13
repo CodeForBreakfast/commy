@@ -17,14 +17,14 @@
  * reproduction of the very race under test).
  */
 import { stderrLoggerLayer } from '@commy/core/logging'
-import { type MemoryAdapter, memoryAdapter } from '@commy/memory/adapter'
-import type { ZulipAdapter } from '@commy/zulip/adapter'
+import { memoryAdapter } from '@commy/memory/adapter'
 import { FetchHttpClient } from '@effect/platform'
 import { BunFileSystem, BunRuntime } from '@effect/platform-bun'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ConfigProvider, Effect, Layer, Option } from 'effect'
 import { substrateAdapterLayer } from './bootstrap.ts'
 import { CursorStoreTag } from './cursor-store.ts'
+import { completeAsSubstrate } from './memory-substrate.ts'
 import { clientDisconnect, makeProgram } from './server.ts'
 
 const inMemoryCursorStore = {
@@ -33,23 +33,20 @@ const inMemoryCursorStore = {
 }
 
 /**
- * The in-memory substrate is a `MemoryAdapter`; complete it to the
- * `ZulipAdapter` shape the program expects. `reconcileMinterSubscriptions`
- * (boot) and `close` (shutdown finalizer) are exercised, so they are real
- * no-ops; `uploadFile`/`downloadFile` are never reached without an MCP
- * client driving tools.
+ * Complete the in-memory substrate to the `ZulipAdapter` shape the program
+ * expects. `reconcileMinterSubscriptions` (boot) and `close` (shutdown
+ * finalizer) are exercised, so the helper's inert no-ops suffice;
+ * `uploadFile`/`downloadFile` are never reached without an MCP client driving
+ * tools, so they die loudly if anything calls them.
  */
-const asZulipAdapter = (adapter: Effect.Effect<MemoryAdapter>): Effect.Effect<ZulipAdapter> =>
-  Effect.map(
-    adapter,
-    (base): ZulipAdapter => ({
-      ...base,
-      reconcileMinterSubscriptions: () => Effect.succeed({ added: [], error: undefined }),
+const substrate = memoryAdapter().pipe(
+  Effect.map((base) =>
+    completeAsSubstrate(base, {
       uploadFile: () => Effect.die(new Error('disconnect-exit fixture: uploadFile unused')),
       downloadFile: () => Effect.die(new Error('disconnect-exit fixture: downloadFile unused')),
-      close: async () => {},
     }),
-  )
+  ),
+)
 
 let attached = 0
 const armedStdin = {
@@ -71,7 +68,7 @@ BunRuntime.runMain(
     Effect.provide(
       Layer.provideMerge(
         Layer.mergeAll(
-          substrateAdapterLayer(asZulipAdapter(memoryAdapter())),
+          substrateAdapterLayer(substrate),
           Layer.succeed(CursorStoreTag, inMemoryCursorStore),
           stderrLoggerLayer,
         ),
