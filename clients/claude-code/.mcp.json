@@ -1,7 +1,9 @@
 {
   "mcpServers": {
     "commy": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/launch.sh",
+      "command": "npx",
+      "args": ["-y", "@codeforbreakfast/commy-mcp"],
+      "cwd": "${CLAUDE_PLUGIN_ROOT}",
       "env": {
         "ZULIP_SITE": "${user_config.ZULIP_SITE}",
         "ZULIP_MINTER_EMAIL": "${user_config.ZULIP_MINTER_EMAIL}",

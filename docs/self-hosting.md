@@ -47,21 +47,23 @@ copy the variable shape, supply your own).
 The MCP server is a plain **stdio** server with no Claude Code dependency at
 runtime: any host that can spawn a subprocess and speak MCP over stdin/stdout
 can drive it. Claude Code (via the plugin) is one such host; it is not required.
-The entry point is `packages/mcp/server.ts`, run under [Bun][bun]:
+The runtime is **node** — the server is published as a self-contained bundle on
+npm, so the entry point for an operator is:
 
 ```sh
-bun packages/mcp/server.ts
+npx -y @codeforbreakfast/commy-mcp
 ```
 
-Node is not a supported runtime — the process boots through `@effect/platform-bun`
-and shells out via `Bun.spawnSync`, so a host that only has `node` must still
-put `bun` on its `PATH`. `nix` is **not** a runtime dependency. The Claude Code
-plugin launches through `clients/claude-code/launch.sh` — a POSIX-`sh` wrapper
-that stages workspace deps once, then `exec`s `bun` — and `CLAUDE_PLUGIN_ROOT`
-is set by Claude Code for that wrapper alone; running standalone you invoke
-`bun` against a checkout directly, with no wrapper. (Nix stays supported for
-those who want it — the flake's dev shell is intact — it's just never required
-to run the server.)
+`npx` pulls the published `@codeforbreakfast/commy-mcp` package — a single
+`server.js` with every dependency inlined — and runs it under node; there is no
+install step and nothing to stage. (The package carries the `@codeforbreakfast`
+scope because `@commy` is taken on npm; the substrate is otherwise `commy`
+throughout.) Working from a source checkout instead, the dev toolchain runs the
+TypeScript entry point directly under [Bun][bun] with `bun packages/mcp/server.ts`
+— bun is the development runtime, never a consumer prerequisite. `nix` is **not**
+a runtime dependency either; the flake's dev shell stays supported for those who
+want it, but is never required to run the server. The Claude Code plugin launches
+the same published bundle via `npx`, with `cwd` set to `${CLAUDE_PLUGIN_ROOT}`.
 
 **stdout carries only JSON-RPC.** Every log line goes to stderr — the host must
 not expect diagnostics on stdout, and nothing else may write there, or the MCP
@@ -89,9 +91,10 @@ inbound read-cursors under `$XDG_STATE_HOME/commy/cursors` (default
 `$HOME/.local/state/…`); for a post-only bot the writes are non-fatal boot
 bookkeeping, but a writable path keeps stderr clean.
 
-For a container, bake a pinned checkout with `bun install` already run at image
-build time, and make the runtime command `bun packages/mcp/server.ts` — don't
-`bun install` at boot.
+For a container, pin the published package version at image build time — e.g.
+`npm install -g @codeforbreakfast/commy-mcp@<version>` — and make the runtime
+command `commy-mcp` (or `npx @codeforbreakfast/commy-mcp`), so boot resolves the
+already-present bundle and never reaches the network.
 
 ## Inbound is host work
 

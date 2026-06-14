@@ -66,12 +66,13 @@ listening the moment they boot. To set any of these non-interactively, repeat
 After install, `/mcp` lists `commy` in any Claude Code session running as the
 same user. `claude plugin update commy@commy` pulls the latest released tag.
 
-> **One dependency:** the plugin runs on [Bun][bun], so all it needs is `bun`
-> (≥ 1.3.13) on the host `PATH` — nothing else. Full plugin configuration,
-> run-shapes, and troubleshooting live in
+> **One dependency:** the plugin runs on [Node][node], so all it needs is `node`
+> (≥ 23.6) on the host `PATH` — nothing else. `npx` pulls the published,
+> self-contained server bundle; there is no install step. Full plugin
+> configuration, run-shapes, and troubleshooting live in
 > [`clients/claude-code/README.md`](clients/claude-code/README.md).
 
-[bun]: https://bun.sh
+[node]: https://nodejs.org
 
 ### Not running Claude Code?
 
