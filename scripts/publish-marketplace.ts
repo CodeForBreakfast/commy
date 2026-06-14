@@ -1,6 +1,15 @@
-import { cpSync, existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+} from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, relative } from 'node:path'
 
 import { assembleNpmPackage, NPM_PACKAGE_NAME } from './assemble-npm-package.ts'
 
@@ -42,8 +51,49 @@ export function stageMarketplace(
     recursive: true,
     filter: stageFilter,
   })
-  const override = join(stagingDir, 'clients', 'claude-code', 'node_modules', NPM_PACKAGE_NAME)
+  const nodeModules = join(stagingDir, 'clients', 'claude-code', 'node_modules')
+  const override = join(nodeModules, NPM_PACKAGE_NAME)
   assemble(repoRoot, override)
+  linkLocalBin(nodeModules, NPM_PACKAGE_NAME)
+}
+
+// npm normalises a package's `bin`: a string means a single bin named after the
+// package's unscoped name; an object maps bin names to relative paths.
+function normalizeBin(
+  packageName: string,
+  bin: string | Record<string, string> | undefined,
+): Record<string, string> {
+  if (typeof bin === 'string') {
+    const unscoped = packageName.includes('/')
+      ? (packageName.split('/').pop() ?? packageName)
+      : packageName
+    return { [unscoped]: bin }
+  }
+  return bin ?? {}
+}
+
+// Recreate what `npm install` does for the staged override: link each of its `bin`
+// entries into node_modules/.bin and make the target executable. The launcher is a
+// bare `npx @codeforbreakfast/commy-mcp` (no version pin, so a fleet seat resolves
+// this LOCAL override with zero registry hops); npx resolves a package's bin, so
+// without the .bin link it falls through to a PATH lookup and dies
+// `commy-mcp: command not found`, booting every fleet seat toolless (comms-hl7y).
+// The link is RELATIVE so it survives atomicSwap renaming the staging dir into the
+// fixed path — an absolute link into the staging path would dangle.
+function linkLocalBin(nodeModulesDir: string, packageName: string): void {
+  const pkgDir = join(nodeModulesDir, packageName)
+  const manifest = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8')) as {
+    readonly bin?: string | Record<string, string>
+  }
+  const binDir = join(nodeModulesDir, '.bin')
+  mkdirSync(binDir, { recursive: true })
+  for (const [name, rel] of Object.entries(normalizeBin(packageName, manifest.bin))) {
+    const target = join(pkgDir, rel)
+    chmodSync(target, 0o755)
+    const link = join(binDir, name)
+    rmSync(link, { force: true })
+    symlinkSync(relative(binDir, target), link)
+  }
 }
 
 // Replace targetPath with stagingDir atomically enough for a deliberate, single
@@ -104,11 +154,17 @@ async function drainStream(stream: ReadableStream<Uint8Array>): Promise<string> 
   return text
 }
 
-// Kill the child's entire process group. The server runs an event pump and never
-// exits on stdin EOF, and it may itself fork; signalling only the direct child
-// can orphan a forked grandchild that keeps the inherited stdout pipe open, so a
-// bare `child.kill()` hangs. Spawning detached makes the child a session/group
-// leader (setsid), and signalling the negative pid reaps the whole tree.
+// The unscoped package name is the bin name npm links into node_modules/.bin and
+// the name npx resolves (`npx @codeforbreakfast/commy-mcp` execs `.bin/commy-mcp`).
+const BIN_NAME = NPM_PACKAGE_NAME.includes('/')
+  ? (NPM_PACKAGE_NAME.split('/').pop() ?? NPM_PACKAGE_NAME)
+  : NPM_PACKAGE_NAME
+
+// Kill the child's entire process group. The server may fork, and signalling only
+// the direct child can orphan a forked grandchild that keeps the inherited stdout
+// pipe open, so a bare `child.kill()` can hang. Spawning detached makes the child a
+// session/group leader (setsid), and signalling the negative pid reaps the whole
+// tree — we stop at the first serverInfo rather than driving a full disconnect.
 function killBootGroup(child: Bun.Subprocess): void {
   try {
     process.kill(-child.pid, 'SIGKILL')
@@ -117,16 +173,17 @@ function killBootGroup(child: Bun.Subprocess): void {
   }
 }
 
-// Boot smoke test: launch the freshly staged bundle under `node` from the plugin
-// dir — the same node-runnable @codeforbreakfast/commy-mcp/server.js that the
-// `.mcp.json` launcher resolves via npx — and require an MCP initialize response.
-// A bundle that fails to load (syntax error, missing builtin) exits before
-// answering, so the release aborts instead of shipping a server that fails to
-// reconnect (-32000). The real server runs an event pump and won't exit on stdin
-// EOF, so we stop at the first serverInfo and kill the child's process group
-// rather than waiting for it to close.
+// Boot smoke test: launch the freshly staged bundle through its bin entry —
+// node_modules/.bin/<BIN_NAME>, the exact file the `.mcp.json` launcher's
+// `npx @codeforbreakfast/commy-mcp` resolves and execs (via its shebang) — and
+// require an MCP initialize response. Going through the bin entry, not a bare
+// `node server.js`, means the smoke catches a missing/broken bin link or a
+// non-executable entry (comms-hl7y) as well as a bundle that fails to load (syntax
+// error, missing builtin); either way the release aborts instead of shipping a
+// server every seat fails to launch. We stop at the first serverInfo and kill the
+// child's process group rather than driving a full client disconnect.
 export async function verifyBoots(pluginDir: string, timeoutMs = 30_000): Promise<void> {
-  const child = Bun.spawn(['node', join('node_modules', NPM_PACKAGE_NAME, 'server.js')], {
+  const child = Bun.spawn([join(pluginDir, 'node_modules', '.bin', BIN_NAME)], {
     cwd: pluginDir,
     stdin: 'pipe',
     stdout: 'pipe',
