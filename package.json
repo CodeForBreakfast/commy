@@ -11,6 +11,7 @@
   "scripts": {
     "prepare": "git config core.hooksPath .hooks && effect-language-service patch",
     "build": "bun build packages/mcp/server.ts --target=node --outfile packages/mcp/dist/server.js && bun build clients/claude-code/hooks/inject-session-id.ts --target=node --outfile clients/claude-code/dist/inject-session-id.js",
+    "pack:npm": "bun scripts/assemble-npm-package.ts",
     "start": "bun install --no-summary && bun packages/mcp/server.ts",
     "check": "bun install --no-summary && bunx turbo run test",
     "test": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check (via turbo) instead of bun run test directly' >&2; exit 1; } && bun test",
