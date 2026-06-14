@@ -1,4 +1,8 @@
-import { expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { MessageInbox, SubscriptionTarget } from '@commy/core/ports'
 import {
   decodeBotNameSync,
@@ -8,6 +12,7 @@ import {
   InboxError,
 } from '@commy/core/ports'
 import { ApiKey, BotEmail, RealmUrl } from '@commy/zulip/http'
+import { NodeContext } from '@effect/platform-node'
 import { Effect, Option, Redacted, Stream } from 'effect'
 import type { ParsedEnv, ProjectSlug, SessionId } from './bootstrap.ts'
 import {
@@ -19,6 +24,7 @@ import {
   parseBotName,
   parseEnv,
   parseSessionId,
+  readGitContext,
   sanitiseProjectSlug,
   subscribeFromEnv,
 } from './bootstrap.ts'
@@ -547,14 +553,16 @@ test('sanitiseProjectSlug preserves digits and dashes inside the slug', () => {
 // deriveProject returns ProjectSlug | undefined (comms-tud); cast to
 // string | undefined for assertion readability (same as slugStr above).
 const deriveStr = (deps: Parameters<typeof deriveProject>[0]): string | undefined =>
-  Option.getOrUndefined(deriveProject(deps)) as string | undefined
+  Option.getOrUndefined(Effect.runSync(deriveProject(deps))) as string | undefined
 
 test('deriveProject prefers explicit COMMY_PROJECT env value', () => {
   const result = deriveStr({
     project: slug('override'),
     cwd: '/home/x/anything',
     readGitContext: () =>
-      InRepo({ gitRoot: '/home/x/anything', remoteBasename: Option.some('remote-name') }),
+      Effect.succeed(
+        InRepo({ gitRoot: '/home/x/anything', remoteBasename: Option.some('remote-name') }),
+      ),
   })
   expect(result).toBe('override')
 })
@@ -563,7 +571,7 @@ test('deriveProject returns a pre-sanitised ProjectSlug verbatim (comms-tud)', (
   const result = deriveStr({
     project: slug('My_Project'),
     cwd: '/home/x',
-    readGitContext: () => NotInRepo(),
+    readGitContext: () => Effect.succeed(NotInRepo()),
   })
   expect(result).toBe('my-project')
 })
@@ -572,7 +580,9 @@ test('deriveProject falls back to git remote basename when env value absent', ()
   const result = deriveStr({
     cwd: '/home/x/assistant',
     readGitContext: () =>
-      InRepo({ gitRoot: '/home/x/assistant', remoteBasename: Option.some('assistant') }),
+      Effect.succeed(
+        InRepo({ gitRoot: '/home/x/assistant', remoteBasename: Option.some('assistant') }),
+      ),
   })
   expect(result).toBe('assistant')
 })
@@ -581,7 +591,9 @@ test('deriveProject sanitises the git remote basename (mid-word truncation accep
   const result = deriveStr({
     cwd: '/home/x/foo',
     readGitContext: () =>
-      InRepo({ gitRoot: '/home/x/foo', remoteBasename: Option.some('My-Project_v2') }),
+      Effect.succeed(
+        InRepo({ gitRoot: '/home/x/foo', remoteBasename: Option.some('My-Project_v2') }),
+      ),
   })
   expect(result).toBe('my-project-v')
 })
@@ -589,7 +601,8 @@ test('deriveProject sanitises the git remote basename (mid-word truncation accep
 test('deriveProject falls back to git-root basename when no remote', () => {
   const result = deriveStr({
     cwd: '/home/x/assistant/scripts',
-    readGitContext: () => InRepo({ gitRoot: '/home/x/assistant', remoteBasename: Option.none() }),
+    readGitContext: () =>
+      Effect.succeed(InRepo({ gitRoot: '/home/x/assistant', remoteBasename: Option.none() })),
   })
   expect(result).toBe('assistant')
 })
@@ -597,7 +610,7 @@ test('deriveProject falls back to git-root basename when no remote', () => {
 test('deriveProject returns undefined when cwd is not in a git repo', () => {
   const result = deriveStr({
     cwd: '/tmp',
-    readGitContext: () => NotInRepo(),
+    readGitContext: () => Effect.succeed(NotInRepo()),
   })
   expect(result).toBeUndefined()
 })
@@ -866,3 +879,48 @@ test('subscribeFromEnv returns an empty array when COMMY_SUBSCRIBE is unset', ()
       expect(intents).toEqual([])
     }),
   ))
+
+// Deliberate node-runtime pass (comms-iw8w.1): the default `readGitContext`
+// now shells out via the `@effect/platform` command executor instead of
+// `Bun.spawnSync`. CI runs the suite under bun, so exercise the real probe
+// against a temp git repo while providing the node `CommandExecutor`
+// (NodeContext.layer) — the production runtime path — rather than the
+// injected fakes the deriveProject tests use.
+describe('readGitContext on the node command executor', () => {
+  const runProbe = (cwd: string) =>
+    Effect.runPromise(readGitContext(cwd).pipe(Effect.provide(NodeContext.layer)))
+
+  const withTempDir = async (run: (dir: string) => Promise<void>): Promise<void> => {
+    const dir = mkdtempSync(join(tmpdir(), 'commy-gitctx-'))
+    try {
+      await run(dir)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  test('reads gitRoot and the origin remote basename for a real repo', () =>
+    withTempDir(async (dir) => {
+      execFileSync('git', ['init', '-q'], { cwd: dir })
+      execFileSync('git', ['remote', 'add', 'origin', 'https://example.com/acme/widgets.git'], {
+        cwd: dir,
+      })
+      const context = await runProbe(dir)
+      if (context._tag !== 'InRepo') throw new Error(`expected InRepo, got ${context._tag}`)
+      expect(context.gitRoot.length).toBeGreaterThan(0)
+      expect(Option.getOrUndefined(context.remoteBasename)).toBe('widgets')
+    }))
+
+  test('reports InRepo with no remote basename when origin is absent', () =>
+    withTempDir(async (dir) => {
+      execFileSync('git', ['init', '-q'], { cwd: dir })
+      const context = await runProbe(dir)
+      if (context._tag !== 'InRepo') throw new Error(`expected InRepo, got ${context._tag}`)
+      expect(Option.isNone(context.remoteBasename)).toBe(true)
+    }))
+
+  test('reports NotInRepo for a directory outside any git repo', () =>
+    withTempDir(async (dir) => {
+      expect(await runProbe(dir)).toEqual(NotInRepo())
+    }))
+})

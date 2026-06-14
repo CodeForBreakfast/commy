@@ -1,5 +1,5 @@
-import type { FileSystem } from '@effect/platform'
-import { BunFileSystem } from '@effect/platform-bun'
+import type { CommandExecutor, FileSystem } from '@effect/platform'
+import { NodeContext } from '@effect/platform-node'
 import { ConfigProvider, Layer } from 'effect'
 
 /**
@@ -23,13 +23,14 @@ export const testConfigProviderLayer = (
 
 /**
  * Fixture platform bundle for the boot tests: the fixture config source
- * plus the real file system. The substituted-adapter test programs read
- * `FileSystem` from context (the cursor store) and the ConfigProvider at
- * build; they never reach the network, so no `HttpClient` leaf is needed.
- * This is the test-side mirror of production's `PlatformLive` — provision
- * at the dependency boundary over the same app composition.
+ * plus the node platform context. The substituted-adapter test programs read
+ * `FileSystem` from context (the cursor store) and the command executor (the
+ * per-call project probe), plus the ConfigProvider at build; they never reach
+ * the network, so no `HttpClient` leaf is needed. This is the test-side mirror
+ * of production's `PlatformLive` — provision at the dependency boundary over
+ * the same app composition.
  */
 export const testPlatformLayer = (
   env: Record<string, string | undefined>,
-): Layer.Layer<FileSystem.FileSystem> =>
-  Layer.merge(testConfigProviderLayer(env), BunFileSystem.layer)
+): Layer.Layer<FileSystem.FileSystem | CommandExecutor.CommandExecutor> =>
+  Layer.merge(testConfigProviderLayer(env), NodeContext.layer)

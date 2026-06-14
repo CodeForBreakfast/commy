@@ -25,7 +25,7 @@ interface SessionRig {
 const buildSessionRig = (
   options: {
     readonly idleReleaseMs?: number
-    readonly projectForCwd?: (cwd: string | undefined) => ProjectSlug | undefined
+    readonly projectForCwd?: (cwd: string | undefined) => Effect.Effect<ProjectSlug | undefined>
   } = {},
 ): Effect.Effect<SessionRig, never, Scope.Scope> =>
   Effect.gen(function* () {
@@ -354,9 +354,11 @@ test('post with session_id + cwd mints cc-<project>-<sid-prefix> derived from cw
       Effect.gen(function* () {
         const rig = yield* buildSessionRig({
           projectForCwd: (cwd) =>
-            cwd === '/home/x/assistant'
-              ? Option.getOrUndefined(sanitiseProjectSlug('assistant'))
-              : undefined,
+            Effect.succeed(
+              cwd === '/home/x/assistant'
+                ? Option.getOrUndefined(sanitiseProjectSlug('assistant'))
+                : undefined,
+            ),
         })
         const result = yield* Effect.promise(() =>
           rig.client.callTool({
@@ -389,7 +391,7 @@ test('two sessions in different cwds mint two different project prefixes (ass-v7
           '/home/x/homelab': slug('homelab'),
         }
         const rig = yield* buildSessionRig({
-          projectForCwd: (cwd) => (cwd === undefined ? undefined : cwdToSlug[cwd]),
+          projectForCwd: (cwd) => Effect.succeed(cwd === undefined ? undefined : cwdToSlug[cwd]),
         })
         yield* Effect.promise(() =>
           rig.client.callTool({
@@ -428,7 +430,7 @@ test('post with cwd from a non-project directory falls back to bare cc-<8> (ass-
       Effect.gen(function* () {
         // projectForCwd returns undefined when cwd is not in a known repo.
         // The minted name must NOT inherit the plugin's own location.
-        const rig = yield* buildSessionRig({ projectForCwd: () => undefined })
+        const rig = yield* buildSessionRig({ projectForCwd: () => Effect.succeed(undefined) })
         yield* Effect.promise(() =>
           rig.client.callTool({
             name: 'post',

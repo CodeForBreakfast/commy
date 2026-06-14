@@ -138,7 +138,7 @@ export interface RegisterToolsDeps {
    * the git probe; defaults to a constant `undefined` resolver when
    * omitted (tests that don't care about per-session derivation).
    */
-  readonly projectForCwd?: (cwd: string | undefined) => ProjectSlug | undefined
+  readonly projectForCwd?: (cwd: string | undefined) => Effect.Effect<ProjectSlug | undefined>
   readonly downloadFile?: (
     urlPath: UserUploadPath,
   ) => Effect.Effect<
@@ -355,7 +355,7 @@ const UploadFileArgs = Schema.Struct({ path: Schema.String })
 
 const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyArray<ToolDef> => {
   const { adapter, identityCache, narrowSet } = deps
-  const projectForCwd = deps.projectForCwd ?? (() => undefined)
+  const projectForCwd = deps.projectForCwd ?? (() => Effect.succeed(undefined))
   const sessionIdField = {
     type: 'string',
     description:
@@ -380,8 +380,9 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     const raw = args['cwd']
     return typeof raw === 'string' ? raw : undefined
   }
-  const projectForArgs = (args: Readonly<Record<string, unknown>>): ProjectSlug | undefined =>
-    projectForCwd(readCwd(args))
+  const projectForArgs = (
+    args: Readonly<Record<string, unknown>>,
+  ): Effect.Effect<ProjectSlug | undefined> => projectForCwd(readCwd(args))
   // Sticky engagement (comms-iut): active participation in a thread —
   // posting or reacting — implies interest in its replies. Idempotent;
   // narrow-set add is set-backed and inbox.subscribe mirrors the explicit
@@ -412,7 +413,9 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
       handler: async (args): Promise<CurrentIdentityResult> => {
         const sessionId = readSessionId(args)
         const ensureBound = await runEdge(
-          identityCache.ensureBoundFor(sessionId, projectForArgs(args)),
+          Effect.flatMap(projectForArgs(args), (project) =>
+            identityCache.ensureBoundFor(sessionId, project),
+          ),
         )
         const current = ensureBound.current()
         if (current === undefined) {
@@ -529,7 +532,9 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
       },
       handler: async (args) => {
         const ensureBound = await runEdge(
-          identityCache.ensureBoundFor(readSessionId(args), projectForArgs(args)),
+          Effect.flatMap(projectForArgs(args), (project) =>
+            identityCache.ensureBoundFor(readSessionId(args), project),
+          ),
         )
         await ensureBound()
         const ref = await runEdge(
@@ -587,7 +592,9 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
       },
       handler: async (args) => {
         const ensureBound = await runEdge(
-          identityCache.ensureBoundFor(readSessionId(args), projectForArgs(args)),
+          Effect.flatMap(projectForArgs(args), (project) =>
+            identityCache.ensureBoundFor(readSessionId(args), project),
+          ),
         )
         await ensureBound()
         const ref = await runEdge(
@@ -628,7 +635,9 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
       },
       handler: async (args) => {
         const ensureBound = await runEdge(
-          identityCache.ensureBoundFor(readSessionId(args), projectForArgs(args)),
+          Effect.flatMap(projectForArgs(args), (project) =>
+            identityCache.ensureBoundFor(readSessionId(args), project),
+          ),
         )
         await ensureBound()
         const ref = await runEdge(
@@ -663,7 +672,9 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
       },
       handler: async (args) => {
         const ensureBound = await runEdge(
-          identityCache.ensureBoundFor(readSessionId(args), projectForArgs(args)),
+          Effect.flatMap(projectForArgs(args), (project) =>
+            identityCache.ensureBoundFor(readSessionId(args), project),
+          ),
         )
         await ensureBound()
         await runEdge(

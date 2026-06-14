@@ -4,11 +4,11 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { decodeIdentityIdSync, decodeTimestampSync } from '@commy/core/ports'
 import { FileSystem } from '@effect/platform'
-import { BunFileSystem } from '@effect/platform-bun'
+import { NodeFileSystem } from '@effect/platform-node'
 import { ConfigProvider, Effect, Option } from 'effect'
 import { createFileCursorStore, cursorDirConfig } from './cursor-store.ts'
 
-const fs = Effect.runSync(FileSystem.FileSystem.pipe(Effect.provide(BunFileSystem.layer)))
+const fs = Effect.runSync(FileSystem.FileSystem.pipe(Effect.provide(NodeFileSystem.layer)))
 
 const buildTmpDir = (): { readonly path: string; readonly cleanup: () => void } => {
   const path = mkdtempSync(join(tmpdir(), 'cursor-store-'))
