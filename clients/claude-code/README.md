@@ -23,7 +23,8 @@ it — and then `exec`s `bun` against the server entrypoint. The `exec` keeps th
 server Claude Code's direct child (so a session disconnect actually reaches it);
 the stage runs only when `node_modules` is genuinely absent, so every launch
 after the first is a plain `exec` with no install. The PreToolUse hook
-(`inject-session-id.ts`) likewise runs under `bun` on PATH; it imports no
+(`inject-session-id.ts`) runs under `node` on PATH — node's native TypeScript
+type-stripping (node ≥23.6) runs the `.ts` entrypoint directly; it imports no
 workspace packages, so it needs nothing staged.
 
 [bun]: https://bun.sh

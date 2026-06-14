@@ -10,7 +10,7 @@ interface HookOutput {
 }
 
 const runHook = async (stdin: string): Promise<HookOutput> => {
-  const proc = Bun.spawn(['bun', SCRIPT_PATH], {
+  const proc = Bun.spawn(['node', SCRIPT_PATH], {
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
