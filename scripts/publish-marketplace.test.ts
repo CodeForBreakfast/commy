@@ -1,14 +1,18 @@
 import { afterEach, expect, test } from 'bun:test'
 import {
+  chmodSync,
   closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
   readdirSync,
   readFileSync,
   readSync,
+  realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
@@ -48,7 +52,10 @@ function writeFile(path: string, content: string): void {
 const STAGED_PACKAGE_NAME = '@codeforbreakfast/commy-mcp'
 function stubAssemble(_repoRoot: string, outDir: string): void {
   writeFile(join(outDir, 'server.js'), '#!/usr/bin/env node\nprocess.exit(0)\n')
-  writeFile(join(outDir, 'package.json'), JSON.stringify({ name: STAGED_PACKAGE_NAME }))
+  writeFile(
+    join(outDir, 'package.json'),
+    JSON.stringify({ name: STAGED_PACKAGE_NAME, bin: './server.js' }),
+  )
 }
 
 // The default target dir's leaf path component (~/.local/share/<dir>/marketplace)
@@ -117,6 +124,31 @@ test('stageMarketplace stages the node bundle as the local @codeforbreakfast/com
   expect(existsSync(join(override, 'server.js'))).toBe(true)
   const manifest = JSON.parse(readFileSync(join(override, 'package.json'), 'utf8'))
   expect(manifest.name).toBe('@codeforbreakfast/commy-mcp')
+})
+
+// The launcher is a bare `npx @codeforbreakfast/commy-mcp` (no version pin) so a
+// fleet seat resolves the staged LOCAL override with zero registry hops. But npx
+// resolves a package's *bin*, and a hand-placed override carries no
+// node_modules/.bin link — npm install would create it. Without the link npx
+// falls through to a PATH lookup and dies `commy-mcp: command not found`, so every
+// fleet seat boots toolless (comms-hl7y). stageMarketplace must recreate the link
+// (relative, so it survives the atomic rename into the fixed path) and make the
+// entry executable, mirroring an install.
+test('stageMarketplace links the local bin so npx resolves the override with zero registry hops', () => {
+  const src = makeSource()
+  const staging = tmp('pub-stage-')
+
+  stageMarketplace(src, staging, stubAssemble)
+
+  const nodeModules = join(staging, 'clients', 'claude-code', 'node_modules')
+  const binLink = join(nodeModules, '.bin', 'commy-mcp')
+  const serverJs = join(nodeModules, '@codeforbreakfast', 'commy-mcp', 'server.js')
+
+  // The bin link exists, is a symlink, and resolves to the override's server.js.
+  expect(lstatSync(binLink).isSymbolicLink()).toBe(true)
+  expect(realpathSync(binLink)).toBe(realpathSync(serverJs))
+  // The launched entry is executable (npx execs it via its shebang).
+  expect(statSync(serverJs).mode & 0o111).not.toBe(0)
 })
 
 test('stageMarketplace does not carry a bun workspace or source tree', () => {
@@ -278,11 +310,11 @@ test('publishMarketplace aborts the swap when verify fails, leaving the live tre
 })
 
 // A faithful-enough stand-in for the real bundle: a server staged at
-// node_modules/@codeforbreakfast/commy-mcp/server.js that stays alive after the
-// handshake (the real server runs an event pump and never exits on stdin EOF) and
-// answers any request with a JSON-RPC result carrying serverInfo. verifyBoots
-// launches it under `node` with cwd = the plugin dir, exactly as the npx launcher
-// resolves it.
+// node_modules/@codeforbreakfast/commy-mcp/server.js, linked into
+// node_modules/.bin/commy-mcp exactly as a real install (and stageMarketplace)
+// would. verifyBoots launches it through that bin entry — the same file npx
+// resolves and execs — so the smoke test covers the bin-link + exec-bit + shebang
+// surface that comms-hl7y broke, not just `node server.js`.
 const respondingServer = `
 process.stdin.on('data', () => {
   process.stdout.write('{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"fake","version":"0"}}}\\n')
@@ -292,7 +324,13 @@ setInterval(() => {}, 1 << 30)
 
 function pluginWithBundle(serverBody: string): string {
   const dir = tmp('pub-boot-')
-  writeFile(join(dir, 'node_modules', '@codeforbreakfast', 'commy-mcp', 'server.js'), serverBody)
+  const nodeModules = join(dir, 'node_modules')
+  const serverJs = join(nodeModules, '@codeforbreakfast', 'commy-mcp', 'server.js')
+  writeFile(serverJs, `#!/usr/bin/env node\n${serverBody}`)
+  chmodSync(serverJs, 0o755)
+  const binDir = join(nodeModules, '.bin')
+  mkdirSync(binDir, { recursive: true })
+  symlinkSync(join('..', '@codeforbreakfast', 'commy-mcp', 'server.js'), join(binDir, 'commy-mcp'))
   return dir
 }
 
