@@ -59,14 +59,13 @@ test('matcher does NOT match arbitrary other MCP tools (no over-broad capture)',
   expect(re.test(`${EXPECTED_PREFIX}list_channels`)).toBe(false)
 })
 
-test('command invokes bun on PATH against the hook entrypoint — no Nix wrapper (comms-ip4q)', () => {
-  // The plugin's prereq is `bun` on PATH (the same contract the MCP launcher
-  // now relies on — comms-ip4q). The hook entrypoint imports no workspace
-  // packages, so it needs only bun, nothing staged. The former bun-wrap.sh
-  // resolved bun via the plugin's Nix flake; dropping Nix from the consumer
-  // path (comms-ip4q) makes that wrapper vestigial.
+test('command invokes node on PATH against the hook entrypoint — no bun, no Nix wrapper (comms-iw8w.2)', () => {
+  // The plugin's prereq is `node` on PATH (the npx-migration shed the bun
+  // consumer dependency — comms-iw8w). The hook entrypoint imports no workspace
+  // packages and uses only erasable TS syntax, so node runs the .ts directly
+  // via native type-stripping (node ≥23.6) — nothing staged, no build artifact.
   const hook = preToolUse[0]?.hooks[0]
-  expect(hook?.command).toBe('bun')
+  expect(hook?.command).toBe('node')
   // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional — testing placeholder rejection
   expect(hook?.args).toEqual(['${CLAUDE_PLUGIN_ROOT}/hooks/inject-session-id.ts'])
 })

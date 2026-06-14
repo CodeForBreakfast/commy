@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * PreToolUse hook for the commy plugin (ass-2dhb + ass-v7b4).
  *
@@ -39,7 +39,7 @@
 const readStdin = async (): Promise<string> => {
   const decoder = new TextDecoder()
   let buf = ''
-  for await (const chunk of Bun.stdin.stream()) {
+  for await (const chunk of process.stdin) {
     buf += decoder.decode(chunk, { stream: true })
   }
   buf += decoder.decode()
