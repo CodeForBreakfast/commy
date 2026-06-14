@@ -1,6 +1,16 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
   "tasks": {
+    "//#build": {
+      "inputs": [
+        "packages/**/*.ts",
+        "!packages/**/*.test.ts",
+        "clients/claude-code/hooks/inject-session-id.ts",
+        "package.json",
+        "!**/node_modules/**"
+      ],
+      "outputs": ["packages/mcp/dist/**", "clients/claude-code/dist/**"]
+    },
     "//#typecheck": {
       "inputs": ["**/*.ts", "tsconfig*.json", "!**/node_modules/**", "!.worktrees/**"]
     },
