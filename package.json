@@ -25,7 +25,7 @@
     "@commy/memory": "workspace:*",
     "@commy/zulip": "workspace:*",
     "@effect/platform": "0.96.1",
-    "@effect/platform-bun": "0.89.0",
+    "@effect/platform-node": "0.107.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "effect": "3.21.2"
   },

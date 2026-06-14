@@ -56,7 +56,7 @@ export interface FileCursorStoreDeps {
   /**
    * The filesystem every read/write executes against, injected at
    * construction (comms-5db). {@link FileCursorStoreLive} reads it from
-   * context (`BunFileSystem.layer`, provided once in the app layer).
+   * context (`NodeContext.layer`, provided once in the app layer).
    */
   readonly fs: FileSystem.FileSystem
 }
@@ -154,7 +154,7 @@ export const cursorDirConfig: Config.Config<string> = stateBaseConfig.pipe(
  * Production cursor-store layer (comms-spj3.39): a file-backed store
  * under the XDG state home. Reads `FileSystem` and the cursor directory
  * (via {@link cursorDirConfig} against the boot-edge ConfigProvider,
- * comms-nrv) from context — the app layer provides `BunFileSystem.layer`
+ * comms-nrv) from context — the app layer provides `NodeContext.layer`
  * and the ConfigProvider once (comms-5db) — and injects them into the
  * store at construction.
  *

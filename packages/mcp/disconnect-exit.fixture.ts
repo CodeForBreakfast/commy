@@ -19,7 +19,7 @@
 import { stderrLoggerLayer } from '@commy/core/logging'
 import { memoryAdapter } from '@commy/memory/adapter'
 import { FetchHttpClient } from '@effect/platform'
-import { BunFileSystem, BunRuntime } from '@effect/platform-bun'
+import { NodeContext, NodeRuntime } from '@effect/platform-node'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ConfigProvider, Effect, Layer, Option } from 'effect'
 import { substrateAdapterLayer } from './bootstrap.ts'
@@ -60,7 +60,7 @@ const armedStdin = {
     process.stdin.removeListener(event, listener),
 }
 
-BunRuntime.runMain(
+NodeRuntime.runMain(
   makeProgram({
     transport: new StdioServerTransport(),
     shutdownSignal: clientDisconnect(armedStdin),
@@ -75,7 +75,7 @@ BunRuntime.runMain(
         Layer.mergeAll(
           Layer.setConfigProvider(ConfigProvider.fromEnv()),
           FetchHttpClient.layer,
-          BunFileSystem.layer,
+          NodeContext.layer,
         ),
       ),
     ),

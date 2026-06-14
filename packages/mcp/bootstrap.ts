@@ -8,7 +8,7 @@ import type {
   RealmUrl as RealmUrlType,
 } from '@commy/zulip/http'
 import { apiKeySchema, botEmailSchema, realmUrlSchema } from '@commy/zulip/http'
-import type { HttpClient } from '@effect/platform'
+import { Command, type CommandExecutor, type HttpClient } from '@effect/platform'
 import {
   Config,
   ConfigError,
@@ -416,8 +416,13 @@ export interface DeriveProjectDeps {
   readonly project?: ProjectSlug
   /** Process cwd at plugin boot. */
   readonly cwd: string
-  /** Git-context probe. Injected in tests; defaults to a real `git` shell-out at runtime. */
-  readonly readGitContext: (cwd: string) => GitContext
+  /**
+   * Git-context probe. Injected in tests; defaults to a real `git` shell-out
+   * at runtime. The default ({@link readGitContext}) requires a
+   * `CommandExecutor`; `server.ts` provides it once from context, so the
+   * probe seen here is already executor-satisfied (`R = never`).
+   */
+  readonly readGitContext: (cwd: string) => Effect.Effect<GitContext>
 }
 
 const basename = (path: string): string => {
@@ -442,48 +447,65 @@ const basename = (path: string): string => {
  * nothing usable, we return `undefined` rather than falling back —
  * the operator's explicit choice wins over auto-derivation.
  */
-export const deriveProject = (deps: DeriveProjectDeps): Option.Option<ProjectSlug> => {
+export const deriveProject = (
+  deps: DeriveProjectDeps,
+): Effect.Effect<Option.Option<ProjectSlug>> => {
   if (deps.project !== undefined) {
-    return Option.some(deps.project)
+    return Effect.succeed(Option.some(deps.project))
   }
-  return matchGitContext(deps.readGitContext(deps.cwd), {
-    NotInRepo: () => Option.none(),
-    InRepo: ({ gitRoot, remoteBasename }) =>
-      Option.match(
-        Option.filter(remoteBasename, (name) => name.length > 0),
-        {
-          onSome: sanitiseProjectSlug,
-          onNone: () =>
-            gitRoot.length > 0 ? sanitiseProjectSlug(basename(gitRoot)) : Option.none(),
-        },
-      ),
-  })
+  return Effect.map(deps.readGitContext(deps.cwd), (context) =>
+    matchGitContext(context, {
+      NotInRepo: () => Option.none(),
+      InRepo: ({ gitRoot, remoteBasename }) =>
+        Option.match(
+          Option.filter(remoteBasename, (name) => name.length > 0),
+          {
+            onSome: sanitiseProjectSlug,
+            onNone: () =>
+              gitRoot.length > 0 ? sanitiseProjectSlug(basename(gitRoot)) : Option.none(),
+          },
+        ),
+    }),
+  )
 }
 
 /**
- * Default git-context probe — shells out to `git -C <cwd>`. Returns
- * `inRepo: false` if `rev-parse --show-toplevel` exits non-zero; the
- * remote basename is left `undefined` if `remote get-url origin` fails.
+ * Trimmed stdout of `git -C <cwd> <args…>`, on the Effect-native command
+ * executor. A non-zero git exit (e.g. not a repo, no origin remote) yields
+ * empty stdout — git's diagnostics go to its piped, undrained stderr — and a
+ * spawn failure (no `git` on PATH) is caught to the same empty string. So the
+ * caller reads "no output" as the single failure signal, matching the old
+ * `Bun.spawnSync` exit-code checks.
  */
-export const readGitContext = (cwd: string): GitContext => {
-  const toplevel = Bun.spawnSync({
-    cmd: ['git', '-C', cwd, 'rev-parse', '--show-toplevel'],
-    stderr: 'ignore',
+const gitStdout = (
+  cwd: string,
+  args: ReadonlyArray<string>,
+): Effect.Effect<string, never, CommandExecutor.CommandExecutor> =>
+  Command.make('git', '-C', cwd, ...args).pipe(
+    Command.stderr('pipe'),
+    Command.string,
+    Effect.map((out) => out.trim()),
+    Effect.catchAll(() => Effect.succeed('')),
+  )
+
+/**
+ * Default git-context probe — shells out to `git -C <cwd>` via the
+ * `@effect/platform` command executor (`server.ts` provides the node
+ * executor). Returns `NotInRepo` when `rev-parse --show-toplevel` produces no
+ * toplevel; the remote basename is left `undefined` when `remote get-url
+ * origin` produces no url.
+ */
+export const readGitContext = (
+  cwd: string,
+): Effect.Effect<GitContext, never, CommandExecutor.CommandExecutor> =>
+  Effect.gen(function* () {
+    const gitRoot = yield* gitStdout(cwd, ['rev-parse', '--show-toplevel'])
+    if (gitRoot.length === 0) return NotInRepo()
+    const url = yield* gitStdout(cwd, ['remote', 'get-url', 'origin'])
+    const tail = url.split('/').pop()
+    const remoteBasename = tail === undefined ? undefined : tail.replace(/\.git$/, '') || undefined
+    return InRepo({ gitRoot, remoteBasename: Option.fromNullable(remoteBasename) })
   })
-  if (toplevel.exitCode !== 0) return NotInRepo()
-  const gitRoot = toplevel.stdout.toString().trim()
-  const remote = Bun.spawnSync({
-    cmd: ['git', '-C', cwd, 'remote', 'get-url', 'origin'],
-    stderr: 'ignore',
-  })
-  if (remote.exitCode !== 0) {
-    return InRepo({ gitRoot, remoteBasename: Option.none() })
-  }
-  const url = remote.stdout.toString().trim()
-  const tail = url.split('/').pop()
-  const remoteBasename = tail === undefined ? undefined : tail.replace(/\.git$/, '') || undefined
-  return InRepo({ gitRoot, remoteBasename: Option.fromNullable(remoteBasename) })
-}
 
 /**
  * The full driven surface `main` composes against (comms-spj3.39): the

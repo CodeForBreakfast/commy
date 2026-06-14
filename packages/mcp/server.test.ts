@@ -296,7 +296,7 @@ test('main does not subscribe when acquire fails', async () => {
 
 test('main subscribes only the Type-1 mentions default when COMMY_SUBSCRIBE is unset and no project is set', async () => {
   const fake = buildFakeAdapter()
-  await runProgram(validEnv, fake.adapter, { readGitContext: () => NotInRepo() })
+  await runProgram(validEnv, fake.adapter, { readGitContext: () => Effect.succeed(NotInRepo()) })
   expect(fake.calls.subscribed).toEqual(['mentions'])
 })
 
@@ -331,7 +331,7 @@ test('main drives a real memory adapter through acquire + env subscribe + close'
   // integration harness via its name-lenient history wrapper.
   await runProgram(env, memoryAdapterAsZulipShape, {
     loggerLayer: captureLogger(logs),
-    readGitContext: () => NotInRepo(),
+    readGitContext: () => Effect.succeed(NotInRepo()),
   })
   // Type-1 default `mentions` lands first (post-acquire); the env tokens follow.
   expect(subscribed).toEqual([
@@ -352,7 +352,9 @@ test('main aborts non-zero when COMMY_SUBSCRIBE contains a malformed token', asy
     ...validEnv,
     COMMY_SUBSCRIBE: 'channel:home,not-a-thing,channel:llm-feed',
   }
-  const exit = await runProgram(env, fake.adapter, { readGitContext: () => NotInRepo() })
+  const exit = await runProgram(env, fake.adapter, {
+    readGitContext: () => Effect.succeed(NotInRepo()),
+  })
   expect(Exit.isFailure(exit)).toBe(true)
   expect(String((failureValue(exit) as { message?: string }).message)).toMatch(
     /invalid subscribe token/,
@@ -372,7 +374,7 @@ test('main applies env-driven subscriptions in order after acquire and Type-1 de
     ...validEnv,
     COMMY_SUBSCRIBE: 'channel:home,thread:home/payments,mentions',
   }
-  await runProgram(env, fake.adapter, { readGitContext: () => NotInRepo() })
+  await runProgram(env, fake.adapter, { readGitContext: () => Effect.succeed(NotInRepo()) })
   expect(fake.calls.acquired).toEqual(['assistant-concierge'])
   // Type-1 default `mentions` (no project) comes first; env tokens follow.
   expect(fake.calls.subscribed).toEqual([
@@ -447,7 +449,7 @@ test('persistent mode without project registers only the universal mentions narr
   const fake = buildFakeAdapter()
   // Inject readGitContext so the worktree's own git context can't
   // accidentally resolve a project slug for the boot-time defaults.
-  await runProgram(validEnv, fake.adapter, { readGitContext: () => NotInRepo() })
+  await runProgram(validEnv, fake.adapter, { readGitContext: () => Effect.succeed(NotInRepo()) })
   expect(fake.calls.subscribed).toEqual(['mentions'])
 })
 

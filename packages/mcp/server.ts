@@ -3,8 +3,8 @@ import { stderrLoggerLayer } from '@commy/core/logging'
 import type { AcquiredIdentity, AgentComms, InboxError, MessageInbox } from '@commy/core/ports'
 import { decodeChannelName, decodeThreadName } from '@commy/core/ports'
 import { attachmentReference } from '@commy/zulip/adapter'
-import { FetchHttpClient, FileSystem, type HttpClient } from '@effect/platform'
-import { BunFileSystem, BunRuntime } from '@effect/platform-bun'
+import { CommandExecutor, FetchHttpClient, FileSystem, type HttpClient } from '@effect/platform'
+import { NodeContext, NodeRuntime } from '@effect/platform-node'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { Scope } from 'effect'
@@ -81,7 +81,7 @@ export interface ProgramParams {
    * Defaults to the real `git -C <cwd>` shell-out. Tests inject a fake
    * so derivation doesn't depend on the runner's cwd or git state.
    */
-  readonly readGitContext?: (cwd: string) => GitContext
+  readonly readGitContext?: (cwd: string) => Effect.Effect<GitContext>
   /**
    * Logger Layer for diagnostics. Provided both at the program edge (so
    * the boot fiber + forked pump route `Effect.log*` to STDERR off the
@@ -341,7 +341,7 @@ export const makeProgram = (
 ): Effect.Effect<
   void,
   BootError | EnvConfigError | SubscribeTokenError | InboxError,
-  SubstrateAdapter | CursorStoreTag | FileSystem.FileSystem
+  SubstrateAdapter | CursorStoreTag | FileSystem.FileSystem | CommandExecutor.CommandExecutor
 > =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -349,7 +349,7 @@ export const makeProgram = (
       const adapter = yield* SubstrateAdapter
       const cursorStore = yield* CursorStoreTag
       // The download/upload tool builders execute against this filesystem,
-      // captured once from context (BunFileSystem.layer, provided in the
+      // captured once from context (NodeContext.layer, provided in the
       // app layer) instead of self-providing a platform layer per call
       // (comms-5db).
       const fs = yield* FileSystem.FileSystem
@@ -357,7 +357,17 @@ export const makeProgram = (
       // program edge — STDOUT is the MCP JSON-RPC channel and must stay
       // pristine. onAcquire (cache edge) self-provides this same layer.
       const loggerLayer = params.loggerLayer ?? stderrLoggerLayer
-      const readGitContext = params.readGitContext ?? defaultReadGitContext
+      // The default git probe runs on the node command executor; capture it
+      // once from context (provided by NodeContext.layer) and provide it to
+      // the probe so the per-call resolver below stays `R = never` — the tool
+      // boundary (`runEdge`) runs effects with no remaining requirements.
+      const commandExecutor = yield* CommandExecutor.CommandExecutor
+      const readGitContext =
+        params.readGitContext ??
+        ((cwd: string) =>
+          defaultReadGitContext(cwd).pipe(
+            Effect.provideService(CommandExecutor.CommandExecutor, commandExecutor),
+          ))
       // Catch-up is non-fatal: a transient substrate hiccup — or a defect
       // such as the memory adapter's id-strict history throwing
       // UnknownChannel — must not refuse boot. `catchAllCause` so a defect
@@ -369,10 +379,10 @@ export const makeProgram = (
       // Per-call project resolver. Operator override (COMMY_PROJECT)
       // is authoritative; otherwise derive from the calling session's cwd
       // at call time (ass-v7b4) — process cwd is irrelevant.
-      const projectForCwd = (cwd: string | undefined): ProjectSlug | undefined => {
-        if (parsed.project !== undefined) return parsed.project
-        if (cwd === undefined) return undefined
-        return Option.getOrUndefined(deriveProject({ cwd, readGitContext }))
+      const projectForCwd = (cwd: string | undefined): Effect.Effect<ProjectSlug | undefined> => {
+        if (parsed.project !== undefined) return Effect.succeed(parsed.project)
+        if (cwd === undefined) return Effect.succeed(undefined)
+        return Effect.map(deriveProject({ cwd, readGitContext }), Option.getOrUndefined)
       }
 
       // Minter subscription reconcile (ass-6a77): boot-time backstop that
@@ -614,12 +624,13 @@ const AppLayer: Layer.Layer<
  * `AppLayer`) — provision at the dependency boundary, never a re-built
  * composition.
  */
-export const PlatformLive: Layer.Layer<HttpClient.HttpClient | FileSystem.FileSystem> =
-  Layer.mergeAll(
-    Layer.setConfigProvider(ConfigProvider.fromEnv()),
-    FetchHttpClient.layer,
-    BunFileSystem.layer,
-  )
+export const PlatformLive: Layer.Layer<
+  HttpClient.HttpClient | FileSystem.FileSystem | CommandExecutor.CommandExecutor
+> = Layer.mergeAll(
+  Layer.setConfigProvider(ConfigProvider.fromEnv()),
+  FetchHttpClient.layer,
+  NodeContext.layer,
+)
 
 /**
  * The fully-provided production layer: `AppLayer` fed its leaves by
@@ -631,7 +642,11 @@ export const PlatformLive: Layer.Layer<HttpClient.HttpClient | FileSystem.FileSy
  * requirements.
  */
 export const MainLive: Layer.Layer<
-  SubstrateAdapter | CursorStoreTag | HttpClient.HttpClient | FileSystem.FileSystem,
+  | SubstrateAdapter
+  | CursorStoreTag
+  | HttpClient.HttpClient
+  | FileSystem.FileSystem
+  | CommandExecutor.CommandExecutor,
   EnvConfigError
 > = Layer.provideMerge(AppLayer, PlatformLive)
 
@@ -685,7 +700,7 @@ export const clientDisconnect = (stdin: CloseEmitter): Effect.Effect<void> =>
  * stderr logger layer routes every `Effect.log*` to STDERR regardless.
  */
 export const main = (): void =>
-  BunRuntime.runMain(
+  NodeRuntime.runMain(
     makeProgram({
       transport: new StdioServerTransport(),
       shutdownSignal: clientDisconnect(process.stdin),
