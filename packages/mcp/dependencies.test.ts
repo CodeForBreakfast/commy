@@ -2,15 +2,15 @@ import { expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-// The mcp server is published inside a frozen whole-workspace tree
-// (scripts/publish-marketplace.ts runs `bun install --frozen-lockfile` at the
-// frozen workspace root). At runtime a package is present in the frozen
-// node_modules iff it is declared either in this package's own dependencies
-// (the `@commy/*` workspace siblings) or in the workspace-root
-// dependencies (the hoisted third-party packages — effect, @effect/*,
-// @modelcontextprotocol/sdk). Any runtime import declared in neither place
-// resolves in dev but is absent from the frozen node_modules, crashing the
-// server on launch. This guards that gap.
+// The mcp server is published as a self-contained node bundle: `bun build
+// --target=node` (scripts/assemble-npm-package.ts) inlines every import into a
+// single server.js. The bundler can only inline an import it can resolve from
+// the dev workspace, and an import resolves there iff it is declared either in
+// this package's own dependencies (the `@commy/*` workspace siblings) or in the
+// workspace-root dependencies (the third-party packages — effect, @effect/*,
+// @modelcontextprotocol/sdk). An import declared in neither place might resolve
+// transitively by luck today and vanish from the bundle tomorrow, so this guards
+// that every runtime import is a first-class declared dependency.
 
 const mcpDir = import.meta.dir
 const workspaceRoot = join(mcpDir, '..', '..')

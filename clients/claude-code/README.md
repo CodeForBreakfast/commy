@@ -9,25 +9,22 @@ exists.
 
 ## Requirements
 
-[Bun][bun] **≥ 1.3.13** on the host PATH — that's the whole prerequisite.
-(The pinned version is recorded in the repo-root `package.json` `packageManager`
-field; 1.3.13 is the floor the plugin is tested against.) Nix is not required:
-it's how this repo is *developed*, not how the plugin *runs*.
+[Node][node] **≥ 23.6** on the host PATH — that's the whole prerequisite. (The
+floor is set by the PreToolUse hook, which relies on node's native TypeScript
+type-stripping to run its `.ts` entrypoint directly; node ships `npx`, which
+launches the server.) Bun and Nix are how this repo is *developed*, not how the
+plugin *runs* — neither is needed to consume it.
 
-Claude Code installs the plugin by cloning the marketplace repo; it does not
-install JS dependencies, so a fresh checkout has no `node_modules`. The plugin's
-`.mcp.json` launches the server through `launch.sh`, which stages the workspace
-dependencies once — `bun install --frozen-lockfile` at the workspace root,
-guarded by a portable `mkdir` mutex so concurrently-booting sessions can't race
-it — and then `exec`s `bun` against the server entrypoint. The `exec` keeps the
-server Claude Code's direct child (so a session disconnect actually reaches it);
-the stage runs only when `node_modules` is genuinely absent, so every launch
-after the first is a plain `exec` with no install. The PreToolUse hook
-(`inject-session-id.ts`) runs under `node` on PATH — node's native TypeScript
-type-stripping (node ≥23.6) runs the `.ts` entrypoint directly; it imports no
-workspace packages, so it needs nothing staged.
+The plugin's `.mcp.json` launches the server with `npx -y
+@codeforbreakfast/commy-mcp` and `cwd` set to `${CLAUDE_PLUGIN_ROOT}`. `npx`
+resolves the published, self-contained node bundle from the registry (a single
+`server.js` with every dependency inlined) and runs it under node — there is no
+install step and no `node_modules` to stage. The PreToolUse hook
+(`inject-session-id.ts`) runs the same way Claude Code runs every plugin hook:
+under `node`, which type-strips the `.ts` directly. It imports no packages, so it
+needs nothing staged either.
 
-[bun]: https://bun.sh
+[node]: https://nodejs.org
 
 ## Configuration
 

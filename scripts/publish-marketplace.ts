@@ -1,7 +1,8 @@
-import { execFileSync } from 'node:child_process'
 import { cpSync, existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
+
+import { assembleNpmPackage, NPM_PACKAGE_NAME } from './assemble-npm-package.ts'
 
 // Where released, self-contained plugin copies live. Sessions launch from here,
 // never from the dev working tree — that decoupling is what comms-2mx delivers.
@@ -9,56 +10,40 @@ import { basename, dirname, join } from 'node:path'
 const xdgDataHome = process.env['XDG_DATA_HOME'] ?? join(homedir(), '.local', 'share')
 export const DEFAULT_FIXED_PATH = join(xdgDataHome, 'commy', 'marketplace')
 
-// node_modules is reinstalled fresh at the frozen root; .bun-result is a nix-store
-// symlink that would otherwise drag the whole bun derivation into the copy. The
-// rest are dev-only state — git history, the bead store, turbo cache, sibling
-// worktrees — that have no business in a frozen release artifact.
-const EXCLUDED = new Set(['node_modules', '.bun-result', '.worktrees', '.beads', '.turbo', '.git'])
-
-const excludedFilter = (source: string): boolean => !EXCLUDED.has(basename(source))
-
-// Freeze the whole Bun workspace into stagingDir so the frozen install can
-// resolve the @commy/* workspace symlinks in-tree. We carry the repo-root
-// package.json + bun.lock (the lockfile the frozen install pins against) and
-// bunfig.toml (it governs install behaviour — exact pins, minimum release age),
-// the entire packages/ tree (the universal substrate — core, testing, zulip,
-// memory, mcp; including the test-only testing/memory — pruning is deferred,
-// disk is cheap), the clients/ tree (the per-client adapters; clients/claude-code
-// is the CC adapter the boot smoke test launches), and the root .claude-plugin/
-// marketplace manifest. The manifest identity is commy and
-// installers resolve the plugin as commy@commy (marketplace name +
-// plugin name).
-// tsconfig/biome are not copied: the boot runs the server at runtime, not under
-// tsc, so it needs module resolution, not typecheck config. No dependencies
-// installed yet, and no symlink dereferencing — the workspace symlinks are
-// recreated by the frozen install at the staged root.
-export function stageMarketplace(repoRoot: string, stagingDir: string): void {
-  mkdirSync(stagingDir, { recursive: true })
-  for (const file of ['package.json', 'bun.lock', 'bunfig.toml']) {
-    cpSync(join(repoRoot, file), join(stagingDir, file))
-  }
-  cpSync(join(repoRoot, '.claude-plugin'), join(stagingDir, '.claude-plugin'), { recursive: true })
-  for (const tree of ['packages', 'clients']) {
-    cpSync(join(repoRoot, tree), join(stagingDir, tree), {
-      recursive: true,
-      filter: excludedFilter,
-    })
-  }
+// The plugin's own node_modules is regenerated as the staged bundle override
+// below; .bun-result is a nix-store symlink that would otherwise drag the whole
+// bun derivation into the copy; *.test.ts is dev-only and never runs in a
+// release. Everything else under the plugin dir is shipped verbatim.
+const EXCLUDED = new Set(['node_modules', '.bun-result'])
+const stageFilter = (source: string): boolean => {
+  const name = basename(source)
+  return !EXCLUDED.has(name) && !name.endsWith('.test.ts')
 }
 
-// Install the workspace's pinned dependencies at the frozen workspace root,
-// network-free when bun's cache is warm. Running at the root (not a single
-// package) is what recreates the @commy/* workspace symlinks in-tree.
-// --frozen-lockfile fails loudly if the staged lockfile drifts. --ignore-scripts
-// skips lifecycle scripts: the only one is the root `prepare` (dev-env git-hooks
-// path + an editor-only effect-language-service patch), which is meaningless in a
-// frozen artifact and would fail (no .git in the frozen tree) — and no runtime
-// dependency carries a postinstall the server needs.
-export function installDeps(workspaceRoot: string): void {
-  execFileSync(process.execPath, ['install', '--frozen-lockfile', '--ignore-scripts'], {
-    cwd: workspaceRoot,
-    stdio: 'inherit',
+// Stage a self-contained, node-runnable marketplace into stagingDir. The frozen
+// copy carries the root marketplace manifest and the claude-code plugin only —
+// no bun workspace, no source tree, no `bun install`. The plugin's `.mcp.json`
+// launches `npx @codeforbreakfast/commy-mcp` with cwd = CLAUDE_PLUGIN_ROOT (the
+// staged clients/claude-code dir); to make that resolve the LOCAL build with zero
+// registry hits, we assemble the node bundle straight into the plugin's
+// node_modules as @codeforbreakfast/commy-mcp. A consumer installing the plugin
+// from the public marketplace has no such local install and so resolves the
+// published build from npm. The marketplace identity stays commy
+// (marketplace.json name + plugin name); only the npm package carries the
+// @codeforbreakfast scope, because @commy is taken on npm.
+export function stageMarketplace(
+  repoRoot: string,
+  stagingDir: string,
+  assemble: (repoRoot: string, outDir: string) => unknown = assembleNpmPackage,
+): void {
+  mkdirSync(stagingDir, { recursive: true })
+  cpSync(join(repoRoot, '.claude-plugin'), join(stagingDir, '.claude-plugin'), { recursive: true })
+  cpSync(join(repoRoot, 'clients', 'claude-code'), join(stagingDir, 'clients', 'claude-code'), {
+    recursive: true,
+    filter: stageFilter,
   })
+  const override = join(stagingDir, 'clients', 'claude-code', 'node_modules', NPM_PACKAGE_NAME)
+  assemble(repoRoot, override)
 }
 
 // Replace targetPath with stagingDir atomically enough for a deliberate, single
@@ -119,10 +104,9 @@ async function drainStream(stream: ReadableStream<Uint8Array>): Promise<string> 
   return text
 }
 
-// Kill the child's entire process group. `bun run start` forks: the `run`
-// wrapper is the direct child, but the actual server is a grandchild that
-// inherits the group. Signalling only the direct child orphans that grandchild
-// — it keeps the inherited stdout pipe open and the parent never sees EOF, so a
+// Kill the child's entire process group. The server runs an event pump and never
+// exits on stdin EOF, and it may itself fork; signalling only the direct child
+// can orphan a forked grandchild that keeps the inherited stdout pipe open, so a
 // bare `child.kill()` hangs. Spawning detached makes the child a session/group
 // leader (setsid), and signalling the negative pid reaps the whole tree.
 function killBootGroup(child: Bun.Subprocess): void {
@@ -133,19 +117,16 @@ function killBootGroup(child: Bun.Subprocess): void {
   }
 }
 
-// Boot smoke test: launch the freshly installed server via the plugin package's
-// `start` script (cwd = the frozen clients/claude-code dir), the same `bun`
-// against `@commy/mcp/server.ts` that the `.mcp.json` launcher (launch.sh) execs
-// once deps are staged — so this exercises the same module graph and proves the
-// frozen install resolves. Speak the MCP initialize handshake and require a
-// serverInfo response. A tree whose
-// dependencies didn't install crashes here — process exits before answering — so
-// the release aborts instead of shipping a server that fails to reconnect
-// (-32000). The real server runs an event pump and won't exit on stdin EOF, so we
-// stop reading at the first serverInfo and kill the child's process group rather
-// than waiting for it to close.
+// Boot smoke test: launch the freshly staged bundle under `node` from the plugin
+// dir — the same node-runnable @codeforbreakfast/commy-mcp/server.js that the
+// `.mcp.json` launcher resolves via npx — and require an MCP initialize response.
+// A bundle that fails to load (syntax error, missing builtin) exits before
+// answering, so the release aborts instead of shipping a server that fails to
+// reconnect (-32000). The real server runs an event pump and won't exit on stdin
+// EOF, so we stop at the first serverInfo and kill the child's process group
+// rather than waiting for it to close.
 export async function verifyBoots(pluginDir: string, timeoutMs = 30_000): Promise<void> {
-  const child = Bun.spawn([process.execPath, 'run', 'start'], {
+  const child = Bun.spawn(['node', join('node_modules', NPM_PACKAGE_NAME, 'server.js')], {
     cwd: pluginDir,
     stdin: 'pipe',
     stdout: 'pipe',
@@ -210,16 +191,15 @@ export async function verifyBoots(pluginDir: string, timeoutMs = 30_000): Promis
 export async function publishMarketplace(
   repoRoot: string,
   targetPath: string,
-  install: (workspaceRoot: string) => void = installDeps,
   verify: (pluginDir: string) => Promise<void> = verifyBoots,
+  assemble: (repoRoot: string, outDir: string) => unknown = assembleNpmPackage,
 ): Promise<void> {
   const parent = dirname(targetPath)
   mkdirSync(parent, { recursive: true })
   const staging = join(parent, `.staging.${process.pid}.${Date.now()}`)
   try {
-    stageMarketplace(repoRoot, staging)
+    stageMarketplace(repoRoot, staging, assemble)
     const pluginDir = join(staging, 'clients', 'claude-code')
-    install(staging)
     await verify(pluginDir)
     atomicSwap(staging, targetPath)
   } finally {
