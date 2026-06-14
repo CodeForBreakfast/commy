@@ -11,6 +11,8 @@ runAgentCommsContract('memory adapter', async () => {
     seedChannel: (name) => adapter.seedChannel(name).pipe(Effect.orDie),
     seedAgent: (name) => adapter.seedAgent(name).pipe(Effect.orDie),
     newUnacquiredAdapter: () => memoryAdapter(),
+    peerPost: (peer, channel, body, opts) =>
+      adapter.peerPost(peer, channel, body, opts).pipe(Effect.asVoid, Effect.orDie),
     dispose: () => Effect.void,
   }
 })
@@ -28,6 +30,8 @@ runAgentCommsContract('memory adapter (allowlist mode for UnknownIdentity covera
     seedAgent: (name) => adapter.seedAgent(name).pipe(Effect.orDie),
     newUnacquiredAdapter: () => memoryAdapter({ acquirableNames: ['hermes-agent-cycle'] }),
     unacquirableName: 'no-such-bot',
+    peerPost: (peer, channel, body, opts) =>
+      adapter.peerPost(peer, channel, body, opts).pipe(Effect.asVoid, Effect.orDie),
     dispose: () => Effect.void,
   }
 })

@@ -16,7 +16,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import type { AgentComms, ChannelRef, Identity, InboundEvent, MessageRef } from '@commy/core/ports'
+import type {
+  AgentComms,
+  ChannelRef,
+  Identity,
+  InboundEvent,
+  MessageBody,
+  MessageRef,
+  PostOpts,
+} from '@commy/core/ports'
 import {
   decodeBotNameSync,
   decodeChannelIdSync,
@@ -76,28 +84,26 @@ export interface ContractEnv {
    */
   readonly unacquirableName?: string
   /**
-   * Optional. Set when the substrate's message timestamps are too coarse to
-   * distinguish messages posted back-to-back — Zulip stamps integer
-   * **seconds**, so three posts inside one second share a `ts` and the
-   * range-filter / single-timestamp assertions (which depend on distinct
-   * per-message timestamps) can't hold. Substrates with fine-grained
-   * timestamps (Memory) omit it and the suite runs those tests; the filtering
-   * logic stays covered there. (The `…past every message` range/replay tests
-   * offset by an hour, so they run regardless.)
+   * Optional. Post a message AUTHORED BY A SEEDED PEER (sender ≠ self) into a
+   * channel the bound self can observe. Drives the mention-floor tests
+   * (comms-5kx): a peer @-mentions self and self's `events()` must yield
+   * `mention-received`. This is the cross-identity shape `realm.live.test.ts`
+   * proves with observer ≠ sender — the contract can't express it through
+   * `comms.publisher.post` alone because that always authors as self, and a
+   * single-identity self-mention never surfaces on a substrate whose mention
+   * narrow is keyed to the queue owner (live Zulip).
+   *
+   * Memory injects a peer-authored message straight into the same in-process
+   * substrate; Zulip posts through a peer-bound adapter. Substrates that
+   * cannot stand up a posting peer omit it and the suite skips the
+   * peer-mention tests. The `peer` is one obtained from `seedAgent`.
    */
-  readonly coarseTimestamps?: boolean
-  /**
-   * Optional. Set when the substrate does not deliver events about the
-   * current identity's *own* posts/mentions back to its own inbox within the
-   * contract's window — on the shared live Zulip realm the inline readiness
-   * window is too tight and the minter-side `is:mentioned` narrow is keyed to
-   * the queue owner, so a bot's self-authored post/mention doesn't surface on
-   * its own `events()`. Substrates that loop self-events back (Memory) omit
-   * it and the suite runs the readiness + self-mention tests; cross-identity
-   * event delivery and mention *suppression* are exercised regardless.
-   * `realm.live.test.ts` owns the live event-delivery coverage proper.
-   */
-  readonly noSelfEventDelivery?: boolean
+  readonly peerPost?: (
+    peer: Identity,
+    channel: ChannelRef,
+    body: MessageBody,
+    opts?: PostOpts,
+  ) => Effect.Effect<void>
   /** Tear down whatever the factory stood up. Called once per test. */
   readonly dispose: () => Effect.Effect<void>
 }
@@ -108,6 +114,83 @@ const findByBody = (
   messages: ReadonlyArray<{ readonly body: string }>,
   body: string,
 ): { readonly body: string } | undefined => messages.find((m) => m.body === body)
+
+/**
+ * Generous deadline for "this event must eventually arrive" assertions. On an
+ * in-process substrate the event is already enqueued so the wait resolves
+ * immediately; on the live Zulip realm the events queue can take several
+ * seconds to surface a post/mention. Sits well under the live suite's 45s
+ * per-test budget so a genuine no-show still fails with the test's own clear
+ * message rather than a bun:test timeout.
+ */
+const EVENT_DELIVERY_DEADLINE = Duration.seconds(30)
+
+/**
+ * Pull events off the queue in order until one satisfies `predicate`,
+ * returning it. Recurses on each non-match — the caller wraps this in
+ * `Effect.timeoutOption` so an event that never arrives bounds the wait
+ * instead of blocking forever. Lets the mention-floor tests assert on the
+ * `mention-received` event without coupling to whether a `message-posted`
+ * precedes it (it does on Memory, may not on a mentions-only live narrow).
+ */
+const takeUntil = (
+  queue: Queue.Queue<InboundEvent>,
+  predicate: (event: InboundEvent) => boolean,
+): Effect.Effect<InboundEvent> =>
+  Queue.take(queue).pipe(
+    Effect.flatMap((event) =>
+      predicate(event) ? Effect.succeed(event) : takeUntil(queue, predicate),
+    ),
+  )
+
+/**
+ * Await the first event matching `predicate`, failing the test (with
+ * `description`) if none arrives within `EVENT_DELIVERY_DEADLINE`. Intervening
+ * events are drained and discarded — so a positive event-delivery assertion no
+ * longer depends on the *position* of its event in the stream. On the live
+ * realm an events queue under 429 backoff can redeliver or gap-replay a
+ * `message-posted` (comms-jnn), which a positional `Queue.take` + `.kind`
+ * assertion would mistake for the wrong event; draining-until-match is immune.
+ * Memory delivers exactly once so the match is immediate there.
+ */
+const awaitEvent = (
+  queue: Queue.Queue<InboundEvent>,
+  description: string,
+  predicate: (event: InboundEvent) => boolean,
+): Effect.Effect<InboundEvent> =>
+  takeUntil(queue, predicate).pipe(
+    Effect.timeoutOption(EVENT_DELIVERY_DEADLINE),
+    Effect.flatMap(
+      Option.match({
+        onNone: () =>
+          Effect.die(new Error(`events() did not observe ${description} within the deadline`)),
+        onSome: Effect.succeed,
+      }),
+    ),
+  )
+
+/**
+ * Post `bodies` in order, spacing consecutive posts by the substrate's
+ * `timestampGranularity` so each lands on a distinct `Timestamp`. Memory
+ * reports `Duration.zero` (its `ts` counter already separates posts) so the
+ * sleep is a no-op there and the fixture stays fast; live Zulip reports 1s so
+ * the three posts straddle distinct integer seconds and the range/replay
+ * filters assert at full strength on the real adapter. The first post is never
+ * delayed.
+ */
+const postSpaced = (
+  comms: AgentComms,
+  channel: ChannelRef,
+  bodies: ReadonlyArray<MessageBody>,
+): Effect.Effect<void, UnknownChannel | PublisherError> =>
+  Effect.forEach(
+    bodies,
+    (body, index) =>
+      (index === 0 ? Effect.void : Effect.sleep(comms.capabilities.timestampGranularity)).pipe(
+        Effect.zipRight(comms.publisher.post(channel, body)),
+      ),
+    { discard: true },
+  )
 
 /**
  * Start a subscriber on `events()` that mirrors every inbound event into an
@@ -417,11 +500,12 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
     test('history.readChannel range.since is inclusive', () =>
       Effect.runPromise(
         Effect.gen(function* () {
-          if (env.coarseTimestamps) return
           const channel = yield* env.seedChannel('lobby')
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('before'))
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('pivot'))
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('after'))
+          yield* postSpaced(env.comms, channel, [
+            decodeMessageBodySync('before'),
+            decodeMessageBodySync('pivot'),
+            decodeMessageBodySync('after'),
+          ])
           const everything = yield* env.comms.history.readChannel(channel, {})
           const pivot = everything.find((m) => m.body === 'pivot')
           if (pivot === undefined) throw new Error('expected pivot message in channel history')
@@ -435,11 +519,12 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
     test('history.readChannel range.until is inclusive', () =>
       Effect.runPromise(
         Effect.gen(function* () {
-          if (env.coarseTimestamps) return
           const channel = yield* env.seedChannel('lobby')
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('before'))
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('pivot'))
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('after'))
+          yield* postSpaced(env.comms, channel, [
+            decodeMessageBodySync('before'),
+            decodeMessageBodySync('pivot'),
+            decodeMessageBodySync('after'),
+          ])
           const everything = yield* env.comms.history.readChannel(channel, {})
           const pivot = everything.find((m) => m.body === 'pivot')
           if (pivot === undefined) throw new Error('expected pivot message in channel history')
@@ -453,11 +538,12 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
     test('history.readChannel range.since == range.until selects exactly one timestamp', () =>
       Effect.runPromise(
         Effect.gen(function* () {
-          if (env.coarseTimestamps) return
           const channel = yield* env.seedChannel('lobby')
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('before'))
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('pivot'))
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('after'))
+          yield* postSpaced(env.comms, channel, [
+            decodeMessageBodySync('before'),
+            decodeMessageBodySync('pivot'),
+            decodeMessageBodySync('after'),
+          ])
           const everything = yield* env.comms.history.readChannel(channel, {})
           const pivot = everything.find((m) => m.body === 'pivot')
           if (pivot === undefined) throw new Error('expected pivot message in channel history')
@@ -593,10 +679,12 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             yield* env.comms.inbox.subscribe(channel)
             const queue = yield* eventQueue(env.comms)
             yield* env.comms.publisher.post(channel, decodeMessageBodySync('event-target'))
-            const event = yield* Queue.take(queue)
-            expect(event.kind).toBe('message-posted')
+            const event = yield* awaitEvent(
+              queue,
+              'message-posted for the post',
+              (e) => e.kind === 'message-posted' && e.message.body.includes('event-target'),
+            )
             if (event.kind !== 'message-posted') throw new Error('unexpected event kind')
-            expect(event.message.body).toContain('event-target')
             expect(event.message.sender.id).toEqual(me.id)
             expect(event.message.ref.channel.id).toEqual(channel.id)
           }),
@@ -611,16 +699,15 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
       Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            if (env.noSelfEventDelivery) return
             const channel = yield* env.seedChannel('lobby')
             yield* env.comms.inbox.subscribe(channel)
             yield* env.comms.publisher.post(channel, decodeMessageBodySync('pre-iterate'))
             const queue = yield* eventQueue(env.comms)
-            const result = yield* Queue.take(queue).pipe(Effect.timeoutOption(Duration.seconds(2)))
-            if (Option.isNone(result))
-              throw new Error('events() did not observe post made after subscribe resolved')
-            const event = result.value
-            expect(event.kind).toBe('message-posted')
+            const event = yield* awaitEvent(
+              queue,
+              'the post made after subscribe resolved',
+              (e) => e.kind === 'message-posted' && e.message.body.includes('pre-iterate'),
+            )
             if (event.kind !== 'message-posted')
               throw new Error(`expected message-posted, got ${event.kind}`)
             expect(event.message.body).toContain('pre-iterate')
@@ -628,59 +715,71 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         ),
       ))
 
-    test('post-acquire, a self-mention flows via inbox.events without an explicit subscribe', () =>
-      // Universal rule (comms-5kx): every adapter, on identity.acquire,
-      // implicitly registers the mentions narrow. Callers do not need to
-      // subscribe('mentions') — @-mention delivery is the floor of
-      // substrate participation, not a per-bot preference.
+    // The mention floor (comms-5kx: an @-mention of you reaches you). A PEER
+    // posts the mention (sender ≠ self) — the cross-identity shape
+    // realm.live.test.ts proves, and one a single-identity self-mention cannot,
+    // since live Zulip's `is:mentioned` narrow is keyed to the queue owner.
+    //
+    // Self subscribes the CHANNEL (queue mode 'all') so the mention surfaces on
+    // live Zulip: a bound bot's events queue is minter-owned, so its own
+    // mentions surface only in mode 'all' — which a channel subscription sets,
+    // not the acquire-time / subscribe('mentions') narrow. The bare floor (a
+    // mention WITHOUT a channel subscribe) holds on Memory but not yet on
+    // Zulip; comms-9usb tracks restoring it cross-substrate (per-bot queue),
+    // after which the channel subscribe here becomes unnecessary.
+    test('a peer mention surfaces as mention-received when self is subscribed to the channel', () =>
       Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            if (env.noSelfEventDelivery) return
+            const peerPost = env.peerPost
+            if (peerPost === undefined) return
             const channel = yield* env.seedChannel('lobby')
             const me = yield* env.comms.identity.currentIdentity()
+            const peer = yield* env.seedAgent('alice')
+            yield* env.comms.inbox.subscribe(channel)
             const queue = yield* eventQueue(env.comms)
-            yield* env.comms.publisher.post(
-              channel,
-              decodeMessageBodySync(`@**${me.name}** wake up`),
-              {
-                mentions: [me],
-              },
+            yield* peerPost(peer, channel, decodeMessageBodySync(`@**${me.name}** wake up`), {
+              mentions: [me],
+            })
+            const event = yield* awaitEvent(
+              queue,
+              'a peer mention of self',
+              (e) => e.kind === 'mention-received',
             )
-            const first = yield* Queue.take(queue)
-            const second = yield* Queue.take(queue)
-            expect(first.kind).toBe('message-posted')
-            expect(second.kind).toBe('mention-received')
-            if (second.kind === 'mention-received') {
-              expect(second.mentions.map((m: Identity) => m.id)).toContain(me.id)
-            }
+            if (event.kind !== 'mention-received')
+              throw new Error(`expected mention-received, got ${event.kind}`)
+            expect(event.mentions.map((m: Identity) => m.id)).toContain(me.id)
           }),
         ),
       ))
 
-    test('inbox.subscribe("mentions") + post with self mention yields message-posted + mention-received', () =>
+    // Subscribing the 'mentions' narrow alongside the channel must not suppress
+    // the delivery. The channel subscribe is again what surfaces the bound
+    // bot's mention on live Zulip (mode 'all'); comms-9usb will let
+    // subscribe('mentions') alone suffice.
+    test('inbox.subscribe("mentions") alongside a channel subscription yields a peer mention-received', () =>
       Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            if (env.noSelfEventDelivery) return
+            const peerPost = env.peerPost
+            if (peerPost === undefined) return
             const channel = yield* env.seedChannel('lobby')
             const me = yield* env.comms.identity.currentIdentity()
+            const peer = yield* env.seedAgent('alice')
+            yield* env.comms.inbox.subscribe(channel)
             yield* env.comms.inbox.subscribe('mentions')
             const queue = yield* eventQueue(env.comms)
-            yield* env.comms.publisher.post(
-              channel,
-              decodeMessageBodySync(`@**${me.name}** wake up`),
-              {
-                mentions: [me],
-              },
+            yield* peerPost(peer, channel, decodeMessageBodySync(`@**${me.name}** wake up`), {
+              mentions: [me],
+            })
+            const event = yield* awaitEvent(
+              queue,
+              'a peer mention of self after subscribe("mentions")',
+              (e) => e.kind === 'mention-received',
             )
-            const first = yield* Queue.take(queue)
-            const second = yield* Queue.take(queue)
-            expect(first.kind).toBe('message-posted')
-            expect(second.kind).toBe('mention-received')
-            if (second.kind === 'mention-received') {
-              expect(second.mentions.map((m: Identity) => m.id)).toContain(me.id)
-            }
+            if (event.kind !== 'mention-received')
+              throw new Error(`expected mention-received, got ${event.kind}`)
+            expect(event.mentions.map((m: Identity) => m.id)).toContain(me.id)
           }),
         ),
       ))
@@ -716,12 +815,18 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             )
             // Drain message-posted first so the cache that backs reaction
             // target resolution is populated before the reaction lands.
-            const posted = yield* Queue.take(queue)
-            expect(posted.kind).toBe('message-posted')
+            yield* awaitEvent(
+              queue,
+              'message-posted for the react target',
+              (e) => e.kind === 'message-posted' && e.message.body.includes('react target'),
+            )
 
             yield* env.comms.publisher.react(ref, decodeEmojiSync('thumbs_up'))
-            const reacted = yield* Queue.take(queue)
-            expect(reacted.kind).toBe('reaction-added')
+            const reacted = yield* awaitEvent(
+              queue,
+              'reaction-added',
+              (e) => e.kind === 'reaction-added',
+            )
             if (reacted.kind !== 'reaction-added')
               throw new Error(`expected reaction-added, got ${reacted.kind}`)
             expect(reacted.target.id).toEqual(ref.id)
@@ -750,8 +855,11 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             yield* env.comms.inbox.subscribe(channel)
             const queue = yield* eventQueue(env.comms)
             yield* env.comms.publisher.react(ref, decodeEmojiSync('thumbs_up'))
-            const reacted = yield* Queue.take(queue)
-            expect(reacted.kind).toBe('reaction-added')
+            const reacted = yield* awaitEvent(
+              queue,
+              'reaction-added for the pre-subscribe target',
+              (e) => e.kind === 'reaction-added',
+            )
             if (reacted.kind !== 'reaction-added')
               throw new Error(`expected reaction-added, got ${reacted.kind}`)
             expect(reacted.target.id).toEqual(ref.id)
@@ -774,16 +882,21 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
               channel,
               decodeMessageBodySync('react then unreact'),
             )
-            const posted = yield* Queue.take(queue)
-            expect(posted.kind).toBe('message-posted')
+            yield* awaitEvent(
+              queue,
+              'message-posted for the react/unreact target',
+              (e) => e.kind === 'message-posted' && e.message.body.includes('react then unreact'),
+            )
 
             yield* env.comms.publisher.react(ref, decodeEmojiSync('thumbs_up'))
-            const added = yield* Queue.take(queue)
-            expect(added.kind).toBe('reaction-added')
+            yield* awaitEvent(queue, 'reaction-added', (e) => e.kind === 'reaction-added')
 
             yield* env.comms.publisher.unreact(ref, decodeEmojiSync('thumbs_up'))
-            const removed = yield* Queue.take(queue)
-            expect(removed.kind).toBe('reaction-removed')
+            const removed = yield* awaitEvent(
+              queue,
+              'reaction-removed',
+              (e) => e.kind === 'reaction-removed',
+            )
             if (removed.kind !== 'reaction-removed')
               throw new Error(`expected reaction-removed, got ${removed.kind}`)
             expect(removed.target.id).toEqual(ref.id)
@@ -811,11 +924,12 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
     test('inbox.replay(since) returns past message-posted events with ts >= since', () =>
       Effect.runPromise(
         Effect.gen(function* () {
-          if (env.coarseTimestamps) return
           const channel = yield* env.seedChannel('lobby')
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('before-pivot'))
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('pivot'))
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('after-pivot'))
+          yield* postSpaced(env.comms, channel, [
+            decodeMessageBodySync('before-pivot'),
+            decodeMessageBodySync('pivot'),
+            decodeMessageBodySync('after-pivot'),
+          ])
           const everything = yield* env.comms.history.readChannel(channel, {})
           const pivot = everything.find((m) => m.body === 'pivot')
           if (pivot === undefined) throw new Error('expected pivot message in channel history')
@@ -842,11 +956,13 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             yield* env.comms.publisher.post(channel, decodeMessageBodySync('first in alpha'), {
               thread: { name: decodeThreadNameSync('alpha') },
             })
-            const event = yield* Queue.take(queue)
-            expect(event.kind).toBe('message-posted')
+            const event = yield* awaitEvent(
+              queue,
+              'the first message of topic alpha',
+              (e) => e.kind === 'message-posted' && e.message.body.includes('first in alpha'),
+            )
             if (event.kind !== 'message-posted')
               throw new Error(`expected message-posted, got ${event.kind}`)
-            expect(event.message.body).toContain('first in alpha')
             expect(event.message.ref.thread?.name).toEqual(decodeThreadNameSync('alpha'))
           }),
         ),
@@ -862,10 +978,11 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             yield* env.comms.publisher.post(channel, decodeMessageBodySync('first in alpha'), {
               thread: { name: decodeThreadNameSync('alpha') },
             })
-            const first = yield* Queue.take(queue)
-            expect(first.kind).toBe('message-posted')
-            if (first.kind !== 'message-posted') throw new Error('expected first message-posted')
-            expect(first.message.body).toContain('first in alpha')
+            yield* awaitEvent(
+              queue,
+              'the first message of topic alpha',
+              (e) => e.kind === 'message-posted' && e.message.body.includes('first in alpha'),
+            )
 
             yield* env.comms.publisher.post(channel, decodeMessageBodySync('second in alpha'), {
               thread: { name: decodeThreadNameSync('alpha') },
@@ -886,8 +1003,11 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             yield* env.comms.publisher.post(channel, decodeMessageBodySync('first in alpha'), {
               thread: { name: decodeThreadNameSync('alpha') },
             })
-            const first = yield* Queue.take(queue)
-            expect(first.kind).toBe('message-posted')
+            yield* awaitEvent(
+              queue,
+              'the first message of topic alpha',
+              (e) => e.kind === 'message-posted' && e.message.body.includes('first in alpha'),
+            )
 
             yield* env.comms.publisher.post(channel, decodeMessageBodySync('second in alpha'), {
               thread: { name: decodeThreadNameSync('alpha') },
@@ -895,10 +1015,12 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             yield* env.comms.publisher.post(channel, decodeMessageBodySync('first in bravo'), {
               thread: { name: decodeThreadNameSync('bravo') },
             })
-            const next = yield* Queue.take(queue)
-            expect(next.kind).toBe('message-posted')
+            const next = yield* awaitEvent(
+              queue,
+              'the first message of topic bravo',
+              (e) => e.kind === 'message-posted' && e.message.body.includes('first in bravo'),
+            )
             if (next.kind !== 'message-posted') throw new Error('expected second message-posted')
-            expect(next.message.body).toContain('first in bravo')
             expect(next.message.ref.thread?.name).toEqual(decodeThreadNameSync('bravo'))
           }),
         ),

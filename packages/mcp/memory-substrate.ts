@@ -1,7 +1,7 @@
-import type { AgentComms } from '@commy/core/ports'
+import type { AgentComms, Capabilities } from '@commy/core/ports'
 import type { ZulipAdapter } from '@commy/zulip/adapter'
 import { decodeUserUploadPathSync } from '@commy/zulip/http'
-import { Effect } from 'effect'
+import { Duration, Effect } from 'effect'
 
 /**
  * The single seam where above-the-port tests touch a Zulip type or brand.
@@ -45,15 +45,24 @@ const inertExtras: SubstrateExtras = {
 }
 
 /**
+ * Above-port tests don't exercise timestamp granularity, so a hand-rolled port
+ * fake need not declare it; the inert default stands in (a real adapter passed
+ * as `base` overrides it via the spread).
+ */
+const inertCapabilities: Capabilities = { timestampGranularity: Duration.zero }
+
+/**
  * Complete an {@link AgentComms} core (the in-memory adapter, or a hand-rolled
  * port fake) to the `ZulipAdapter` shape the `SubstrateAdapter` port expects.
  * Pass overrides for the Zulip-shaped members a given test asserts on (e.g. a
- * counting `close`); the rest stay inert.
+ * counting `close`); the rest stay inert. `capabilities` may be omitted from a
+ * hand-rolled `base` — the inert default fills it.
  */
 export const completeAsSubstrate = (
-  base: AgentComms,
+  base: Omit<AgentComms, 'capabilities'> & Partial<Pick<AgentComms, 'capabilities'>>,
   overrides: SubstrateExtrasOverrides = {},
 ): ZulipAdapter => ({
+  capabilities: inertCapabilities,
   ...base,
   ...inertExtras,
   ...overrides,

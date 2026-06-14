@@ -62,6 +62,7 @@ import {
   Array as Arr,
   Clock,
   Data,
+  Duration,
   Effect,
   HashMap,
   HashSet,
@@ -120,6 +121,20 @@ export type MemoryAdapter = AgentComms & {
    * tests and for modelling humans in MCP plugin tests.
    */
   readonly seedHuman: (name: string) => Effect.Effect<Identity, ParseResult.ParseError>
+  /**
+   * Inject a message AUTHORED BY `peer` (sender ≠ the bound self) into the
+   * substrate, running the same fan-out as a real post. The contract's
+   * mention-floor tests use this to prove a peer's @-mention of self surfaces
+   * on self's `events()` — a shape the single-identity `publisher.post`
+   * (always authored as self) cannot express. Unlike `post`, requires no
+   * bound identity: the peer is the author, not the adapter's own binding.
+   */
+  readonly peerPost: (
+    peer: Identity,
+    channel: ChannelRef,
+    body: MessageBodyType,
+    opts?: PostOpts,
+  ) => Effect.Effect<MessageRef, UnknownChannel>
 }
 
 const inRange =
@@ -664,7 +679,41 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     const seedHuman = (name: string): Effect.Effect<Identity, ParseResult.ParseError> =>
       registerIdentity(name, 'human')
 
+    // Authored by `peer`, not the bound self: mirrors publisher.post's store +
+    // fan-out path but stamps `sender: peer` and skips requireBound. The
+    // monotonic `nextTs` counter already yields a distinct ts per message, so
+    // memory reports `Duration.zero` granularity below — no spacing needed.
+    const peerPost = (
+      peer: Identity,
+      channel: ChannelRef,
+      body: MessageBodyType,
+      opts?: PostOpts,
+    ): Effect.Effect<MessageRef, UnknownChannel> =>
+      resolveBucket(channel).pipe(
+        Effect.flatMap((bucket) =>
+          Effect.gen(function* () {
+            const id = String(yield* allocId(nextMessageId))
+            const ref = yield* buildRef(id, channel, opts?.thread)
+            const ts = yield* decodeTimestamp(yield* allocId(nextTs)).pipe(Effect.orDie)
+            const stored: StoredMessage = {
+              ref,
+              sender: peer,
+              body,
+              ts,
+              mentions: opts?.mentions === undefined ? [] : [...opts.mentions],
+            }
+            bucket.push(stored)
+            messagesById.set(id, stored)
+            yield* fanOutOnPost(stored)
+            return ref
+          }),
+        ),
+      )
+
     return {
+      // Memory's `ts` is a monotonic counter, so any two posts already differ —
+      // no real-time spacing is needed for distinct timestamps.
+      capabilities: { timestampGranularity: Duration.zero },
       identity,
       publisher,
       inbox,
@@ -673,5 +722,6 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       seedChannel,
       seedAgent,
       seedHuman,
+      peerPost,
     }
   })
