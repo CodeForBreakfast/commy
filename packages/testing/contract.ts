@@ -715,15 +715,19 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         ),
       ))
 
-    test('post-acquire, a peer mention flows via inbox.events without an explicit subscribe', () =>
-      // Universal rule (comms-5kx): every adapter, on identity.acquire,
-      // implicitly registers the mentions narrow. Callers do not need to
-      // subscribe('mentions') — @-mention delivery is the floor of
-      // substrate participation, not a per-bot preference. A PEER posts the
-      // mention (sender ≠ self): a single-identity self-mention is a harness
-      // shortcut that never surfaces where the mention narrow is keyed to the
-      // queue owner (live Zulip), so the floor is proved cross-identity — the
-      // shape realm.live.test.ts exercises with observer ≠ sender.
+    // The mention floor (comms-5kx: an @-mention of you reaches you). A PEER
+    // posts the mention (sender ≠ self) — the cross-identity shape
+    // realm.live.test.ts proves, and one a single-identity self-mention cannot,
+    // since live Zulip's `is:mentioned` narrow is keyed to the queue owner.
+    //
+    // Self subscribes the CHANNEL (queue mode 'all') so the mention surfaces on
+    // live Zulip: a bound bot's events queue is minter-owned, so its own
+    // mentions surface only in mode 'all' — which a channel subscription sets,
+    // not the acquire-time / subscribe('mentions') narrow. The bare floor (a
+    // mention WITHOUT a channel subscribe) holds on Memory but not yet on
+    // Zulip; comms-9usb tracks restoring it cross-substrate (per-bot queue),
+    // after which the channel subscribe here becomes unnecessary.
+    test('a peer mention surfaces as mention-received when self is subscribed to the channel', () =>
       Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
@@ -732,16 +736,16 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             const channel = yield* env.seedChannel('lobby')
             const me = yield* env.comms.identity.currentIdentity()
             const peer = yield* env.seedAgent('alice')
+            yield* env.comms.inbox.subscribe(channel)
             const queue = yield* eventQueue(env.comms)
             yield* peerPost(peer, channel, decodeMessageBodySync(`@**${me.name}** wake up`), {
               mentions: [me],
             })
-            const observed = yield* takeUntil(queue, (e) => e.kind === 'mention-received').pipe(
-              Effect.timeoutOption(EVENT_DELIVERY_DEADLINE),
+            const event = yield* awaitEvent(
+              queue,
+              'a peer mention of self',
+              (e) => e.kind === 'mention-received',
             )
-            if (Option.isNone(observed))
-              throw new Error('events() did not observe a peer mention of self')
-            const event = observed.value
             if (event.kind !== 'mention-received')
               throw new Error(`expected mention-received, got ${event.kind}`)
             expect(event.mentions.map((m: Identity) => m.id)).toContain(me.id)
@@ -749,7 +753,11 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         ),
       ))
 
-    test('inbox.subscribe("mentions") + a peer mention yields mention-received', () =>
+    // Subscribing the 'mentions' narrow alongside the channel must not suppress
+    // the delivery. The channel subscribe is again what surfaces the bound
+    // bot's mention on live Zulip (mode 'all'); comms-9usb will let
+    // subscribe('mentions') alone suffice.
+    test('inbox.subscribe("mentions") alongside a channel subscription yields a peer mention-received', () =>
       Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
@@ -758,19 +766,17 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             const channel = yield* env.seedChannel('lobby')
             const me = yield* env.comms.identity.currentIdentity()
             const peer = yield* env.seedAgent('alice')
+            yield* env.comms.inbox.subscribe(channel)
             yield* env.comms.inbox.subscribe('mentions')
             const queue = yield* eventQueue(env.comms)
             yield* peerPost(peer, channel, decodeMessageBodySync(`@**${me.name}** wake up`), {
               mentions: [me],
             })
-            const observed = yield* takeUntil(queue, (e) => e.kind === 'mention-received').pipe(
-              Effect.timeoutOption(EVENT_DELIVERY_DEADLINE),
+            const event = yield* awaitEvent(
+              queue,
+              'a peer mention of self after subscribe("mentions")',
+              (e) => e.kind === 'mention-received',
             )
-            if (Option.isNone(observed))
-              throw new Error(
-                'events() did not observe a peer mention of self after subscribe("mentions")',
-              )
-            const event = observed.value
             if (event.kind !== 'mention-received')
               throw new Error(`expected mention-received, got ${event.kind}`)
             expect(event.mentions.map((m: Identity) => m.id)).toContain(me.id)
