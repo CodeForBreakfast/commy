@@ -30,6 +30,7 @@ no-op-ish values when unset):
 | `COMMY_PROJECT` | no | Project slug used for channel naming and the concierge's project subscriptions. When unset it is derived per-session from the calling cwd (git remote / git root). |
 | `COMMY_SUBSCRIBE` | no | Comma-separated auto-subscribe tokens applied at boot: `channel:<name>`, `thread:<channel>/<thread>`, `new-topics:<channel>`, `mentions`. Blank means no auto-subscription. |
 | `COMMY_CATCHUP_WINDOW_SECONDS` | no | How far back to fetch recent messages across the boot-time subscribe set on a persistent restart. Default `14400` (4 hours); `0` disables. |
+| `COMMY_NPM_MIN_RELEASE_AGE` | no | Operator override for npm's `min-release-age` supply-chain soak, scoped to commy's own `npx` launch. Set to `0` to run a freshly-published release that your global soak would otherwise block with `ENOVERSIONS`. Leave **unset** to fully respect your own npm setting. See [Running outside Claude Code](#running-outside-claude-code). |
 
 The live-test suite additionally needs a channel to exercise against:
 
@@ -58,7 +59,16 @@ npx -y @codeforbreakfast/commy-mcp
 `server.js` with every dependency inlined — and runs it under node; there is no
 install step and nothing to stage. (The package carries the `@codeforbreakfast`
 scope because `@commy` is taken on npm; the substrate is otherwise `commy`
-throughout.) Working from a source checkout instead, the dev toolchain runs the
+throughout.) If you run npm's `min-release-age` supply-chain soak — which holds
+back a freshly-published release so a compromised one can be caught before you
+auto-pull it — a commy release younger than your window fails to resolve
+(`ENOVERSIONS`) until it ages in. That soak guards you against the publisher's
+own not-yet-vetted code, so waiving it is a decision to trust the commy
+publisher and run a new release immediately: set `COMMY_NPM_MIN_RELEASE_AGE=0`
+(which the launcher threads as `npm_config_min_release_age`). Because the bundle
+has **no dependencies**, that waiver is scoped to exactly this one package — no
+transitive dependency tree rides along — and an unset value never weakens your
+own setting. Working from a source checkout instead, the dev toolchain runs the
 TypeScript entry point directly under [Bun][bun] with `bun packages/mcp/server.ts`
 — bun is the development runtime, never a consumer prerequisite. `nix` is **not**
 a runtime dependency either; the flake's dev shell stays supported for those who
