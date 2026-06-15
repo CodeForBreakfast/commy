@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 
+import pluginManifest from './.claude-plugin/plugin.json'
 import mcpConfig from './.mcp.json'
 
 /**
@@ -56,5 +57,34 @@ test('the realm credentials and subscription env are still threaded through', ()
     'ZULIP_MINTER_API_KEY',
     'COMMY_SUBSCRIBE',
     'COMMY_CATCHUP_WINDOW_SECONDS',
+    'npm_config_min_release_age',
   ])
+})
+
+/**
+ * npm's `min-release-age` soaks a freshly-published release so a compromised
+ * one can be caught before a consumer auto-pulls it — it guards the publisher's
+ * own not-yet-vetted code. Waiving it is therefore a trust decision about the
+ * publisher, which the publisher itself can safely make (no detection window is
+ * needed for code you authored and released). The launcher exposes an optional
+ * knob for that: COMMY_NPM_MIN_RELEASE_AGE=0 waives the soak for commy;
+ * everyone else leaves it unset. commy ships as a ZERO-dependency bundle
+ * (scripts/assemble-npm-package.ts inlines every dep into one server.js), so the
+ * waiver is scoped to exactly this one publisher — no transitive tree rides
+ * along — and the consumer otherwise can't install a fresh release until it ages
+ * past their window (ENOVERSIONS).
+ *
+ * The safety property — proven against npm 11.12.1 — is that an UNSET knob must
+ * not weaken the consumer's own setting: an empty/absent env var leaves the
+ * consumer's `.npmrc min-release-age` untouched (npm ignores an empty env var
+ * rather than overriding the file), and only an explicit `0` waives the soak.
+ * That hinges on the userConfig being OPTIONAL with no default, so an
+ * unconfigured consumer threads nothing.
+ */
+test('the npm release-age knob is threaded from an optional userConfig, off by default', () => {
+  expect(commyServer.env.npm_config_min_release_age).toBe(
+    `\${user_config.COMMY_NPM_MIN_RELEASE_AGE}`,
+  )
+  expect(pluginManifest.userConfig.COMMY_NPM_MIN_RELEASE_AGE.required).toBe(false)
+  expect(pluginManifest.userConfig.COMMY_NPM_MIN_RELEASE_AGE).not.toHaveProperty('default')
 })
