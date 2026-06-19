@@ -244,6 +244,110 @@ effectTest(
     }),
 )
 
+// --- Attach mode (comms-9usb): bind a pre-provisioned persona via a supplied
+// stable api key WITHOUT regenerating it, so many sessions/processes can share
+// one identity (the Discord-style single-identity model) with no acquire
+// collision. Gated on config.attachIdentity matching the acquired name; every
+// other acquire keeps today's mint/regenerate behaviour untouched.
+
+const attachConfig = (name: string, apiKey: string): Effect.Effect<ZulipAdapterConfig> =>
+  Effect.gen(function* () {
+    return {
+      ...(yield* makeConfig()),
+      attachIdentity: {
+        name: decodeBotNameSync(name),
+        apiKey: Redacted.make(yield* ApiKey(apiKey).pipe(Effect.orDie)),
+      },
+    }
+  })
+
+effectTest(
+  'identity.acquire ATTACHES to a provisioned persona via the supplied key — no regenerate, no mint',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* seedUsers(stub, [HERMES])
+      // Deliberately seed NEITHER regenerate NOR mint: the attach path must
+      // not call them, and an accidental call surfaces as an unstubbed-request
+      // failure rather than passing silently.
+      const config = yield* attachConfig('hermes-agent', 'stable-provided-key')
+      const adapter = yield* zulipAdapter(stub, config)
+      const result = yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+      expect(result.identity).toEqual({
+        id: decodeIdentityIdSync(String(HERMES.user_id)),
+        name: decodeDisplayNameSync('hermes-agent'),
+        kind: 'agent',
+      })
+      expect(result.credentials).toEqual({
+        substrate: 'zulip',
+        realmUrl: config.realmUrl,
+        email: yield* BotEmail(HERMES.email).pipe(Effect.orDie),
+        // The SUPPLIED key, verbatim — not a rotated one.
+        apiKey: yield* ApiKey('stable-provided-key').pipe(Effect.orDie),
+      })
+      const reqs = yield* stub.captured
+      expect(
+        reqs.find(
+          (r) =>
+            r.method === 'POST' &&
+            r.url.pathname === `/api/v1/bots/${HERMES.user_id}/api_key/regenerate`,
+        ),
+      ).toBeUndefined()
+      expect(
+        reqs.find((r) => r.method === 'POST' && r.url.pathname === '/api/v1/bots'),
+      ).toBeUndefined()
+    }),
+)
+
+effectTest(
+  'identity.acquire attach fails clearly when the persona is not provisioned on the realm',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* seedUsers(stub, [GRAEME])
+      const adapter = yield* zulipAdapter(stub, yield* attachConfig('hermes-agent', 'k'))
+      const err = yield* Effect.flip(adapter.identity.acquire(decodeBotNameSync('hermes-agent')))
+      expect(err).toBeInstanceOf(IdentityError)
+    }),
+)
+
+// CC/concierge REGRESSION GUARD (Graeme explicitly required): with no stable
+// key provided, acquire takes today's mint/regenerate path unchanged.
+effectTest(
+  'identity.acquire with NO attachIdentity regenerates as before — non-attach consumers untouched',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* seedUsers(stub, [HERMES])
+      yield* seedRegenerate(stub, HERMES.user_id, 'rotated-key')
+      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+      const result = yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+      expect(result.credentials['apiKey']).toEqual(yield* ApiKey('rotated-key').pipe(Effect.orDie))
+      expect(
+        yield* findRequest(stub, 'POST', `/api/v1/bots/${HERMES.user_id}/api_key/regenerate`),
+      ).toBeDefined()
+    }),
+)
+
+// The attach config must only fire for the persona it names — acquiring any
+// OTHER name regenerates as usual, so a per-persona key can never leak into an
+// unrelated consumer's binding.
+effectTest(
+  'identity.acquire of a name other than attachIdentity.name keeps the mint/regenerate path',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* seedUsers(stub, [HERMES])
+      yield* seedRegenerate(stub, HERMES.user_id, 'rotated-key')
+      const adapter = yield* zulipAdapter(stub, yield* attachConfig('other-persona', 'unused-key'))
+      const result = yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+      expect(result.credentials['apiKey']).toEqual(yield* ApiKey('rotated-key').pipe(Effect.orDie))
+      expect(
+        yield* findRequest(stub, 'POST', `/api/v1/bots/${HERMES.user_id}/api_key/regenerate`),
+      ).toBeDefined()
+    }),
+)
+
 effectTest('identity.acquire rejects with ZulipApiError when /users lookup fails', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient

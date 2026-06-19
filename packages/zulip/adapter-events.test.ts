@@ -25,9 +25,12 @@
  */
 
 import { expect } from 'bun:test'
-import type { InboundEvent } from '@commy/core/ports'
+import type { ChannelRef, InboundEvent } from '@commy/core/ports'
 import {
   decodeBotNameSync,
+  decodeChannelIdSync,
+  decodeChannelNameSync,
+  decodeDisplayNameSync,
   decodeMessageBodySync,
   decodeTimestampSync,
   type IdentityError,
@@ -103,6 +106,44 @@ const buildAdapter = (
     )
     yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
     return adapter
+  })
+
+// Attach-mode adapter (comms-9usb): bind HERMES via a supplied stable key —
+// seed NEITHER regenerate NOR mint, so the bind proves it took the attach path.
+const buildAttachAdapter = (
+  stub: StubHttpClient,
+): Effect.Effect<ZulipAdapter, IdentityError | UnknownIdentity> =>
+  Effect.gen(function* () {
+    yield* seedUsers(stub, [HERMES, GRAEME])
+    const config = {
+      realmUrl: yield* RealmUrl(REALM_URL).pipe(Effect.orDie),
+      minterEmail: yield* BotEmail('minter@example.com').pipe(Effect.orDie),
+      minterApiKey: Redacted.make(yield* ApiKey('minter-key').pipe(Effect.orDie)),
+      attachIdentity: {
+        name: decodeBotNameSync('hermes-agent'),
+        apiKey: Redacted.make(yield* ApiKey('stable-provided-key').pipe(Effect.orDie)),
+      },
+    }
+    const adapter = yield* zulipAdapter(config).pipe(
+      Effect.provideService(HttpClient.HttpClient, stub.client),
+    )
+    yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+    return adapter
+  })
+
+const homeChannel: ChannelRef = {
+  id: decodeChannelIdSync('1234'),
+  name: decodeChannelNameSync('general'),
+}
+
+const seedSubscribeOk = (stub: StubHttpClient): Effect.Effect<void> =>
+  stub.respond('POST', '/api/v1/users/me/subscriptions', {
+    body: {
+      result: 'success',
+      subscribed: { 'hermes-agent-bot@example.com': ['general'] },
+      already_subscribed: {},
+      unauthorized: [],
+    },
   })
 
 // Mirror inbox.events() into an unbounded Queue under the caller's Scope. The
@@ -229,6 +270,60 @@ effectTest(
       expect(polls.length).toBeGreaterThanOrEqual(2)
       expect(polls[0]?.url.searchParams.get('last_event_id')).toBe('0')
       expect(polls[1]?.url.searchParams.get('last_event_id')).toBe('5')
+    }),
+  { layer: TestContext.TestContext },
+)
+
+// comms-9usb concierge-parity capability: a session ATTACHED to a persona via a
+// supplied stable key wakes on `@persona` mentioned in a DIFFERENT channel than
+// the one it subscribed — because attach binds the persona as the session's own
+// identity, so the existing content-synthesis mention path fires for `@persona`
+// realm-wide. The home channel subscribe puts the queue in mode-'all'; the
+// mention lands in a channel the session never subscribed to.
+effectTest(
+  'inbox.events: attached persona wakes on @persona mentioned in another channel (no key regenerate)',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAttachAdapter(stub)
+      yield* seedSubscribeOk(stub)
+      yield* seedRegister(stub)
+      yield* adapter.inbox.subscribe(homeChannel)
+      yield* adapter.inbox.subscribe('mentions')
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        {
+          body: {
+            result: 'success',
+            events: [
+              messageEvent(
+                7,
+                aZulipMessage({
+                  id: 300,
+                  stream_id: 5678,
+                  display_recipient: 'brewlife',
+                  subject: 'tasting',
+                  content: 'hey @**hermes-agent** thoughts?',
+                }),
+              ),
+            ],
+          },
+        },
+        { hang: true },
+      ])
+      const queue = yield* eventQueue(adapter)
+      // Drain until the mention-received surfaces (a message-posted for the same
+      // frame may arrive first).
+      const mention = yield* Queue.take(queue).pipe(
+        Effect.repeat({ until: (e: InboundEvent) => e.kind === 'mention-received' }),
+      )
+      expect(mention.kind).toBe('mention-received')
+      if (mention.kind === 'mention-received') {
+        expect(mention.mentions.map((m) => m.name)).toContain(decodeDisplayNameSync('hermes-agent'))
+        expect(mention.message.ref.channel.name).toEqual(decodeChannelNameSync('brewlife'))
+      }
+      // The wake came via attach, not a rotated key.
+      const reqs = yield* stub.captured
+      expect(reqs.find((r) => r.url.pathname.endsWith('/api_key/regenerate'))).toBeUndefined()
     }),
   { layer: TestContext.TestContext },
 )
