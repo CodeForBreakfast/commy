@@ -235,6 +235,36 @@ def test_spawn_config_from_env_defaults_optional():
     assert config.catchup_window_seconds is None
 
 
+def test_spawn_config_from_env_reads_attach_identity():
+    # COMMY_BOT_NAME (persona) + COMMY_BOT_API_KEY (stable key) are the attach
+    # inputs the boot listener uses to bind a provisioned persona (comms-to1c).
+    env = {
+        "COMMY_SERVER_DIR": "/opt/commy",
+        "COMMY_PROJECT": "epr-backend",
+        "ZULIP_SITE": "https://zulip.example",
+        "ZULIP_MINTER_EMAIL": "minter@example.com",
+        "ZULIP_MINTER_API_KEY": "secret",
+        "COMMY_BOT_NAME": "hermes",
+        "COMMY_BOT_API_KEY": "persona-key",
+    }
+    config = SpawnConfig.from_env(env)
+    assert config.bot_name == "hermes"
+    assert config.bot_api_key == "persona-key"
+
+
+def test_spawn_config_from_env_attach_identity_absent_by_default():
+    env = {
+        "COMMY_SERVER_DIR": "/opt/commy",
+        "COMMY_PROJECT": "epr-backend",
+        "ZULIP_SITE": "https://zulip.example",
+        "ZULIP_MINTER_EMAIL": "minter@example.com",
+        "ZULIP_MINTER_API_KEY": "secret",
+    }
+    config = SpawnConfig.from_env(env)
+    assert config.bot_name is None
+    assert config.bot_api_key is None
+
+
 def test_spawn_config_from_env_missing_required_raises():
     with pytest.raises(ValueError):
         SpawnConfig.from_env({"ZULIP_SITE": "https://zulip.example"})

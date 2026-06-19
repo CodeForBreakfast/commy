@@ -59,6 +59,8 @@ class SpawnConfig:
     idle_timeout_seconds: float = 300.0
     reap_interval_seconds: float = 60.0
     catchup_window_seconds: Optional[int] = None
+    bot_name: Optional[str] = None
+    bot_api_key: Optional[str] = None
     extra_env: Mapping[str, str] = field(default_factory=dict)
 
     @staticmethod
@@ -68,7 +70,10 @@ class SpawnConfig:
         ``COMMY_SERVER_DIR`` is the commy checkout root the server runs from
         (``bun packages/mcp/server.ts``); ``COMMY_PROJECT`` is the channel the
         boot listener subscribes to; the minter creds + realm are the same the
-        post-only pod already provisions.
+        post-only pod already provisions. ``COMMY_BOT_NAME`` +
+        ``COMMY_BOT_API_KEY`` are the optional attach inputs the boot listener
+        uses to bind a provisioned persona (``build_listener_spec``); when unset
+        the boot listener mints its own deterministic identity instead.
         """
         source = os.environ if env is None else env
 
@@ -90,6 +95,8 @@ class SpawnConfig:
             idle_timeout_seconds=float(idle) if idle is not None else 300.0,
             reap_interval_seconds=float(reap) if reap is not None else 60.0,
             catchup_window_seconds=int(catchup) if catchup is not None else None,
+            bot_name=source.get("COMMY_BOT_NAME") or None,
+            bot_api_key=source.get("COMMY_BOT_API_KEY") or None,
         )
 
 

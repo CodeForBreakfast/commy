@@ -152,6 +152,41 @@ def test_listener_identity_never_collides_with_a_per_topic_identity():
     assert listener != deterministic_bot_name("epr-backend", "")
 
 
+# --- attach mode: bind a provisioned persona via a supplied key (comms-to1c) -
+
+
+def test_build_listener_spec_attaches_persona_when_key_present():
+    # With a persona name + attach key, the boot listener binds THAT persona
+    # using the supplied key (attach, no regenerate) — its realm-wide `mentions`
+    # then catches `@persona`. Mirrors the TS contract: COMMY_BOT_NAME +
+    # COMMY_BOT_API_KEY in the spawned server's env triggers attachIdentity.
+    spec = build_listener_spec(
+        _config(bot_name="hermes", bot_api_key="persona-key"), "epr-backend"
+    )
+    assert spec.bot_name == "hermes"
+    assert spec.env["COMMY_BOT_NAME"] == "hermes"
+    assert spec.env["COMMY_BOT_API_KEY"] == "persona-key"
+    assert spec.env["COMMY_SUBSCRIBE"] == "channel:epr-backend,mentions"
+
+
+def test_build_listener_spec_mints_deterministic_name_without_key():
+    # Regression guard: absent an attach key the boot listener mints
+    # deterministic_listener_name exactly as today, and never leaks an attach
+    # key into the env — the pre-attach behaviour is provably untouched.
+    spec = build_listener_spec(_config(bot_name="hermes"), "epr-backend")
+    assert spec.bot_name == deterministic_listener_name("epr-backend")
+    assert spec.env["COMMY_BOT_NAME"] == deterministic_listener_name("epr-backend")
+    assert "COMMY_BOT_API_KEY" not in spec.env
+
+
+def test_build_listener_spec_key_without_name_raises():
+    # A key with no persona name is a misconfig (the TS side rejects it too):
+    # there is no persona to attach to. Fail loud rather than silently fall
+    # back to a deterministic mint and drop the operator's attach intent.
+    with pytest.raises(ValueError):
+        build_listener_spec(_config(bot_api_key="persona-key"), "epr-backend")
+
+
 def test_listener_spec_passes_catchup_window_when_set():
     spec = build_listener_spec(_config(catchup_window_seconds=0), "epr-backend")
     assert spec.env["COMMY_CATCHUP_WINDOW_SECONDS"] == "0"
