@@ -282,6 +282,44 @@ test('parseEnv returns all fields when every var is present', () =>
     }),
   ))
 
+// Attach mode (comms-9usb): COMMY_BOT_API_KEY supplies the stable key for the
+// COMMY_BOT_NAME persona, so the server binds it without regenerating.
+const BOT_API_KEY = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2'
+
+test('parseEnv reads attachIdentity from COMMY_BOT_NAME + COMMY_BOT_API_KEY', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const parsed = yield* parse({ ...fullEnv, COMMY_BOT_API_KEY: BOT_API_KEY })
+      expect(parsed.attachIdentity?.name).toBe(decodeBotNameSync(fullEnv.COMMY_BOT_NAME))
+      expect(parsed.attachIdentity).toBeDefined()
+      if (parsed.attachIdentity !== undefined) {
+        expect(Redacted.value(parsed.attachIdentity.apiKey)).toBe(
+          BOT_API_KEY as Redacted.Redacted.Value<typeof parsed.attachIdentity.apiKey>,
+        )
+        // The supplied key is masked everywhere it could be logged.
+        expect(String(parsed.attachIdentity.apiKey)).toBe('<redacted>')
+      }
+      expect(JSON.stringify(parsed)).not.toContain(BOT_API_KEY)
+    }),
+  ))
+
+test('parseEnv rejects COMMY_BOT_API_KEY without COMMY_BOT_NAME', () =>
+  Effect.runPromise(
+    expectParseEnvError({
+      ...fullEnv,
+      COMMY_BOT_NAME: undefined,
+      COMMY_BOT_API_KEY: BOT_API_KEY,
+    }).pipe(Effect.asVoid),
+  ))
+
+test('parseEnv with COMMY_BOT_NAME but no COMMY_BOT_API_KEY yields no attachIdentity (mint path)', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const parsed = yield* parse(fullEnv)
+      expect('attachIdentity' in parsed).toBe(false)
+    }),
+  ))
+
 test('parseEnv wraps the minter api key as Redacted so the secret never logs', () =>
   Effect.runPromise(
     Effect.gen(function* () {

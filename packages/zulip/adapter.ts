@@ -98,6 +98,19 @@ export interface ZulipAdapterConfig {
   readonly minterApiKey: Redacted.Redacted<ApiKeyType>
   /** Override outgoing Host header — required for cluster-internal callers. */
   readonly hostHeader?: string
+  /**
+   * Attach mode (comms-9usb). When set, acquiring this exact bot name binds the
+   * pre-provisioned persona using the supplied **stable** api key WITHOUT
+   * regenerating it — so many sessions/processes can share one identity (the
+   * Discord-style single-identity model) with no acquire-time key rotation and
+   * therefore no one-holder-per-name collision. Every other name keeps today's
+   * self-service mint/regenerate path. The key is `Redacted` for the same
+   * secret-masking reason as `minterApiKey`.
+   */
+  readonly attachIdentity?: {
+    readonly name: BotName
+    readonly apiKey: Redacted.Redacted<ApiKeyType>
+  }
 }
 
 export type ZulipAdapter = AgentComms & {
@@ -139,6 +152,23 @@ class ReactivateForbidden extends Data.TaggedError('ReactivateForbidden')<{
       `Pin this identity with COMMY_BOT_NAME so it is never deactivated on ` +
       `release, or grant the minter admin rights. Underlying realm ` +
       `error: ${this.cause.message}`
+    )
+  }
+}
+
+/**
+ * Raised when attach mode (comms-9usb) is configured for a persona that the
+ * realm has no provisioned bot for. Attach binds an EXISTING identity by its
+ * supplied stable key — it deliberately never mints — so a missing persona is
+ * an operator provisioning gap, not something to paper over by self-minting.
+ */
+class AttachIdentityNotFound extends Data.TaggedError('AttachIdentityNotFound')<{
+  readonly name: BotName
+}> {
+  override get message(): string {
+    return (
+      `attach mode: no provisioned bot named '${this.name}' on the realm. ` +
+      `Provision the persona once and supply its stable api key before attaching.`
     )
   }
 }
@@ -660,6 +690,49 @@ export const zulipAdapter = (
         ),
       )
 
+    // Attach mode (comms-9usb): bind the pre-provisioned persona with the
+    // supplied stable key, never regenerating. No key rotation means no holder
+    // of this identity is invalidated, so the listener and poster (and every
+    // per-topic session) can share one identity without the hl-4uv6 collision.
+    const attachBot = (
+      name: BotName,
+      apiKey: ApiKeyType,
+    ): Effect.Effect<MintedBot, ZulipApiError | AttachIdentityNotFound | ParseResult.ParseError> =>
+      findAnyBotByName(name).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: (): Effect.Effect<MintedBot, AttachIdentityNotFound | ParseResult.ParseError> =>
+              Effect.fail(new AttachIdentityNotFound({ name })),
+            onSome: (
+              existing,
+            ): Effect.Effect<MintedBot, AttachIdentityNotFound | ParseResult.ParseError> =>
+              BotEmail(existing.email).pipe(
+                Effect.map(
+                  (email): MintedBot => ({
+                    userId: ZulipUserRef(existing.user_id),
+                    apiKey,
+                    email,
+                  }),
+                ),
+              ),
+          }),
+        ),
+      )
+
+    // Pick the provider for a fresh bind: attach when this exact name is the
+    // configured attach persona, else today's self-service mint/regenerate.
+    const provideMintedFor = (
+      name: BotName,
+    ): Effect.Effect<
+      MintedBot,
+      ZulipApiError | ReactivateForbidden | AttachIdentityNotFound | ParseResult.ParseError
+    > => {
+      const attach = config.attachIdentity
+      return attach !== undefined && attach.name === name
+        ? attachBot(name, Redacted.value(attach.apiKey))
+        : acquireBot(name)
+    }
+
     const identity: IdentityPort = {
       // Pre-acquire callers (the plugin-layer current_identity tool now
       // reads through ensureBound.current() and never invokes this) still
@@ -686,7 +759,7 @@ export const zulipAdapter = (
               )
             },
             onNone: () =>
-              acquireBot(name).pipe(
+              provideMintedFor(name).pipe(
                 Effect.flatMap((minted) =>
                   Effect.gen(function* () {
                     const innerHttp = yield* makeZulipHttp(

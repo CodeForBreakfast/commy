@@ -19,7 +19,7 @@ import {
   Layer,
   Option,
   ParseResult,
-  type Redacted,
+  Redacted,
   type Schema,
 } from 'effect'
 import type { NarrowSet } from './narrow-set.ts'
@@ -103,6 +103,16 @@ export interface ParsedEnv {
   readonly minterEmail: BotEmailType
   readonly minterApiKey: Redacted.Redacted<ApiKeyType>
   readonly botName?: BotName
+  /**
+   * Attach mode (comms-9usb). Present when both `COMMY_BOT_NAME` and
+   * `COMMY_BOT_API_KEY` are set: the server binds the named persona using the
+   * supplied stable key (no regenerate), letting many sessions share one
+   * identity. The key is `Redacted` so it never logs.
+   */
+  readonly attachIdentity?: {
+    readonly name: BotName
+    readonly apiKey: Redacted.Redacted<ApiKeyType>
+  }
   readonly subscribe?: string
   readonly sessionId?: SessionId
   readonly project?: ProjectSlug
@@ -295,6 +305,33 @@ const optionalBotName = (key: string): Config.Config<Option.Option<BotName>> =>
     ),
   )
 
+/**
+ * Optional, `Redacted`-wrapped api key under `key` (attach mode, comms-9usb).
+ * Missing ⇒ `None`; empty / placeholder / malformed ⇒ `InvalidData`, mirroring
+ * `optionalBotName`. The supplied secret is masked the same way the minter key
+ * is, so it never lands in a log line.
+ */
+const optionalApiKey = (
+  key: string,
+): Config.Config<Option.Option<Redacted.Redacted<ApiKeyType>>> => {
+  const decode = ParseResult.decodeUnknownEither(apiKeySchema)
+  return optionalNonEmpty(key).pipe(
+    Config.mapOrFail((option) =>
+      Option.match(option, {
+        onNone: () => Either.right(Option.none<Redacted.Redacted<ApiKeyType>>()),
+        onSome: (raw) =>
+          decode(raw).pipe(
+            Either.mapBoth({
+              onLeft: (issue) =>
+                ConfigError.InvalidData([key], ParseResult.TreeFormatter.formatIssueSync(issue)),
+              onRight: (value) => Option.some(Redacted.make(value as ApiKeyType)),
+            }),
+          ),
+      }),
+    ),
+  )
+}
+
 const envConfig: Config.Config<ParsedEnv> = Config.all({
   realmUrl: requiredBrand('ZULIP_SITE', realmUrlSchema, (v): RealmUrlType => v as RealmUrlType),
   minterEmail: requiredBrand(
@@ -306,18 +343,32 @@ const envConfig: Config.Config<ParsedEnv> = Config.all({
     requiredBrand('ZULIP_MINTER_API_KEY', apiKeySchema, (v): ApiKeyType => v as ApiKeyType),
   ),
   botName: optionalBotName('COMMY_BOT_NAME'),
+  botApiKey: optionalApiKey('COMMY_BOT_API_KEY'),
   subscribe: optionalUserConfig('COMMY_SUBSCRIBE'),
   project: optionalNonEmpty('COMMY_PROJECT'),
   catchupWindowSeconds: optionalNonNegativeInt('COMMY_CATCHUP_WINDOW_SECONDS'),
   sessionId: optionalSessionId('CLAUDE_CODE_SESSION_ID'),
 }).pipe(
-  Config.map((raw) => {
+  Config.mapOrFail((raw) => {
+    // Attach mode needs both halves: a key with no name has no identity to bind
+    // to, so reject it rather than silently ignore the supplied secret.
+    if (Option.isSome(raw.botApiKey) && Option.isNone(raw.botName)) {
+      return Either.left(
+        ConfigError.InvalidData(
+          ['COMMY_BOT_API_KEY'],
+          'COMMY_BOT_API_KEY requires COMMY_BOT_NAME — the key identifies which provisioned persona to attach to',
+        ),
+      )
+    }
     const project = Option.flatMap(raw.project, sanitiseProjectSlug)
-    return {
+    return Either.right({
       realmUrl: raw.realmUrl,
       minterEmail: raw.minterEmail,
       minterApiKey: raw.minterApiKey,
       ...Option.match(raw.botName, { onNone: () => ({}), onSome: (botName) => ({ botName }) }),
+      ...(Option.isSome(raw.botName) && Option.isSome(raw.botApiKey)
+        ? { attachIdentity: { name: raw.botName.value, apiKey: raw.botApiKey.value } }
+        : {}),
       ...Option.match(raw.subscribe, {
         onNone: () => ({}),
         onSome: (subscribe) => ({ subscribe }),
@@ -331,7 +382,7 @@ const envConfig: Config.Config<ParsedEnv> = Config.all({
         onNone: () => ({}),
         onSome: (catchupWindowSeconds) => ({ catchupWindowSeconds }),
       }),
-    }
+    })
   }),
 )
 
@@ -551,6 +602,7 @@ export const ZulipAdapterLive: Layer.Layer<
       realmUrl: parsed.realmUrl,
       minterEmail: parsed.minterEmail,
       minterApiKey: parsed.minterApiKey,
+      ...(parsed.attachIdentity === undefined ? {} : { attachIdentity: parsed.attachIdentity }),
     })
   }),
 )
