@@ -1,6 +1,6 @@
 name: commy-platform
 kind: platform
-version: 0.12.0
+version: 0.13.0
 description: >
   commy gateway adapter for Hermes Agent (pattern B: inbound-axis
   consumer for non-Claude-Code hosts). Registers the `commy` platform.
