@@ -57,21 +57,41 @@ def channel_subscribe_tokens(channel: str) -> str:
 def build_listener_spec(config: SpawnConfig, channel: str) -> ConnectionSpec:
     """The fully-resolved recipe to spawn the boot listener for ``channel``.
 
-    Persistent mode (eager bind, stable identity, channel catch-up on
-    (re)acquire) is driven by setting ``COMMY_BOT_NAME`` to the stable
-    ``deterministic_listener_name`` — the same mechanism per-topic connections
-    use, so a reboot re-acquires the same identity and replays the channel's
-    recent window. Mirrors ``connection.build_spec`` but with a channel-level
-    subscription and the listener identity.
+    Two identity modes:
+
+    * **Attach** (``config.bot_api_key`` set) — the boot listener binds the
+      configured persona (``config.bot_name``) using the supplied stable key, no
+      regenerate (the substrate attach path, ``bootstrap.ts`` ``attachIdentity``,
+      fires on ``COMMY_BOT_NAME`` + ``COMMY_BOT_API_KEY``). Its realm-wide
+      ``mentions`` then catches ``@<persona>`` so a mention in any channel wakes
+      it. A key with no persona name is a misconfig and raises.
+    * **Mint** (no key) — persistent mode driven by ``COMMY_BOT_NAME`` set to the
+      stable ``deterministic_listener_name``, the same mechanism per-topic
+      connections use, so a reboot re-acquires the same identity and replays the
+      channel's recent window.
+
+    Per-topic connections (``connection.build_spec``) always mint their own
+    ``t-*`` identity regardless of the attach key — only the boot listener
+    attaches the persona (the hybrid scope, comms-to1c). Mirrors
+    ``connection.build_spec`` but with a channel-level subscription.
     """
-    bot_name = deterministic_listener_name(channel)
     env: dict[str, str] = {
         "ZULIP_SITE": config.zulip_site,
         "ZULIP_MINTER_EMAIL": config.minter_email,
         "ZULIP_MINTER_API_KEY": config.minter_api_key,
-        "COMMY_BOT_NAME": bot_name,
         "COMMY_SUBSCRIBE": channel_subscribe_tokens(channel),
     }
+    if config.bot_api_key is not None:
+        if config.bot_name is None:
+            raise ValueError(
+                "COMMY_BOT_API_KEY requires COMMY_BOT_NAME — the key identifies "
+                "which provisioned persona the boot listener attaches to"
+            )
+        bot_name = config.bot_name
+        env["COMMY_BOT_API_KEY"] = config.bot_api_key
+    else:
+        bot_name = deterministic_listener_name(channel)
+    env["COMMY_BOT_NAME"] = bot_name
     if config.catchup_window_seconds is not None:
         env["COMMY_CATCHUP_WINDOW_SECONDS"] = str(config.catchup_window_seconds)
     env.update(config.extra_env)

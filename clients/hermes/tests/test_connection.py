@@ -103,6 +103,21 @@ def test_build_spec_carries_persistent_mode_identity_and_subscriptions():
     assert spec.cwd == "/opt/commy"
 
 
+def test_build_spec_ignores_attach_identity_keeping_per_topic_minted():
+    # HYBRID scope (comms-to1c): only the boot listener attaches the persona.
+    # Per-topic connections keep their own deterministic `t-*` identity even
+    # when an attach key is configured, preserving per-thread recent-window
+    # catch-up. The attach key must never leak into a per-topic spec's env.
+    spec = build_spec(
+        _config(bot_name="hermes", bot_api_key="persona-key"),
+        "epr-backend",
+        "standup",
+    )
+    assert spec.bot_name == deterministic_bot_name("epr-backend", "standup")
+    assert spec.env["COMMY_BOT_NAME"] == deterministic_bot_name("epr-backend", "standup")
+    assert "COMMY_BOT_API_KEY" not in spec.env
+
+
 def test_subscribe_tokens_are_thread_then_mentions():
     assert subscribe_tokens("c", "t") == "thread:c/t,mentions"
 
