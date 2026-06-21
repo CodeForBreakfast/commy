@@ -226,7 +226,11 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
           const ref = yield* env.comms.publisher.post(channel, decodeMessageBodySync('hello world'))
-          expect(ref.channel).toEqual(channel)
+          // Channel identity, not the whole ref: a substrate may decorate the
+          // returned ChannelRef (e.g. Zulip hangs a permalink off it, comms-e7my)
+          // beyond the bare {id,name} the seed factory hands back.
+          expect(ref.channel.id).toEqual(channel.id)
+          expect(ref.channel.name).toEqual(channel.name)
         }),
       ))
 
@@ -376,7 +380,8 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             decodeMessageBodySync('child'),
             { replyTo: parentRef },
           )
-          expect(followUp.channel).toEqual(channel)
+          expect(followUp.channel.id).toEqual(channel.id)
+          expect(followUp.channel.name).toEqual(channel.name)
         }),
       ))
 
