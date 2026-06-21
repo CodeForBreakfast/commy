@@ -92,11 +92,13 @@ const identityShape = (identity: Identity): SerializedIdentity => ({
 interface SerializedChannel {
   readonly id: string
   readonly name: string
+  readonly permalink: string | null
 }
 
 const channelShape = (channel: ChannelRef): SerializedChannel => ({
   id: channel.id,
   name: channel.name,
+  permalink: channel.permalink ?? null,
 })
 
 export interface ToolsCache {
@@ -250,8 +252,16 @@ const resolveMentions = (
 
 const messageShape = (m: Message): Record<string, unknown> => ({
   id: m.ref.id,
-  channel: { id: m.ref.channel.id, name: m.ref.channel.name },
-  thread: m.ref.thread === undefined ? null : { name: m.ref.thread.name },
+  channel: {
+    id: m.ref.channel.id,
+    name: m.ref.channel.name,
+    permalink: m.ref.channel.permalink ?? null,
+  },
+  thread:
+    m.ref.thread === undefined
+      ? null
+      : { name: m.ref.thread.name, permalink: m.ref.thread.permalink ?? null },
+  permalink: m.ref.permalink ?? null,
   sender: identityShape(m.sender),
   body: m.body,
   ts: m.ts,
@@ -563,6 +573,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           channel_id: ref.channel.id,
           channel_name: ref.channel.name,
           thread: ref.thread === undefined ? null : { name: ref.thread.name },
+          permalink: ref.permalink ?? null,
         }
       },
     },

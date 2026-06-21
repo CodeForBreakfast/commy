@@ -157,6 +157,37 @@ test("the timestamp seed reads from Effect's Clock (first post ts = floor(clockM
     }).pipe(Effect.provide(TestContext.TestContext)),
   ))
 
+// The memory adapter synthesises stable permalinks so the MCP tools rig
+// (tools.test.ts) can assert the field is plumbed on every surface without a
+// live Zulip realm (comms-e7my). They are deliberately fake — a memory:// URI,
+// not a Zulip narrow — since the memory substrate has no real web client.
+test('publisher.post synthesises stable message and channel permalinks', async () => {
+  const adapter = await acquired()
+  const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
+  const ref = await Effect.runPromise(adapter.publisher.post(channel, decodeMessageBodySync('hi')))
+  expect(ref.channel.permalink).toBe(`memory://commy/channel/${channel.id}`)
+  expect(ref.permalink).toBe(`memory://commy/channel/${channel.id}/near/${ref.id}`)
+})
+
+test('publisher.post threads the synthesised permalink through the topic', async () => {
+  const adapter = await acquired()
+  const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
+  const ref = await Effect.runPromise(
+    adapter.publisher.post(channel, decodeMessageBodySync('hi'), {
+      thread: { name: decodeThreadNameSync('topic-a') },
+    }),
+  )
+  expect(ref.thread?.permalink).toBe(`memory://commy/channel/${channel.id}/topic/topic-a`)
+  expect(ref.permalink).toBe(`memory://commy/channel/${channel.id}/topic/topic-a/near/${ref.id}`)
+})
+
+test('directory.listChannels exposes a synthesised channel permalink', async () => {
+  const adapter = await acquired()
+  const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
+  const channels = await Effect.runPromise(adapter.directory.listChannels())
+  expect(channels[0]?.permalink).toBe(`memory://commy/channel/${channel.id}`)
+})
+
 test('separate constructed adapters hold independent counter state', async () => {
   const a = await Effect.runPromise(memoryAdapter())
   await Effect.runPromise(a.identity.acquire(decodeBotNameSync('hermes-agent')))

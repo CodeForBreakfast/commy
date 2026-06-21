@@ -23,6 +23,7 @@
 import type {
   AcquiredIdentity,
   AgentComms,
+  ChannelId,
   ChannelRef,
   Credentials,
   Directory,
@@ -33,6 +34,7 @@ import type {
   InboundEvent,
   Message,
   MessageBody as MessageBodyType,
+  MessageId,
   MessageInbox,
   MessagePublisher,
   MessageRef,
@@ -42,6 +44,7 @@ import type {
   Reaction,
   RecentThread,
   SubscriptionTarget,
+  ThreadName,
   Timestamp as TimestampType,
 } from '@commy/core/ports'
 import {
@@ -73,6 +76,20 @@ import {
   Ref,
   Stream,
 } from 'effect'
+
+// Synthesised, stable permalinks (comms-e7my). The memory substrate has no web
+// client, so these are deliberately fake `memory://` URIs — their only job is to
+// let the MCP tools rig assert that the permalink field is plumbed on every
+// surface without a live Zulip realm. They mirror the message/channel/topic
+// shape the real Zulip narrow builder produces.
+const MEMORY_REALM = 'memory://commy'
+const channelPermalink = (id: ChannelId): string => `${MEMORY_REALM}/channel/${id}`
+const topicPermalink = (id: ChannelId, topic: ThreadName): string =>
+  `${channelPermalink(id)}/topic/${topic}`
+const messagePermalink = (id: ChannelId, messageId: MessageId, topic?: ThreadName): string =>
+  topic === undefined
+    ? `${channelPermalink(id)}/near/${messageId}`
+    : `${topicPermalink(id, topic)}/near/${messageId}`
 
 interface StoredMessage {
   readonly ref: MessageRef
@@ -215,7 +232,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         if (existing !== undefined) return existing
         const id = yield* decodeChannelId(String(yield* allocId(nextChannelId))).pipe(Effect.orDie)
         const channelName = yield* decodeChannelName(name)
-        const ref: ChannelRef = { id, name: channelName }
+        const ref: ChannelRef = { id, name: channelName, permalink: channelPermalink(id) }
         channelsById.set(id, ref)
         channelsByName.set(name, ref)
         messagesByChannel.set(id, [])
@@ -315,7 +332,18 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       decodeMessageId(id).pipe(
         Effect.orDie,
         Effect.map((messageId) =>
-          thread === undefined ? { id: messageId, channel } : { id: messageId, channel, thread },
+          thread === undefined
+            ? {
+                id: messageId,
+                channel,
+                permalink: messagePermalink(channel.id, messageId),
+              }
+            : {
+                id: messageId,
+                channel,
+                thread: { name: thread.name, permalink: topicPermalink(channel.id, thread.name) },
+                permalink: messagePermalink(channel.id, messageId, thread.name),
+              },
         ),
       )
 

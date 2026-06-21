@@ -727,7 +727,7 @@ effectTest('publisher.post returns a MessageRef built from the response id', () 
     const adapter = yield* buildAdapter(stub)
     const ref = yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hello world'))
     expect(ref.id).toEqual(decodeMessageIdSync('99'))
-    expect(ref.channel).toEqual(generalChannel)
+    expect(ref.channel).toMatchObject(generalChannel)
     expect(ref.thread).toBeUndefined()
   }),
 )
@@ -742,7 +742,45 @@ effectTest('publisher.post with thread sends topic and threads the returned Mess
     })
     const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
     expect(params.get('topic')).toBe('ass-zsd9')
-    expect(ref.thread).toEqual({ name: decodeThreadNameSync('ass-zsd9') })
+    expect(ref.thread).toMatchObject({ name: decodeThreadNameSync('ass-zsd9') })
+  }),
+)
+
+effectTest('publisher.post hands back message and channel permalinks on the returned ref', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 99)
+    const adapter = yield* buildAdapter(stub)
+    const ref = yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hello world'))
+    expect(ref.permalink).toBe('https://zulip.example.com/#narrow/channel/1234-general/near/99')
+    expect(ref.channel.permalink).toBe('https://zulip.example.com/#narrow/channel/1234-general')
+  }),
+)
+
+effectTest('publisher.post threads the permalink through the topic when a thread is set', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 100)
+    const adapter = yield* buildAdapter(stub)
+    const ref = yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hi'), {
+      thread: { name: decodeThreadNameSync('ass-zsd9') },
+    })
+    expect(ref.permalink).toBe(
+      'https://zulip.example.com/#narrow/channel/1234-general/topic/ass-zsd9/near/100',
+    )
+    expect(ref.thread?.permalink).toBe(
+      'https://zulip.example.com/#narrow/channel/1234-general/topic/ass-zsd9',
+    )
+  }),
+)
+
+effectTest('publisher.post permalink uses the public host header when one is configured', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 7)
+    const adapter = yield* buildAdapter(stub, { hostHeader: 'public.zulip.test' })
+    const ref = yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hi'))
+    expect(ref.permalink).toBe('https://public.zulip.test/#narrow/channel/1234-general/near/7')
   }),
 )
 
@@ -1018,8 +1056,15 @@ effectTest('history.readChannel narrows by channel and maps each message to the 
     expect(messages[0]).toEqual({
       ref: {
         id: decodeMessageIdSync('555'),
-        channel: generalChannel,
-        thread: { name: decodeThreadNameSync('lobby') },
+        channel: {
+          ...generalChannel,
+          permalink: 'https://zulip.example.com/#narrow/channel/1234-general',
+        },
+        thread: {
+          name: decodeThreadNameSync('lobby'),
+          permalink: 'https://zulip.example.com/#narrow/channel/1234-general/topic/lobby',
+        },
+        permalink: 'https://zulip.example.com/#narrow/channel/1234-general/topic/lobby/near/555',
       },
       sender: {
         id: decodeIdentityIdSync('5'),

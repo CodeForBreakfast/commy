@@ -125,13 +125,23 @@ export interface Identity {
   readonly kind: IdentityKind
 }
 
+/**
+ * `permalink` carries a ready-to-click substrate URL for a ref the substrate
+ * returns, so a caller never hand-assembles one (comms-e7my). The principle is
+ * maximal: every ref the substrate hands back that has a permalink exposes it —
+ * message, channel, and topic alike. Optional because not every substrate (or
+ * every code path) has a URL to offer; the in-memory adapter synthesises stable
+ * ones for tests.
+ */
 export interface ChannelRef {
   readonly id: ChannelId
   readonly name: ChannelName
+  readonly permalink?: string
 }
 
 export interface ThreadRef {
   readonly name: ThreadName
+  readonly permalink?: string
 }
 
 export interface MessageRef {
@@ -139,6 +149,7 @@ export interface MessageRef {
   readonly channel: ChannelRef
   /** Present iff the message lives in a thread. */
   readonly thread?: ThreadRef
+  readonly permalink?: string
 }
 
 /**

@@ -99,6 +99,40 @@ test('formatMessage — meta carries identifying attributes', () => {
   expect(out.meta['ts']).toBe('1715450000')
 })
 
+const messageWithPermalinks = (): Message =>
+  baseMessage({
+    ref: {
+      id: decodeMessageIdSync('msg-1'),
+      channel: {
+        id: decodeChannelIdSync('chan-9'),
+        name: decodeChannelNameSync('home'),
+        permalink: 'https://zulip.example.com/#narrow/channel/9-home',
+      },
+      thread: {
+        name: decodeThreadNameSync('payments'),
+        permalink: 'https://zulip.example.com/#narrow/channel/9-home/topic/payments',
+      },
+      permalink: 'https://zulip.example.com/#narrow/channel/9-home/topic/payments/near/1',
+    },
+  })
+
+test('formatMessage — meta carries message, channel and topic permalinks (comms-e7my)', () => {
+  const out = formatMessage(messagePosted(messageWithPermalinks()), BOT_ID)
+  expect(out.meta['permalink']).toBe(
+    'https://zulip.example.com/#narrow/channel/9-home/topic/payments/near/1',
+  )
+  expect(out.meta['channel_permalink']).toBe('https://zulip.example.com/#narrow/channel/9-home')
+  expect(out.meta['thread_permalink']).toBe(
+    'https://zulip.example.com/#narrow/channel/9-home/topic/payments',
+  )
+})
+
+test('formatMessage — permalink meta omitted when the ref carries none', () => {
+  const out = formatMessage(messagePosted(baseMessage()), BOT_ID)
+  expect(out.meta).not.toHaveProperty('permalink')
+  expect(out.meta).not.toHaveProperty('channel_permalink')
+})
+
 test('formatMessage — bot_identity_id is never surfaced (self-echo is emitter-guaranteed)', () => {
   const out = formatMessage(messagePosted(baseMessage()), BOT_ID)
   expect(out.meta).not.toHaveProperty('bot_identity_id')
@@ -278,6 +312,22 @@ test('formatReaction — reaction-removed renders reaction_action="remove"', () 
   const out = formatReaction(reactionRemoved(threadedRef, 'check', sender), REACTION_TS)
   expect(out.content).toBe('[reaction remove] check')
   expect(out.meta['reaction_action']).toBe('remove')
+})
+
+test('formatReaction — meta carries the target permalink when the ref has one (comms-e7my)', () => {
+  const target: MessageRef = {
+    ...threadedRef,
+    permalink: 'https://zulip.example.com/#narrow/channel/9-home/topic/payments/near/1',
+  }
+  const out = formatReaction(reactionAdded(target, 'check', sender), REACTION_TS)
+  expect(out.meta['target_permalink']).toBe(
+    'https://zulip.example.com/#narrow/channel/9-home/topic/payments/near/1',
+  )
+})
+
+test('formatReaction — target_permalink omitted when the ref carries none', () => {
+  const out = formatReaction(reactionAdded(rootRef, 'tada', sender), REACTION_TS)
+  expect(out.meta).not.toHaveProperty('target_permalink')
 })
 
 test('formatReaction — emoji name with control chars is sanitised in meta but raw in content', () => {
