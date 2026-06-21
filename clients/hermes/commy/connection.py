@@ -152,11 +152,14 @@ def build_spec(config: SpawnConfig, channel: str, topic: str) -> ConnectionSpec:
 
 
 class TopicTransport(Protocol):
-    """One per-topic connection's I/O: spawn+connect on ``start``, tear down on ``stop``."""
+    """One per-topic connection's I/O: spawn+connect on ``start``, tear down on
+    ``stop``, deliver an outbound reply on ``post``."""
 
     async def start(self) -> None: ...
 
     async def stop(self) -> None: ...
+
+    async def post(self, body: str, channel: str, topic: str) -> Optional[str]: ...
 
 
 # Builds a transport for a spec, wiring its inbound frames to the given sink.
@@ -208,6 +211,23 @@ class TopicConnectionManager:
             await transport.start()
             self._connections[key] = _Connection(spec, transport, self._clock())
             return spec
+
+    async def deliver(self, channel: str, topic: str, body: str) -> Optional[str]:
+        """Deliver an outbound reply into ``(channel, topic)`` via its live connection.
+
+        Rides the per-topic connection the inbound turn already brought up, so the
+        reply posts under the same per-topic identity and lands in the originating
+        topic. Returns the posted message id, or ``None`` when no live connection
+        owns the pair (e.g. it was idle-reaped between turn and delivery) — there
+        is nothing to ride, so the caller treats it as a no-op rather than a crash.
+        """
+        async with self._lock:
+            connection = self._connections.get((channel, topic))
+            if connection is None:
+                return None
+            connection.last_activity = self._clock()
+            transport = connection.transport
+        return await transport.post(body, channel, topic)
 
     def _activity_sink(self, key: tuple[str, str]) -> FrameSink:
         async def sink(frame: Frame) -> None:

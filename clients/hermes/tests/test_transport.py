@@ -12,16 +12,18 @@ even without spinning a subprocess.
 """
 
 import asyncio
+import json
 import os
 import sys
 import tempfile
 from pathlib import Path
 
-from commy.connection import SpawnConfig, TopicConnectionManager
+from commy.connection import ConnectionSpec, SpawnConfig, TopicConnectionManager
 from commy.naming import deterministic_bot_name
 from commy.transport import McpTopicTransport
 
 _STUB = str(Path(__file__).parent / "_stub_mcp_server.py")
+_POST_STUB = str(Path(__file__).parent / "_stub_post_server.py")
 
 
 class _FakeClock:
@@ -187,6 +189,62 @@ def test_shutdown_stops_real_subprocess():
             assert manager.active_keys() == set()
 
         asyncio.run(scenario())
+
+
+# --- outbound post over a real MCP tools/call round-trip (comms-a9q4) --------
+
+
+def _post_stub_spec(record_path: str) -> ConnectionSpec:
+    return ConnectionSpec(
+        channel="epr-backend",
+        topic="standup",
+        bot_name="stub-bot",
+        command=sys.executable,
+        args=(_POST_STUB,),
+        cwd=str(Path(__file__).parent),
+        env={"STUB_POST_RECORD": record_path},
+    )
+
+
+def test_transport_post_calls_the_commy_post_tool_over_real_mcp():
+    with tempfile.TemporaryDirectory() as tmp:
+        record = os.path.join(tmp, "post.json")
+        errlog = os.path.join(tmp, "stub.stderr.log")
+
+        async def sink(frame) -> None:
+            pass
+
+        async def scenario():
+            handle = open(errlog, "a")  # noqa: SIM115
+            transport = McpTopicTransport(_post_stub_spec(record), sink, errlog=handle)
+            await transport.start()
+            try:
+                message_id = await transport.post(
+                    "here is my reply", "epr-backend", "standup"
+                )
+            finally:
+                await transport.stop()
+            return message_id
+
+        message_id = asyncio.run(scenario())
+
+        assert message_id == "stub-msg-1"
+        recorded = json.loads(Path(record).read_text())
+        assert recorded == {
+            "channel_name": "epr-backend",
+            "thread": "standup",
+            "body": "here is my reply",
+        }
+
+
+def test_transport_post_without_a_live_session_returns_none():
+    # A post issued before start (or after stop) has no session to ride; it must
+    # degrade to None rather than raise into the turn.
+    transport = McpTopicTransport.__new__(McpTopicTransport)
+    transport._session = None  # type: ignore[attr-defined]
+
+    result = asyncio.run(transport.post("body", "c", "t"))
+    assert result is None
 
 
 # --- carrier binding against the genuine SDK type (no subprocess) ------------
