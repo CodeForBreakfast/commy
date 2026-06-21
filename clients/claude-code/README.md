@@ -148,8 +148,8 @@ The minter is the universal listener: the event pump consumes the
 minter's queue regardless of mode, and `narrowSet` (driven by
 `COMMY_SUBSCRIBE` + the `subscribe` / `unsubscribe` tools) tees
 matching events to the MCP host. Identity-free tools — `subscribe`,
-`unsubscribe`, `read_channel`, `read_thread`, `list_agents`,
-`list_humans`, `list_channels`, `presence`, `resolve`,
+`unsubscribe`, `read_channel`, `read_thread`, `message_link`,
+`list_agents`, `list_humans`, `list_channels`, `presence`, `resolve`,
 `current_identity` — run on minter credentials and work pre-acquire.
 
 ## Guidance for connected clients

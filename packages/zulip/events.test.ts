@@ -38,6 +38,8 @@ import {
 import type { ZulipHttp } from './http.ts'
 import { ZulipApiError } from './http.ts'
 
+const PERMALINK_BASE = 'https://zulip.example.com'
+
 const HERMES: Identity = {
   id: decodeIdentityIdSync('9'),
   name: decodeDisplayNameSync('hermes-agent'),
@@ -75,12 +77,34 @@ test('fires mention-received when bound identity is in content even if flags lac
   const directory = directoryFor(HERMES, GRAEME)
   const message = messageMentioning(HERMES, GRAEME)
 
-  const events = Effect.runSync(messageToInboundEvents(message, directory, HERMES))
+  const events = Effect.runSync(messageToInboundEvents(message, directory, HERMES, PERMALINK_BASE))
   const mention = events.find((e) => e.kind === 'mention-received')
 
   expect(mention).toBeDefined()
   if (mention !== undefined && mention.kind === 'mention-received') {
     expect(mention.mentions.map((m) => m.id)).toContain(HERMES.id)
+  }
+})
+
+test('decorates the inbound message ref with message, channel and topic permalinks', () => {
+  const directory = directoryFor(HERMES, GRAEME)
+  const message = messageMentioning(HERMES, GRAEME)
+
+  const events = Effect.runSync(
+    messageToInboundEvents(message, directory, HERMES, 'https://zulip.example.com'),
+  )
+  const posted = events.find((e) => e.kind === 'message-posted')
+
+  expect(posted).toBeDefined()
+  if (posted !== undefined && posted.kind === 'message-posted') {
+    const ref = posted.message.ref
+    expect(ref.permalink).toBe(
+      'https://zulip.example.com/#narrow/channel/1-general/topic/topic/near/100',
+    )
+    expect(ref.channel.permalink).toBe('https://zulip.example.com/#narrow/channel/1-general')
+    expect(ref.thread?.permalink).toBe(
+      'https://zulip.example.com/#narrow/channel/1-general/topic/topic',
+    )
   }
 })
 
@@ -96,7 +120,7 @@ test('does not fire mention-received when bound identity is not in content', () 
   const directory = directoryFor(HERMES, GRAEME, RIQ)
   const message = messageMentioning(RIQ, GRAEME)
 
-  const events = Effect.runSync(messageToInboundEvents(message, directory, HERMES))
+  const events = Effect.runSync(messageToInboundEvents(message, directory, HERMES, PERMALINK_BASE))
   const mention = events.find((e) => e.kind === 'mention-received')
 
   expect(mention).toBeUndefined()
@@ -143,7 +167,7 @@ test('mapMessageEvent skips DM-shaped events instead of failing the parser (comm
   const directory = directoryFor(HERMES, GRAEME)
   const dm = dmRawEvent(GRAEME, [HERMES, GRAEME])
 
-  const result = Effect.runSync(mapMessageEvent(dm, directory, HERMES))
+  const result = Effect.runSync(mapMessageEvent(dm, directory, HERMES, PERMALINK_BASE))
   expect(result).toEqual([])
 })
 
@@ -151,12 +175,23 @@ test('mapMessageEvent skips events whose message field is not a channel-shaped o
   const directory = directoryFor(HERMES, GRAEME)
 
   expect(
-    Effect.runSync(mapMessageEvent({ id: 1, type: 'message', message: null }, directory, HERMES)),
+    Effect.runSync(
+      mapMessageEvent({ id: 1, type: 'message', message: null }, directory, HERMES, PERMALINK_BASE),
+    ),
   ).toEqual([])
   expect(
-    Effect.runSync(mapMessageEvent({ id: 2, type: 'message', message: 'nope' }, directory, HERMES)),
+    Effect.runSync(
+      mapMessageEvent(
+        { id: 2, type: 'message', message: 'nope' },
+        directory,
+        HERMES,
+        PERMALINK_BASE,
+      ),
+    ),
   ).toEqual([])
-  expect(Effect.runSync(mapMessageEvent({ id: 3, type: 'message' }, directory, HERMES))).toEqual([])
+  expect(
+    Effect.runSync(mapMessageEvent({ id: 3, type: 'message' }, directory, HERMES, PERMALINK_BASE)),
+  ).toEqual([])
 })
 
 test('mapMessageEvent parses channel-shaped events through messageToInboundEvents (comms-ov3 regression)', () => {
@@ -166,7 +201,7 @@ test('mapMessageEvent parses channel-shaped events through messageToInboundEvent
   const directory = directoryFor(HERMES, GRAEME)
   const raw = channelRawEvent(messageMentioning(HERMES, GRAEME))
 
-  const result = Effect.runSync(mapMessageEvent(raw, directory, HERMES))
+  const result = Effect.runSync(mapMessageEvent(raw, directory, HERMES, PERMALINK_BASE))
   expect(result.some((e) => e.kind === 'message-posted')).toBe(true)
   expect(result.some((e) => e.kind === 'mention-received')).toBe(true)
 })
@@ -288,6 +323,7 @@ test(
         const lines: string[] = []
         let getCalls = 0
         const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
           http: fakeHttp({
             onPost: () => ({ result: 'success', queue_id: 'q1', last_event_id: 0 }),
             onGet: () => {
@@ -336,6 +372,7 @@ test(
         const lines: string[] = []
         let getCalls = 0
         const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
           http: fakeHttp({
             onPost: () => ({ result: 'success', queue_id: 'q1', last_event_id: 0 }),
             onGet: () => {
@@ -383,6 +420,7 @@ test(
         const lines: string[] = []
         let getCalls = 0
         const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
           http: fakeHttp({
             onPost: () => ({ result: 'success', queue_id: 'q1', last_event_id: 0 }),
             onGet: (path) => {
@@ -438,6 +476,7 @@ test(
         const polls: number[] = []
         let getCalls = 0
         const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
           http: fakeHttp({
             onPost: () => ({ result: 'success', queue_id: 'q1', last_event_id: 0 }),
             onGet: (_path, params) => {
@@ -513,6 +552,7 @@ test(
           },
         }
         const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
           http: fakeHttp({
             onPost: () => {
               registerCalls += 1
@@ -603,6 +643,7 @@ test(
         let registerCalls = 0
         let getCalls = 0
         const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
           http: fakeHttp({
             onPost: () => {
               registerCalls += 1
@@ -662,6 +703,7 @@ test(
         let getCalls = 0
         let replayCalls = 0
         const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
           http: fakeHttp({
             onPost: () => {
               registerCalls += 1
@@ -721,6 +763,7 @@ test(
         let getCalls = 0
         const logLines: string[] = []
         const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
           http: fakeHttp({
             onPost: () => {
               registerCalls += 1
@@ -805,6 +848,7 @@ test('producer retries on transient ZulipApiError and emits transient/reconnect 
       let getCalls = 0
       const logLines: string[] = []
       const config: EventsConfig = {
+        permalinkBase: PERMALINK_BASE,
         http: fakeHttp({
           onPost: () => ({ result: 'success', queue_id: 'q1', last_event_id: 0 }),
           onGet: () => {
@@ -852,6 +896,7 @@ test('producer survives multiple consecutive transient failures before recovery 
       let getCalls = 0
       const logLines: string[] = []
       const config: EventsConfig = {
+        permalinkBase: PERMALINK_BASE,
         http: fakeHttp({
           onPost: () => ({ result: 'success', queue_id: 'q1', last_event_id: 0 }),
           onGet: () => {
@@ -930,6 +975,7 @@ test('producer fires each retry only after its capped-exponential backoff elapse
       const perRungDelaysMs = [1000, 2000, 4000, 8000, 16000, 30000]
       let getCalls = 0
       const config: EventsConfig = {
+        permalinkBase: PERMALINK_BASE,
         http: fakeHttp({
           onPost: () => ({ result: 'success', queue_id: 'q1', last_event_id: 0 }),
           onGet: () => {
@@ -981,6 +1027,7 @@ test('producer surfaces non-Error rejections via the ZulipApiError message in th
       let getCalls = 0
       const logLines: string[] = []
       const config: EventsConfig = {
+        permalinkBase: PERMALINK_BASE,
         http: fakeHttp({
           onPost: () => ({ result: 'success', queue_id: 'q1', last_event_id: 0 }),
           onGet: () => {
@@ -1027,6 +1074,7 @@ test('producer logs a rate-limit backoff breadcrumb when /events returns HTTP 42
       let getCalls = 0
       const logLines: string[] = []
       const config: EventsConfig = {
+        permalinkBase: PERMALINK_BASE,
         http: fakeHttp({
           onPost: () => ({ result: 'success', queue_id: 'q1', last_event_id: 0 }),
           onGet: () => {

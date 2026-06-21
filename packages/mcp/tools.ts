@@ -92,11 +92,13 @@ const identityShape = (identity: Identity): SerializedIdentity => ({
 interface SerializedChannel {
   readonly id: string
   readonly name: string
+  readonly permalink: string | null
 }
 
 const channelShape = (channel: ChannelRef): SerializedChannel => ({
   id: channel.id,
   name: channel.name,
+  permalink: channel.permalink ?? null,
 })
 
 export interface ToolsCache {
@@ -250,8 +252,16 @@ const resolveMentions = (
 
 const messageShape = (m: Message): Record<string, unknown> => ({
   id: m.ref.id,
-  channel: { id: m.ref.channel.id, name: m.ref.channel.name },
-  thread: m.ref.thread === undefined ? null : { name: m.ref.thread.name },
+  channel: {
+    id: m.ref.channel.id,
+    name: m.ref.channel.name,
+    permalink: m.ref.channel.permalink ?? null,
+  },
+  thread:
+    m.ref.thread === undefined
+      ? null
+      : { name: m.ref.thread.name, permalink: m.ref.thread.permalink ?? null },
+  permalink: m.ref.permalink ?? null,
   sender: identityShape(m.sender),
   body: m.body,
   ts: m.ts,
@@ -348,6 +358,11 @@ const ReadThreadArgs = Schema.Struct({
   channel_name: Schema.String,
   thread: Schema.String,
   ...RangeArgs,
+})
+const MessageLinkArgs = Schema.Struct({
+  message_id: Schema.String,
+  channel_name: Schema.optional(Schema.String),
+  thread: Schema.optional(Schema.String),
 })
 const PresenceArgs = Schema.Struct({ identity_id: Schema.String })
 const DownloadFileArgs = Schema.Struct({ url_path: Schema.String })
@@ -563,6 +578,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           channel_id: ref.channel.id,
           channel_name: ref.channel.name,
           thread: ref.thread === undefined ? null : { name: ref.thread.name },
+          permalink: ref.permalink ?? null,
         }
       },
     },
@@ -808,6 +824,48 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           cache.rememberIdentity(m.sender)
         }
         return { messages: messages.map(messageShape) }
+      },
+    },
+    {
+      name: 'message_link',
+      description:
+        'Return the canonical clickable permalink for a message id: {permalink}. Use when you hold only an id (e.g. one cited elsewhere) and want the URL without re-deriving the narrow format — messages from post/read already carry a permalink. A message just posted or read is resolved from cache; otherwise pass channel_name (and thread) to build the link directly, or omit them to look the message up by id. Returns {permalink: null} when the message cannot be resolved.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          message_id: { type: 'string', description: 'Message id to link to' },
+          channel_name: {
+            type: 'string',
+            description: 'Channel the message lives in (lets the link be built without a lookup)',
+          },
+          thread: {
+            type: 'string',
+            description: 'Thread / topic the message lives in (sharpens the link to the topic)',
+          },
+        },
+        required: ['message_id'],
+        additionalProperties: false,
+      },
+      handler: async (args) => {
+        const permalink = await runEdge(
+          Effect.gen(function* () {
+            const parsed = yield* Schema.decodeUnknown(MessageLinkArgs)(args)
+            const id = yield* decodeMessageId(parsed.message_id)
+            const cached = cache.messageById.get(id)
+            if (cached?.permalink !== undefined) return cached.permalink
+            const hint =
+              parsed.channel_name === undefined
+                ? undefined
+                : {
+                    channel: yield* decodeChannelName(parsed.channel_name),
+                    ...(parsed.thread === undefined
+                      ? {}
+                      : { thread: yield* decodeThreadName(parsed.thread) }),
+                  }
+            return Option.getOrNull(yield* adapter.history.messagePermalink(id, hint))
+          }),
+        )
+        return { permalink }
       },
     },
     {

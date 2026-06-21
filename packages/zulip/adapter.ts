@@ -66,6 +66,7 @@ import type { QueueState } from './events.ts'
 import {
   createMessageRefCache,
   createWatermarkStore,
+  fetchMessageRef,
   inboxEvents,
   messageToInboundEvents,
   registerQueue,
@@ -83,6 +84,7 @@ import type {
 import { ApiKey, BotEmail, makeZulipHttp, ZulipApiError } from './http.ts'
 import type { ReconcileReport } from './minter-reconciler.ts'
 import { reconcileMinterSubscriptions } from './minter-reconciler.ts'
+import { buildMessageRef, permalinkBase, withChannelPermalink } from './permalink.ts'
 import { senderNarrow, userPresencePath, ZulipUserRef } from './user-ref.ts'
 
 export interface ZulipAdapterConfig {
@@ -542,7 +544,7 @@ export const zulipAdapter = (
         const body = yield* decodeMessageBody(m.content)
         const reactions = yield* mapHistoricalReactions(m.reactions, directory)
         return {
-          ref: { id: m.id, channel, thread: { name: m.subject } },
+          ref: decorateMessageRef(m.id, channel, m.subject),
           sender,
           body,
           ts: m.ts,
@@ -587,6 +589,17 @@ export const zulipAdapter = (
     // email field is subject to email_address_visibility settings and may
     // return the privacy alias `user{id}@…`, which doesn't authenticate).
     const realmHost = new URL(config.realmUrl).hostname
+
+    // Human-facing realm origin for permalinks (public host when a Host-header
+    // override is in play). Every ref this adapter hands back is decorated with
+    // its narrow URL so callers can quote a clickable link (comms-e7my).
+    const base = permalinkBase(config)
+    const decorateChannel = (channel: ChannelRef): ChannelRef => withChannelPermalink(base, channel)
+    const decorateMessageRef = (
+      id: MessageId,
+      channel: ChannelRef,
+      threadName: ThreadName | undefined,
+    ): MessageRef => buildMessageRef(base, id, channel, threadName)
 
     const buildBotEmail = (
       shortName: string,
@@ -962,10 +975,13 @@ export const zulipAdapter = (
             Effect.gen(function* () {
               const map = new Map<string, ChannelRef>()
               for (const s of res.streams) {
-                map.set(s.name, {
-                  id: yield* decodeChannelId(String(s.stream_id)),
-                  name: yield* decodeChannelName(s.name),
-                })
+                map.set(
+                  s.name,
+                  decorateChannel({
+                    id: yield* decodeChannelId(String(s.stream_id)),
+                    name: yield* decodeChannelName(s.name),
+                  }),
+                )
               }
               return map
             }),
@@ -1055,10 +1071,7 @@ export const zulipAdapter = (
                     Effect.flatMap((sent) =>
                       decodeMessageId(String(sent.id)).pipe(
                         Effect.map(
-                          (id): MessageRef =>
-                            thread === undefined
-                              ? { id, channel: effective }
-                              : { id, channel: effective, thread },
+                          (id): MessageRef => decorateMessageRef(id, effective, thread?.name),
                         ),
                       ),
                     ),
@@ -1283,6 +1296,7 @@ export const zulipAdapter = (
             Effect.map(([current, state]) =>
               inboxEvents({
                 http: minterHttp,
+                permalinkBase: base,
                 resolveDirectory: buildDirectoryLookup,
                 mode: currentMode(state),
                 messageRefCache,
@@ -1334,6 +1348,7 @@ export const zulipAdapter = (
                   message,
                   directory,
                   Option.getOrUndefined(current)?.identity,
+                  base,
                 )
               },
             ).pipe(
@@ -1420,6 +1435,26 @@ export const zulipAdapter = (
           Effect.mapError((cause) => new HistoryError({ operation: 'recentThreads', cause })),
         )
       },
+      messagePermalink: (id, hint) =>
+        (hint === undefined
+          ? // No coordinates supplied: locate the message by id (the minter can
+            // see any channel message) and hand back the permalink the decode
+            // already built.
+            fetchMessageRef(minterHttp, Number(id), base).pipe(
+              Effect.map(Option.flatMap((ref) => Option.fromNullable(ref.permalink))),
+            )
+          : // Channel hint supplied: resolve the name to its numeric stream and
+            // build the link directly — no need to locate the message itself.
+            lookupChannel(hint.channel).pipe(
+              Effect.map(
+                Option.flatMap((channel) =>
+                  Option.fromNullable(buildMessageRef(base, id, channel, hint.thread).permalink),
+                ),
+              ),
+            )
+        ).pipe(
+          Effect.mapError((cause) => new HistoryError({ operation: 'messagePermalink', cause })),
+        ),
     }
 
     const reconcileMinter = (): Effect.Effect<ReconcileReport, never> =>

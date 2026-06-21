@@ -40,6 +40,7 @@ import {
   Stream,
 } from 'effect'
 import type { ZulipApiError, ZulipHttp } from './http.ts'
+import { buildMessageRef } from './permalink.ts'
 
 export interface DirectoryLookup {
   readonly byId: ReadonlyMap<number, Identity>
@@ -117,6 +118,12 @@ export const createWatermarkStore = (): Effect.Effect<WatermarkStore> =>
 
 export interface EventsConfig {
   readonly http: ZulipHttp
+  /**
+   * Human-facing realm origin for narrow permalinks (comms-e7my). The adapter
+   * resolves it once from its config (public host when a Host-header override
+   * is set) and hands it down so every inbound ref carries a clickable URL.
+   */
+  readonly permalinkBase: string
   /**
    * Resolve the realm's user directory. Called once per long-poll
    * batch so the mapping picks up users joining mid-session without
@@ -262,17 +269,14 @@ const extractMentions = (
 
 const decodeMessageRef = (
   message: ParsedZulipMessage,
+  base: string,
 ): Effect.Effect<MessageRef, ParseResult.ParseError> =>
   Effect.gen(function* () {
     const id = yield* decodeMessageId(String(message.id))
     const channelId = yield* decodeChannelId(String(message.stream_id))
     const channelName = yield* decodeChannelName(message.display_recipient)
     const threadName = yield* decodeThreadName(message.subject)
-    return {
-      id,
-      channel: { id: channelId, name: channelName },
-      thread: { name: threadName },
-    }
+    return buildMessageRef(base, id, { id: channelId, name: channelName }, threadName)
   })
 
 const decodeSenderIdentity = (
@@ -291,11 +295,12 @@ const decodeSenderIdentity = (
 export const messageToInboundEvents = (
   message: ParsedZulipMessage,
   directory: DirectoryLookup,
-  boundIdentity?: Identity,
+  boundIdentity: Identity | undefined,
+  base: string,
 ): Effect.Effect<ReadonlyArray<InboundEvent>, ParseResult.ParseError> =>
   Effect.gen(function* () {
     const sender = yield* decodeSenderIdentity(message, directory)
-    const ref = yield* decodeMessageRef(message)
+    const ref = yield* decodeMessageRef(message, base)
     const body = yield* decodeMessageBody(message.content)
     const ts = yield* decodeTimestamp(message.timestamp)
     const portMessage = {
@@ -358,13 +363,14 @@ export const mapMessageEvent = (
   raw: { readonly [key: string]: unknown },
   directory: DirectoryLookup,
   boundIdentity: Identity | undefined,
+  base: string,
 ): Effect.Effect<ReadonlyArray<InboundEvent>, ParseResult.ParseError> => {
   const message = raw['message']
   if (Either.isLeft(decodeChannelShape(message))) {
     return Effect.succeed([])
   }
   return decodeZulipMessageContent(message).pipe(
-    Effect.flatMap((parsed) => messageToInboundEvents(parsed, directory, boundIdentity)),
+    Effect.flatMap((parsed) => messageToInboundEvents(parsed, directory, boundIdentity, base)),
   )
 }
 
@@ -438,6 +444,7 @@ const singleMessageResponseSchema = Schema.Struct({
 export const fetchMessageRef = (
   http: ZulipHttp,
   messageId: number,
+  base: string,
 ): Effect.Effect<Option.Option<MessageRef>, ZulipApiError | ParseResult.ParseError> =>
   http
     .get('/messages', singleMessageResponseSchema, {
@@ -451,7 +458,7 @@ export const fetchMessageRef = (
       Effect.flatMap((res) => {
         const message = res.messages[0]
         if (message === undefined || message.id !== messageId) return Effect.succeed(Option.none())
-        return decodeMessageRef(message).pipe(Effect.map(Option.some))
+        return decodeMessageRef(message, base).pipe(Effect.map(Option.some))
       }),
     )
 
@@ -500,7 +507,7 @@ const processSingleEvent = (
     // message is logged+skipped here so a single shape-violating event
     // can't crash the pump (comms-aod) — the same contract the Either-left
     // path enforced before the Schema-decode migration.
-    return mapMessageEvent(evt, directory, config.boundIdentity).pipe(
+    return mapMessageEvent(evt, directory, config.boundIdentity, config.permalinkBase).pipe(
       Effect.tap((events) =>
         Effect.sync(() => {
           if (config.messageRefCache !== undefined) {
@@ -538,7 +545,7 @@ const processSingleEvent = (
         ),
       )
     }
-    return fetchMessageRef(config.http, reaction.message_id).pipe(
+    return fetchMessageRef(config.http, reaction.message_id, config.permalinkBase).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.succeed([] as ReadonlyArray<InboundEvent>),

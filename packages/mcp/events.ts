@@ -57,6 +57,12 @@ export const formatMessage = (
     ['channel_name', ref.channel.name],
     ['thread', ref.thread?.name],
     ['message_id', ref.id],
+    // Clickable narrow permalinks for the ref the substrate handed us — message,
+    // channel, and topic (comms-e7my). Omitted by buildMeta when the substrate
+    // has none.
+    ['permalink', ref.permalink],
+    ['channel_permalink', ref.channel.permalink],
+    ['thread_permalink', ref.thread?.permalink],
     ['sender_id', sender.id],
     ['sender_name', sender.name],
     ['sender_kind', sender.kind],
@@ -86,6 +92,7 @@ export const formatReaction = (
     ['target_message_id', event.target.id],
     ['target_channel_name', event.target.channel.name],
     ['target_thread', event.target.thread?.name],
+    ['target_permalink', event.target.permalink],
     ['reaction_emoji', event.emoji],
     ['reaction_action', action],
     ['by_id', event.by.id],

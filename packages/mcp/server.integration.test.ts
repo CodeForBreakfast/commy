@@ -71,6 +71,7 @@ const EXPECTED_TOOL_NAMES = [
   'presence',
   'read_channel',
   'read_thread',
+  'message_link',
   'subscribe',
   'unsubscribe',
   'post',
@@ -226,6 +227,7 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
     readThread: (ch, thread, range) =>
       base.history.readThread(resolveChannelRef(ch), thread, range),
     recentThreads: (sender, opts) => base.history.recentThreads(sender, opts),
+    messagePermalink: (id, hint) => base.history.messagePermalink(id, hint),
   }
 
   // Always wrap identity to count acquires/releases — comms-1te asserts
