@@ -66,6 +66,7 @@ import type { QueueState } from './events.ts'
 import {
   createMessageRefCache,
   createWatermarkStore,
+  fetchMessageRef,
   inboxEvents,
   messageToInboundEvents,
   registerQueue,
@@ -1434,6 +1435,26 @@ export const zulipAdapter = (
           Effect.mapError((cause) => new HistoryError({ operation: 'recentThreads', cause })),
         )
       },
+      messagePermalink: (id, hint) =>
+        (hint === undefined
+          ? // No coordinates supplied: locate the message by id (the minter can
+            // see any channel message) and hand back the permalink the decode
+            // already built.
+            fetchMessageRef(minterHttp, Number(id), base).pipe(
+              Effect.map(Option.flatMap((ref) => Option.fromNullable(ref.permalink))),
+            )
+          : // Channel hint supplied: resolve the name to its numeric stream and
+            // build the link directly — no need to locate the message itself.
+            lookupChannel(hint.channel).pipe(
+              Effect.map(
+                Option.flatMap((channel) =>
+                  Option.fromNullable(buildMessageRef(base, id, channel, hint.thread).permalink),
+                ),
+              ),
+            )
+        ).pipe(
+          Effect.mapError((cause) => new HistoryError({ operation: 'messagePermalink', cause })),
+        ),
     }
 
     const reconcileMinter = (): Effect.Effect<ReconcileReport, never> =>

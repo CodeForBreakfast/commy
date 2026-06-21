@@ -16,7 +16,7 @@ import {
   decodeMessageIdSync,
   decodeTimestampSync,
 } from '@commy/core/ports'
-import { Effect, TestClock, TestContext } from 'effect'
+import { Effect, Option, TestClock, TestContext } from 'effect'
 import { type ChannelsCatchUpDeps, catchUpChannels } from './channels-catch-up.ts'
 
 /** Fixed boot "now" the catch-up reads from the TestClock: 5000 epoch seconds. */
@@ -88,6 +88,7 @@ const buildHistorySpy = (
           return byThread[`${channel.name}/${threadName}`] ?? []
         }),
       recentThreads: () => Effect.succeed([]),
+      messagePermalink: () => Effect.succeed(Option.none()),
     },
   }
 }

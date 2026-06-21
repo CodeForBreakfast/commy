@@ -83,13 +83,13 @@ import {
 // surface without a live Zulip realm. They mirror the message/channel/topic
 // shape the real Zulip narrow builder produces.
 const MEMORY_REALM = 'memory://commy'
-const channelPermalink = (id: ChannelId): string => `${MEMORY_REALM}/channel/${id}`
-const topicPermalink = (id: ChannelId, topic: ThreadName): string =>
-  `${channelPermalink(id)}/topic/${topic}`
-const messagePermalink = (id: ChannelId, messageId: MessageId, topic?: ThreadName): string =>
+const synthChannelPermalink = (id: ChannelId): string => `${MEMORY_REALM}/channel/${id}`
+const synthTopicPermalink = (id: ChannelId, topic: ThreadName): string =>
+  `${synthChannelPermalink(id)}/topic/${topic}`
+const synthMessagePermalink = (id: ChannelId, messageId: MessageId, topic?: ThreadName): string =>
   topic === undefined
-    ? `${channelPermalink(id)}/near/${messageId}`
-    : `${topicPermalink(id, topic)}/near/${messageId}`
+    ? `${synthChannelPermalink(id)}/near/${messageId}`
+    : `${synthTopicPermalink(id, topic)}/near/${messageId}`
 
 interface StoredMessage {
   readonly ref: MessageRef
@@ -232,7 +232,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         if (existing !== undefined) return existing
         const id = yield* decodeChannelId(String(yield* allocId(nextChannelId))).pipe(Effect.orDie)
         const channelName = yield* decodeChannelName(name)
-        const ref: ChannelRef = { id, name: channelName, permalink: channelPermalink(id) }
+        const ref: ChannelRef = { id, name: channelName, permalink: synthChannelPermalink(id) }
         channelsById.set(id, ref)
         channelsByName.set(name, ref)
         messagesByChannel.set(id, [])
@@ -336,13 +336,16 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
             ? {
                 id: messageId,
                 channel,
-                permalink: messagePermalink(channel.id, messageId),
+                permalink: synthMessagePermalink(channel.id, messageId),
               }
             : {
                 id: messageId,
                 channel,
-                thread: { name: thread.name, permalink: topicPermalink(channel.id, thread.name) },
-                permalink: messagePermalink(channel.id, messageId, thread.name),
+                thread: {
+                  name: thread.name,
+                  permalink: synthTopicPermalink(channel.id, thread.name),
+                },
+                permalink: synthMessagePermalink(channel.id, messageId, thread.name),
               },
         ),
       )
@@ -686,6 +689,19 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
             threads,
             Order.reverse(Order.mapInput(Order.number, (t: RecentThread) => t.lastPostTs)),
           )
+        }),
+      messagePermalink: (id, hint) =>
+        Effect.sync(() => {
+          if (hint !== undefined) {
+            const channel = channelsByName.get(hint.channel)
+            return channel === undefined
+              ? Option.none<string>()
+              : Option.some(synthMessagePermalink(channel.id, id, hint.thread))
+          }
+          const stored = messagesById.get(id)
+          return stored === undefined
+            ? Option.none<string>()
+            : Option.fromNullable(stored.ref.permalink)
         }),
     }
 

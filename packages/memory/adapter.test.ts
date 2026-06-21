@@ -11,7 +11,7 @@ import {
   HistoryError,
   PublisherError,
 } from '@commy/core/ports'
-import { Array as Arr, Cause, Duration, Effect, Exit, TestClock, TestContext } from 'effect'
+import { Array as Arr, Cause, Duration, Effect, Exit, Option, TestClock, TestContext } from 'effect'
 import { memoryAdapter } from './adapter.ts'
 
 const acquired = async () => {
@@ -186,6 +186,20 @@ test('directory.listChannels exposes a synthesised channel permalink', async () 
   const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
   const channels = await Effect.runPromise(adapter.directory.listChannels())
   expect(channels[0]?.permalink).toBe(`memory://commy/channel/${channel.id}`)
+})
+
+test('history.messagePermalink resolves a stored message by id without a hint', async () => {
+  const adapter = await acquired()
+  const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
+  const ref = await Effect.runPromise(adapter.publisher.post(channel, decodeMessageBodySync('hi')))
+  const link = await Effect.runPromise(adapter.history.messagePermalink(ref.id))
+  expect(link).toEqual(Option.some(`memory://commy/channel/${channel.id}/near/${ref.id}`))
+})
+
+test('history.messagePermalink returns None for an unknown id with no hint', async () => {
+  const adapter = await acquired()
+  const link = await Effect.runPromise(adapter.history.messagePermalink(decodeMessageIdSync('404')))
+  expect(link).toEqual(Option.none())
 })
 
 test('separate constructed adapters hold independent counter state', async () => {

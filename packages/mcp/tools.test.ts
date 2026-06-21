@@ -701,6 +701,65 @@ test('list_channels decorates each channel with a permalink (comms-e7my)', () =>
     ),
   ))
 
+test('message_link returns the cached permalink for a known message id (comms-e7my)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
+          }),
+        )
+        const posted = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: { channel_name: 'home', body: 'hi', thread: 'topic-a' },
+          }),
+        )
+        const post = posted.structuredContent as { message_id: string; permalink: string }
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'message_link',
+            arguments: { message_id: post.message_id },
+          }),
+        )
+        expect(result.isError).toBeFalsy()
+        expect((result.structuredContent as { permalink: string }).permalink).toBe(post.permalink)
+      }),
+    ),
+  ))
+
+test('message_link builds a permalink from a channel hint for an uncached id (comms-e7my)', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => ensureBound())
+            cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
+          }),
+        )
+        // A post only to learn the channel's numeric id; the linked id is a
+        // different, uncached one so the channel-hint build path is exercised.
+        const posted = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'post', arguments: { channel_name: 'home', body: 'seed' } }),
+        )
+        const channelId = (posted.structuredContent as { channel_id: string }).channel_id
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'message_link',
+            arguments: { message_id: '999', channel_name: 'home', thread: 'topic-a' },
+          }),
+        )
+        expect(result.isError).toBeFalsy()
+        expect((result.structuredContent as { permalink: string | null }).permalink).toBe(
+          `memory://commy/channel/${channelId}/topic/topic-a/near/999`,
+        )
+      }),
+    ),
+  ))
+
 test('subscribe with channel:<name> calls inbox.subscribe with a matching ChannelRef', () =>
   Effect.runPromise(
     Effect.scoped(

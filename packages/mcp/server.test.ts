@@ -172,6 +172,7 @@ const buildFakeAdapter = (
     readChannel: (_channel: ChannelRef, _range: Range) => Effect.succeed([]),
     readThread: (_channel: ChannelRef, _threadName, _range?: Range) => Effect.succeed([]),
     recentThreads: () => Effect.succeed([]),
+    messagePermalink: () => Effect.succeed(Option.none()),
   }
   const directory: Directory = {
     listAgents: () => Effect.succeed([]),

@@ -20,7 +20,7 @@ import {
 import { effectTest } from '@commy/testing/effect-test'
 import { makeStubHttpClient, type StubHttpClient } from '@commy/testing/stub-http-client'
 import { HttpClient } from '@effect/platform'
-import { Cause, Effect, Exit, Redacted } from 'effect'
+import { Cause, Effect, Exit, Option, Redacted } from 'effect'
 import type { ZulipAdapter, ZulipAdapterConfig } from './adapter.ts'
 import { attachmentReference, zulipAdapter as zulipAdapterRaw } from './adapter.ts'
 import { ApiKey, BotEmail, decodeUserUploadPathSync, RealmUrl, ZulipApiError } from './http.ts'
@@ -1076,6 +1076,47 @@ effectTest('history.readChannel narrows by channel and maps each message to the 
       mentions: [],
       reactions: [],
     })
+  }),
+)
+
+effectTest('history.messagePermalink builds a link from a channel hint via the streams cache', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* stub.respond('GET', '/api/v1/streams', {
+      body: { result: 'success', streams: [{ stream_id: 1234, name: 'general' }] },
+    })
+    const link = yield* adapter.history.messagePermalink(decodeMessageIdSync('77'), {
+      channel: decodeChannelNameSync('general'),
+      thread: decodeThreadNameSync('topic-x'),
+    })
+    expect(link).toEqual(
+      Option.some('https://zulip.example.com/#narrow/channel/1234-general/topic/topic-x/near/77'),
+    )
+  }),
+)
+
+effectTest('history.messagePermalink fetches the message by id when no hint is given', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedMessages(stub, [
+      {
+        id: 77,
+        sender_id: 5,
+        sender_full_name: 'Graeme Foster',
+        stream_id: 1234,
+        display_recipient: 'general',
+        subject: 'lobby',
+        content: 'hi',
+        timestamp: 1715000000,
+      },
+    ])
+    const link = yield* adapter.history.messagePermalink(decodeMessageIdSync('77'))
+    expect(link).toEqual(
+      Option.some('https://zulip.example.com/#narrow/channel/1234-general/topic/lobby/near/77'),
+    )
   }),
 )
 

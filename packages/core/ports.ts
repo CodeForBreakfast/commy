@@ -432,6 +432,18 @@ export interface HistoryReader {
     sender: IdentityId,
     opts?: { limit?: number },
   ): Effect.Effect<ReadonlyArray<RecentThread>, HistoryError>
+  /**
+   * Resolve a clickable substrate permalink for a message id (comms-e7my) —
+   * the id-only case where the caller doesn't hold a ref. URL construction
+   * stays in the adapter. With a `hint` the adapter resolves the channel and
+   * builds the link from channel + topic + id without locating the message;
+   * without one it locates the message by id. `None` when the message cannot
+   * be resolved (no hint and no such message).
+   */
+  messagePermalink(
+    id: MessageId,
+    hint?: { readonly channel: ChannelName; readonly thread?: ThreadName },
+  ): Effect.Effect<Option.Option<string>, HistoryError>
 }
 
 /**
@@ -584,7 +596,7 @@ export class InboxError extends Data.TaggedError('InboxError')<{
  * in-memory adapter never produces it.
  */
 export class HistoryError extends Data.TaggedError('HistoryError')<{
-  readonly operation: 'readChannel' | 'readThread' | 'recentThreads'
+  readonly operation: 'readChannel' | 'readThread' | 'recentThreads' | 'messagePermalink'
   readonly cause: unknown
 }> {
   override get message(): string {
