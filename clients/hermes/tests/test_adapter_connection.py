@@ -36,6 +36,7 @@ class _FakeTransport:
         self.sink = sink
         self.started = 0
         self.stopped = 0
+        self.posts: list[tuple[str, str, str]] = []
 
     async def start(self) -> None:
         self.started += 1
@@ -45,6 +46,10 @@ class _FakeTransport:
 
     async def emit(self, frame) -> None:
         await self.sink(frame)
+
+    async def post(self, body: str, channel: str, topic: str) -> str:
+        self.posts.append((body, channel, topic))
+        return f"posted-{len(self.posts)}"
 
 
 class _RecordingFactory:
@@ -166,20 +171,92 @@ def test_disconnect_shuts_down_connections():
     assert adapter._reaper_task is None
 
 
-# --- Suppressed gateway outbound (comms-dgy8) --------------------------------
+# --- Framework send delivers the prose reply (comms-a9q4) --------------------
 #
-# The Hermes gateway unconditionally funnels outbound through ``adapter.send``
-# (run.py:5321 onboarding notice, stream_consumer per-turn delivery). commy
-# outbound rides the agent's own MCP ``post`` tool (comms-uuy), so the framework
-# send MUST be a deliberate no-op rather than the old NotImplementedError that
-# aborted the message handler before the agent could run.
+# The Hermes gateway funnels each turn's composed PROSE through ``adapter.send``
+# (stream_consumer per-turn delivery), guarded by ``if not text.strip()`` so it
+# only fires when the model actually wrote prose. ``send`` delivers that prose
+# into the inbound frame's channel + topic via the live per-topic connection's
+# ``post`` tool — fixing the silent drop (a prose reply was previously
+# discarded) and routing replies to the right topic (resolves comms-xc7y).
+#
+# The explicit ``post`` MCP tool stays the agent's path for cross-topic replies;
+# the two are complementary (comms-a9q4, Graeme-ratified). A pure ``post``-tool
+# turn emits no prose, so ``send`` is never called for it — no double-reply.
 
 
-def test_send_is_a_silent_noop_so_the_gateway_does_not_abort_the_turn():
-    adapter = _RecordingAdapter(PlatformConfig())
+def test_send_delivers_prose_reply_to_the_inbound_channel_and_topic():
+    adapter, factory = _adapter_with_fake_manager()
 
     async def scenario():
-        return await adapter.send("epr-backend", "📬 onboarding notice")
+        await adapter.connect()
+        await adapter.ensure_topic_connection("epr-backend", "standup")
+        result = await adapter.send(
+            "epr-backend",
+            "here is my reply",
+            metadata={"thread_id": "standup"},
+        )
+        await adapter.disconnect()
+        return result
+
+    result = asyncio.run(scenario())
+    assert factory.created[0].posts == [("here is my reply", "epr-backend", "standup")]
+    assert result.success is True
+    # No message_id even though delivery happened: a returned id would make the
+    # stream consumer treat commy as editable and re-send per tool boundary
+    # (the "155 comments under one PR" trap). Withholding it keeps the reply on
+    # the consumer's single-delivery, no-editable-id path.
+    assert result.message_id is None
+
+
+def test_send_without_a_topic_is_a_noop_so_the_onboarding_notice_does_not_post():
+    # The gateway's "no home channel" onboarding notice (run.py) and any other
+    # topic-less send carry no ``thread_id``; with no topic there is no inbound
+    # frame to reply into, so ``send`` stays the deliberate no-op it was.
+    adapter, factory = _adapter_with_fake_manager()
+
+    async def scenario():
+        await adapter.connect()
+        await adapter.ensure_topic_connection("epr-backend", "standup")
+        result = await adapter.send("epr-backend", "📬 onboarding notice")
+        await adapter.disconnect()
+        return result
+
+    result = asyncio.run(scenario())
+    assert factory.created[0].posts == []
+    assert result.success is True
+    assert result.message_id is None
+
+
+def test_send_with_blank_content_does_not_post():
+    adapter, factory = _adapter_with_fake_manager()
+
+    async def scenario():
+        await adapter.connect()
+        await adapter.ensure_topic_connection("epr-backend", "standup")
+        result = await adapter.send(
+            "epr-backend", "   ", metadata={"thread_id": "standup"}
+        )
+        await adapter.disconnect()
+        return result
+
+    result = asyncio.run(scenario())
+    assert factory.created[0].posts == []
+    assert result.success is True
+
+
+def test_send_to_a_topic_without_a_live_connection_is_a_graceful_noop():
+    # A reap between the inbound turn and delivery (or any unknown topic) must
+    # not crash the turn — there is simply no live connection to ride.
+    adapter, factory = _adapter_with_fake_manager()
+
+    async def scenario():
+        await adapter.connect()
+        result = await adapter.send(
+            "epr-backend", "orphan reply", metadata={"thread_id": "no-such-topic"}
+        )
+        await adapter.disconnect()
+        return result
 
     result = asyncio.run(scenario())
     assert result.success is True

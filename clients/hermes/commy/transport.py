@@ -30,10 +30,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import sys
 import time
 from collections.abc import Mapping
-from typing import IO, Optional
+from typing import IO, Any, Optional
 
 from .connection import (
     Clock,
@@ -103,6 +104,7 @@ class McpTopicTransport:
         self._task: Optional[asyncio.Task[None]] = None
         self._ready = asyncio.Event()
         self._closing = asyncio.Event()
+        self._session: Optional[Any] = None
 
     async def _on_log(self, params: object) -> None:
         """Forward a ``notifications/message`` frame (``params.data``) to the sink."""
@@ -127,11 +129,16 @@ class McpTopicTransport:
             async with stdio_client(server, errlog=self._errlog) as (read, write):
                 async with ChannelAwareClientSession(read, write, logging_callback=self._on_log) as session:
                     await session.initialize()
+                    # Hold the live session so `post` can deliver outbound replies
+                    # over the same connection (comms-a9q4). Concurrent requests
+                    # from another task are safe — the SDK routes responses by id.
+                    self._session = session
                     self._ready.set()
                     await self._closing.wait()
         finally:
             # Unblock a `start()` that is still waiting even if connect failed,
             # so the caller observes the failure rather than hanging.
+            self._session = None
             self._ready.set()
 
     async def start(self) -> None:
@@ -172,3 +179,53 @@ class McpTopicTransport:
             pass
         finally:
             self._task = None
+
+    async def post(self, body: str, channel: str, topic: str) -> Optional[str]:
+        """Deliver an outbound reply by calling the commy ``post`` MCP tool.
+
+        Rides the live per-topic session this connection already holds, so the
+        reply posts as the per-topic identity into ``(channel, topic)``. Returns
+        the posted message id when the server reports one. A connection that is
+        not currently live (pre-start / post-stop) has no session to ride and
+        returns ``None`` rather than raising into the agent's turn.
+        """
+        session = self._session
+        if session is None:
+            return None
+        result = await session.call_tool(
+            "post", {"channel_name": channel, "thread": topic, "body": body}
+        )
+        return _message_id_from_result(result)
+
+
+def _message_id_from_result(result: object) -> Optional[str]:
+    """Best-effort extraction of ``message_id`` from a ``post`` tool result.
+
+    The commy ``post`` tool returns ``{message_id, channel_id, channel_name,
+    thread}``; the SDK surfaces it as ``structuredContent`` and/or JSON text in
+    ``content``. Read whichever is present, tolerating either shape, and never
+    raise — a missing id just means the caller surfaces ``None`` (delivery still
+    happened; only the id is unknown)."""
+    for candidate in _result_payloads(result):
+        message_id = candidate.get("message_id")
+        if message_id is not None:
+            return str(message_id)
+    return None
+
+
+def _result_payloads(result: object) -> list[Mapping[str, Any]]:
+    payloads: list[Mapping[str, Any]] = []
+    structured = getattr(result, "structuredContent", None)
+    if isinstance(structured, Mapping):
+        payloads.append(structured)
+    for item in getattr(result, "content", None) or []:
+        text = getattr(item, "text", None)
+        if not text:
+            continue
+        try:
+            parsed = json.loads(text)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(parsed, Mapping):
+            payloads.append(parsed)
+    return payloads

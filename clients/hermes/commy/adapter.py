@@ -3,11 +3,14 @@
 Pattern B inbound-axis consumer: presents commy as a Hermes gateway
 platform so non-Claude-Code hosts can receive commy traffic.
 
-This plugin is **inbound only, by design** — delivering incoming messages into
-the agent's turn is the one axis MCP cannot push, so the host owns it; posting
-and every other outbound action are commy MCP tools, never this adapter's job
-(``send`` is a deliberate no-op, see below). A reply-capable Hermes bot wires
-*both* this inbound plugin *and* a commy ``post`` MCP server in its
+This plugin owns the **inbound axis** — delivering incoming messages into the
+agent's turn is the one axis MCP cannot push, so the host owns it. It also
+delivers the agent's **same-topic prose reply**: ``send`` posts the turn's
+composed prose back into the originating ``(channel, topic)`` over the live
+per-topic connection (comms-a9q4), fixing the silent drop a prose reply used to
+suffer. Replying to a *different* channel/topic stays the agent's own commy
+``post`` MCP tool — the two paths are complementary, so a reply-capable Hermes
+bot wires *both* this inbound plugin *and* a commy ``post`` MCP server in its
 ``mcp_servers`` config — see the "Reply path (outbound)" section of this
 package's ``README.md``.
 
@@ -56,11 +59,12 @@ class CommyAdapter(BasePlatformAdapter):
     (``receive_channel_notification``) and the connection lifecycle is wired:
     ``connect`` starts the boot listener + idle reaper, ``ensure_topic_connection``
     is the spawn entry point, and ``disconnect`` tears every connection down. The
-    gateway's framework-send (``send`` / ``get_chat_info``) is deliberately
-    suppressed — commy is inbound-only and the reply is the agent's own MCP
-    ``post`` tool inside its turn (comms-uuy, comms-dgy8). ``check_requirements``
-    activates the platform for live use once the pod's commy config is
-    present (the environment ``SpawnConfig.from_env`` requires).
+    gateway's framework-send (``send``) delivers the turn's composed prose reply
+    into the originating topic via that topic's live connection (comms-a9q4);
+    cross-topic replies stay the agent's own commy ``post`` MCP tool (comms-uuy,
+    comms-dgy8). ``check_requirements`` activates the platform for live use once
+    the pod's commy config is present (the environment ``SpawnConfig.from_env``
+    requires).
 
     A ``connection_manager`` and/or ``listener`` may be injected (tests);
     otherwise ``connect`` builds the real ones from the environment via
@@ -208,20 +212,49 @@ class CommyAdapter(BasePlatformAdapter):
         reply_to: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> SendResult:
-        """Suppress gateway framework-send: outbound rides the agent's MCP tool.
+        """Deliver the turn's composed prose reply into its originating topic.
 
-        The Hermes gateway funnels every outbound through ``adapter.send`` — the
-        "no home channel" onboarding notice (``run.py``), the per-turn streaming
-        delivery (``stream_consumer.py``), and cron delivery (``delivery.py``) —
-        and there is no native inbound-only capability flag to opt out of it. For
-        commy the reply is the agent's *own* ``post`` MCP tool call inside
-        its turn (comms-uuy, LIVE); a framework-driven post here would either
-        double-reply (if implemented) or, as the prior ``NotImplementedError``
-        did, abort the message handler before the agent ever ran. So this is a
-        deliberate no-op that reports success — like the webhook adapter's
-        ``log`` deliver path — leaving the agent's MCP post as the sole reply
-        path.
+        The Hermes gateway funnels each turn's prose through ``adapter.send``
+        (``stream_consumer.py``), but only once it is non-empty — every call site
+        guards on ``if not text.strip()``. So this fires exactly when the model
+        replied in prose, and we deliver that prose to the inbound frame's channel
+        (``chat_id``) and topic (``metadata['thread_id']``, set by the gateway's
+        ``_thread_metadata_for_source``) over the live per-topic connection's
+        ``post`` tool. That fixes the silent drop a prose reply used to suffer and
+        routes the reply to the right topic (comms-a9q4, resolves comms-xc7y).
+
+        The agent's *own* ``post`` MCP tool stays available and complementary: it
+        is the deliberate path for replying to a *different* channel/topic, while
+        this same-topic prose delivery needs no tool call (comms-uuy). A pure
+        ``post``-tool turn emits no prose, so the gateway never calls ``send`` for
+        it — the two paths don't double up (a model emitting both prose *and* a
+        same-topic ``post`` in one turn is the one residual double, steered by
+        Hermes reply guidance, not reconcilable here across the process split).
+
+        Topic-less sends (the "no home channel" onboarding notice in ``run.py``,
+        cron delivery) carry no ``thread_id`` and have no inbound frame to reply
+        into, so they stay the deliberate no-op they were — as does a send whose
+        topic has no live connection (idle-reaped between turn and delivery).
+
+        We report success with **no** ``message_id`` even on delivery. The commy
+        reply is not editable (there is no ``edit_message`` over the per-topic
+        connection), and the stream consumer reads a returned id as "this adapter
+        is editable": it would then try to edit on each delta/tool boundary and,
+        on the inevitable edit failure, reset and re-send — posting one message
+        per tool call (the framework's documented "155 comments under one PR"
+        trap). Withholding the id keeps commy on the consumer's no-editable-id
+        single-delivery path (the same one Signal and the webhook adapter ride),
+        so a turn's reply lands once.
         """
+        topic = metadata.get("thread_id") if metadata else None
+        if (
+            self._connection_manager is None
+            or not chat_id
+            or not topic
+            or not content.strip()
+        ):
+            return SendResult(success=True)
+        await self._connection_manager.deliver(chat_id, str(topic), content)
         return SendResult(success=True)
 
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
