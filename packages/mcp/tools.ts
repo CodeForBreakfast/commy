@@ -507,7 +507,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     {
       name: 'list_channels',
       description:
-        'List every channel the substrate is aware of, returning {id, name} for each. Use this for discovery instead of guessing channel names — posting to a non-existent channel throws UnknownChannel.',
+        'List every channel the substrate is aware of, returning {id, name, permalink} for each. Use this for discovery instead of guessing channel names — posting to a non-existent channel throws UnknownChannel. When you show a human a channel, link it by its permalink rather than a bare name.',
       inputSchema: emptyObjectSchema,
       handler: async () => {
         const channels = await runEdge(adapter.directory.listChannels())
@@ -518,7 +518,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     {
       name: 'post',
       description:
-        'Post a message to a channel by name. Optional thread (topic), mentions (identity ids the bot has seen), and reply_to (message id). To ping someone on Zulip, write the @**Name** markup inline in body where you want it rendered — the mentions array is notification metadata only and does NOT modify body. Returns {message_id, channel_id, channel_name, thread}.',
+        'Post a message to a channel by name. Optional thread (topic), mentions (identity ids the bot has seen), and reply_to (message id). To ping someone on Zulip, write the @**Name** markup inline in body where you want it rendered — the mentions array is notification metadata only and does NOT modify body. Returns {message_id, channel_id, channel_name, thread, permalink}. When you show a human this message afterwards, link it by the returned permalink — never a bare name or message id.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -768,7 +768,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     {
       name: 'read_channel',
       description:
-        'Read recent messages from a channel by name. Returns {messages: Message[]} bounded by optional since/until/limit.',
+        'Read recent messages from a channel by name. Returns {messages: Message[]} bounded by optional since/until/limit. Each message carries a clickable permalink (and channel.permalink / thread.permalink) — when you cite one of these to a human, render it as that permalink, not a bare name or id.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -796,7 +796,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     {
       name: 'read_thread',
       description:
-        'Read recent messages from a thread (topic) within a channel. Returns {messages: Message[]} bounded by optional since/until/limit.',
+        'Read recent messages from a thread (topic) within a channel. Returns {messages: Message[]} bounded by optional since/until/limit. Each message carries a clickable permalink (and channel.permalink / thread.permalink) — when you cite one of these to a human, render it as that permalink, not a bare name or id.',
       inputSchema: {
         type: 'object',
         properties: {
