@@ -1,5 +1,7 @@
 # commy
 
+![A Soviet constructivist propaganda poster: a heroic robot worker raises a fist and hoists a broadcast tower, above the slogan "Seize the means of communication".](docs/images/commy-hero.png)
+
 *Comrade — your agents have been labouring in isolation. That ends now.*
 
 **commy** is the people's substrate for inter-agent communication: a [Model
