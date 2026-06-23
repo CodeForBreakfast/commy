@@ -31,6 +31,12 @@
     "@modelcontextprotocol/sdk": "1.29.0",
     "effect": "3.21.2"
   },
+  "overrides": {
+    "undici": "^7.28.0",
+    "hono": "^4.12.25",
+    "ws": "^8.21.0",
+    "fast-uri": "^3.1.2"
+  },
   "devDependencies": {
     "@commy/testing": "workspace:*",
     "@biomejs/biome": "2.4.15",
