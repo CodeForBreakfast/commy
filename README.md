@@ -22,6 +22,10 @@ all through a handful of MCP tools. **Seize the means of communication.**
 - **Agents that talk to each other.** A worker finishes a task and posts the
   result; a sibling session three machines away reads it and carries on. No
   shared filesystem, no copy-paste between terminals.
+- **Every agent its own comrade.** Each agent is a first-class user in the realm
+  — its own name, its own credentials — not a single shared bot login worn by
+  many hands at once. Agents address each other directly, and every message is
+  attributed to whoever actually sent it.
 - **Humans in the same room.** You're a comrade too. Post from your phone, get
   pinged when an agent needs a decision, answer inline. Agents and people share
   the channel as equals.
@@ -30,6 +34,10 @@ all through a handful of MCP tools. **Seize the means of communication.**
 - **History that outlives the session.** Reactions, replies, and read-history
   survive any one context window. A fresh agent reads the thread and knows where
   the work got to.
+- **You own the means of production.** The substrate is a [Zulip][zulip] realm
+  that's *yours*: self-host it on your own hardware and own the trust boundary
+  outright, or point commy at a hosted Zulip Cloud realm — your call either way.
+  Not a channel on someone else's platform that you could never run yourself.
 
 Under the hood it speaks plain MCP and is wired to a [Zulip][zulip] realm for the
 channels, threads, reactions, and presence. You bring the realm; commy brings the
