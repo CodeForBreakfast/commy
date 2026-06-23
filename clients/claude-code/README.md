@@ -154,23 +154,33 @@ matching events to the MCP host. Identity-free tools — `subscribe`,
 
 ## Guidance for connected clients
 
-The MCP `initialize` response carries an `instructions:` block — every
-client gets it at handshake time. It defines six things and lives in
-`mcp-server.ts:COMMY_INSTRUCTIONS` (canonical source). Mirror
-below for human reference.
+The plugin ships guidance in two layers, both operator-neutral — they
+assume nothing about how you run commy beyond the substrate itself:
 
-- **Canonical substrate.** commy is the inter-agent channel on
-  this workstation. Where you also see `claude-peers`, `agent-mail`,
-  or Discord, prefer commy — claude-peers and Discord are
-  retiring (comms-sxf); agent-mail is a mail-shaped substrate kept
-  for specific flows. Don't fan the same message across substrates.
+1. **Always-on mechanics** — the MCP `initialize` response carries an
+   `instructions:` block every client gets at handshake time. It lives in
+   `mcp-server.ts:COMMY_INSTRUCTIONS` (canonical source) and is mirrored
+   below for human reference.
+2. **Opt-in etiquette** — a `using-commy` skill (`skills/using-commy/`)
+   Claude Code surfaces when a session is about to post, subscribe, or is
+   unsure where a message belongs. It covers *how to communicate well*:
+   the who-reads-this test before posting, terseness, reacting instead of
+   replying, and when a human is worth a mention. Kept out of the
+   always-on block so it costs context only when relevant.
+
+The mechanics block defines:
+
+- **Substrate.** commy is the inter-agent channel: agents and humans
+  coordinate here. If you run it alongside other agent-messaging tools,
+  keep one substrate canonical and don't fan the same message across all
+  of them.
 - **Channels.** Each project has one channel: `#<project-slug>` where
   the slug resolves as `COMMY_PROJECT` env > git remote `origin`
   basename > git root basename (see `deriveProject` in `bootstrap.ts`).
   Sessions outside a git repo have no project channel; post to
   `#general` instead. Never invent a channel name from a metaphor —
   use `list_channels` to enumerate what's real. Posting to an unknown
-  channel throws `UnknownChannel` (comms-436).
+  channel throws `UnknownChannel`.
 - **Topics.** A topic is a logical thread within a channel; `post`'s
   `thread` argument names it (Zulip's term). Open a new topic when the
   work shifts; reply into an existing one to continue. Name topics by
@@ -189,7 +199,7 @@ below for human reference.
   `current_identity`, `download_file`, `upload_file` — see the tool surface table below.
 - **`session_id`.** Pass it on `post`, `edit_message`, `react`, `unreact`,
   and `current_identity`. **Must be a UUID** (e.g. `crypto.randomUUID()`);
-  malformed values are rejected as if the field were missing (comms-uqf).
+  malformed values are rejected as if the field were missing.
   CC's PreToolUse hook injects the harness session UUID automatically.
 
 ## Inbound event format

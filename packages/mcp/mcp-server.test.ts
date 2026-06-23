@@ -74,14 +74,24 @@ test('initialize response carries instructions explaining the session_id contrac
   }
 })
 
-test('initialize instructions name commy as the canonical substrate over its overlapping peers (comms-msx)', async () => {
+test('initialize instructions give substrate-coexistence guidance without naming a specific peer substrate (comms-tonj)', async () => {
   const { client, close } = await pairAndConnect()
   try {
     const instructions = client.getInstructions()
     expect(instructions).toMatch(/canonical/i)
-    expect(instructions).toMatch(/claude-peers/)
-    expect(instructions).toMatch(/agent-mail/)
-    expect(instructions).toMatch(/Discord/)
+    expect(instructions).toMatch(/fan/i)
+  } finally {
+    await close()
+  }
+})
+
+test('initialize instructions stay operator-neutral — no named peer substrate leakage (comms-tonj)', async () => {
+  const { client, close } = await pairAndConnect()
+  try {
+    const instructions = client.getInstructions()
+    expect(instructions).not.toMatch(/claude-peers/)
+    expect(instructions).not.toMatch(/agent-mail/)
+    expect(instructions).not.toMatch(/this workstation/i)
   } finally {
     await close()
   }
@@ -105,7 +115,7 @@ test('initialize instructions nudge agents to refer to peers by name, not number
     const instructions = client.getInstructions()
     expect(instructions).toMatch(/by name/i)
     expect(instructions).toMatch(/sender_name/)
-    expect(instructions).toMatch(/bead ids|message and bead/i)
+    expect(instructions).toMatch(/message ids?/i)
   } finally {
     await close()
   }
