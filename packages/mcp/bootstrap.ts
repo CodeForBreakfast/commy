@@ -21,6 +21,7 @@ import {
   ParseResult,
   Redacted,
   type Schema,
+  String as Str,
 } from 'effect'
 import type { NarrowSet } from './narrow-set.ts'
 import type { SubscribeIntent, SubscribeTokenError } from './subscribe-parser.ts'
@@ -403,9 +404,9 @@ export const sanitiseProjectSlug = (raw: string): Option.Option<ProjectSlug> => 
   const filtered = dashed.replace(/[^a-z0-9-]/g, '-')
   const collapsed = filtered.replace(/-+/g, '-')
   const trimmed = collapsed.replace(/^-+|-+$/g, '')
-  if (trimmed.length === 0) return Option.none()
+  if (Str.isEmpty(trimmed)) return Option.none()
   const truncated = trimmed.slice(0, 12).replace(/-+$/, '')
-  if (truncated.length === 0) return Option.none()
+  if (Str.isEmpty(truncated)) return Option.none()
   if (!/^[a-z]/.test(truncated)) return Option.none()
   return Option.some(truncated as ProjectSlug)
 }

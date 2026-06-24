@@ -4,7 +4,7 @@ import type {
   ThreadName as ThreadNameType,
 } from '@commy/core/ports'
 import { decodeChannelId, decodeChannelName, decodeThreadName } from '@commy/core/ports'
-import { Data, Effect, Match } from 'effect'
+import { Data, Effect, Match, String as Str } from 'effect'
 
 /**
  * Parser-stage representation of `COMMY_SUBSCRIBE` tokens and
@@ -50,10 +50,10 @@ export const parseSubscribeTarget = (
   token: string,
 ): Effect.Effect<SubscribeIntent, SubscribeTokenError> =>
   Effect.gen(function* () {
-    if (token.length === 0) {
+    if (Str.isEmpty(token)) {
       return yield* new SubscribeTokenError({ token, reason: 'token is empty' })
     }
-    if (token !== token.trim()) {
+    if (token !== Str.trim(token)) {
       return yield* new SubscribeTokenError({
         token,
         reason: 'leading/trailing whitespace is not allowed',
