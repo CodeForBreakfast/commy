@@ -699,7 +699,7 @@ export const zulipAdapter = (
             onNone: () => mintBot(name),
             onSome: (existing) => {
               const reactivate = existing.is_active ? Effect.void : reactivateBot(existing)
-              return reactivate.pipe(Effect.flatMap(() => regenerateBotKey(existing)))
+              return reactivate.pipe(Effect.andThen(regenerateBotKey(existing)))
             },
           }),
         ),
@@ -1226,7 +1226,7 @@ export const zulipAdapter = (
             return SynchronizedRef.update(inboxRef, (state) => ({
               ...state,
               mentionsSubscribed: true,
-            })).pipe(Effect.flatMap(() => ensureQueueRegistered()))
+            })).pipe(Effect.andThen(ensureQueueRegistered()))
           }
           const channel = channelOf(target)
           if (channel === undefined) return ensureQueueRegistered()
@@ -1258,7 +1258,7 @@ export const zulipAdapter = (
               // boot-time reconciler covers the universal-listener backstop;
               // this per-session call still matters for streams created
               // *after* the plugin booted.
-              return subscribeRemote.pipe(Effect.flatMap(() => ensureQueueRegistered()))
+              return subscribeRemote.pipe(Effect.andThen(ensureQueueRegistered()))
             }),
           )
         }).pipe(Effect.mapError((cause) => new InboxError({ operation: 'subscribe', cause }))),
