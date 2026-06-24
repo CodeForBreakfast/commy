@@ -269,13 +269,9 @@ const optionalSessionId = (key: string): Config.Config<Option.Option<SessionId>>
         if (placeholderShape.test(value)) {
           return Either.left(ConfigError.InvalidData([key], placeholderMessage(key, value)))
         }
-        return Option.match(parseSessionId(value), {
-          onNone: () =>
-            Either.left(
-              ConfigError.InvalidData([key], `${key} must be a UUID — received: ${value}`),
-            ),
-          onSome: (sessionId) => Either.right(sessionId),
-        })
+        return Either.fromOption(parseSessionId(value), () =>
+          ConfigError.InvalidData([key], `${key} must be a UUID — received: ${value}`),
+        )
       }),
     ),
   )
@@ -291,16 +287,12 @@ const optionalBotName = (key: string): Config.Config<Option.Option<BotName>> =>
       Option.match(option, {
         onNone: () => Either.right(Option.none<BotName>()),
         onSome: (raw) =>
-          Option.match(parseBotName(raw), {
-            onNone: () =>
-              Either.left(
-                ConfigError.InvalidData(
-                  [key],
-                  `${key} must be substrate-safe (lowercase ASCII, digits, dashes, underscores; starts with letter; max 40 chars) — received: ${raw}`,
-                ),
-              ),
-            onSome: (botName) => Either.right(Option.some(botName)),
-          }),
+          Either.fromOption(parseBotName(raw), () =>
+            ConfigError.InvalidData(
+              [key],
+              `${key} must be substrate-safe (lowercase ASCII, digits, dashes, underscores; starts with letter; max 40 chars) — received: ${raw}`,
+            ),
+          ).pipe(Either.map(Option.some)),
       }),
     ),
   )
