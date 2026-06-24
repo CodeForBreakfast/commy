@@ -11,7 +11,18 @@ import {
   HistoryError,
   PublisherError,
 } from '@commy/core/ports'
-import { Array as Arr, Cause, Duration, Effect, Exit, Option, TestClock, TestContext } from 'effect'
+import {
+  Array as Arr,
+  Cause,
+  Chunk,
+  Duration,
+  Effect,
+  Exit,
+  Option,
+  Stream,
+  TestClock,
+  TestContext,
+} from 'effect'
 import { memoryAdapter } from './adapter.ts'
 
 const acquired = async () => {
@@ -215,4 +226,32 @@ test('separate constructed adapters hold independent counter state', async () =>
   // per-construction, not shared across the module.
   expect(Number(refA.id)).toBe(1)
   expect(Number(refB.id)).toBe(1)
+})
+
+// Events dispatched while no `events()` subscription is active accumulate in
+// the adapter's pending-event buffer; the next `events()` subscription drains
+// them before installing its emit hook. The contract suite pins single-event
+// drain (subscribe → post → observe); this locks the *ordering* of a multi-
+// event drain — the accumulated buffer must surface oldest-first (FIFO), the
+// invariant the buffer's accumulate-then-drain implementation must preserve.
+test('events() drains posts accumulated before subscription in FIFO order', async () => {
+  const adapter = await acquired()
+  const program = Effect.gen(function* () {
+    const channel = yield* adapter.seedChannel('lobby').pipe(Effect.orDie)
+    yield* adapter.inbox.subscribe(channel)
+    // No `events()` subscriber is active yet, so these accumulate in the buffer.
+    yield* Effect.forEach(
+      Arr.makeBy(5, (i) => `e${i}`),
+      (body) => adapter.publisher.post(channel, decodeMessageBodySync(body)),
+    )
+    const drained = yield* adapter.inbox
+      .events()
+      .pipe(Stream.take(5), Stream.runCollect, Effect.timeout(Duration.seconds(2)))
+    return Chunk.toReadonlyArray(drained)
+  })
+  const events = await Effect.runPromise(Effect.scoped(program))
+  const bodies = events.map((e) =>
+    e.kind === 'message-posted' ? e.message.body : `unexpected:${e.kind}`,
+  )
+  expect(bodies).toEqual(['e0', 'e1', 'e2', 'e3', 'e4'])
 })

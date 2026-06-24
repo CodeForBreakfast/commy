@@ -12,12 +12,13 @@
  * as that identity, `release()` clears the binding. See `IdentityPort`
  * in core/ports.ts for the full contract.
  *
- * Mutable substrate state lives in `Ref`s created by the construction
- * Effect — the monotonic id counters, the acquired-identity binding, and
- * the pending-event slot. Counter allocation is an atomic
- * `Ref.getAndUpdate`; the acquire check-then-set is a single `Ref.modify`,
- * so concurrent posters/acquirers under `Effect.all` allocate distinct ids
- * and bind exactly once instead of racing between read and write.
+ * Mutable substrate state lives in fiber-safe references created by the
+ * construction Effect — the monotonic id counters and the acquired-identity
+ * binding in `Ref`s, the pending-event buffer in an unbounded `Queue`.
+ * Counter allocation is an atomic `Ref.getAndUpdate`; the acquire
+ * check-then-set is a single `Ref.modify`, so concurrent posters/acquirers
+ * under `Effect.all` allocate distinct ids and bind exactly once instead of
+ * racing between read and write.
  */
 
 import type {
@@ -73,6 +74,7 @@ import {
   Order,
   type ParseResult,
   Predicate,
+  Queue,
   Ref,
   Stream,
 } from 'effect'
@@ -478,13 +480,13 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     const seenTopicsByChannel = new Map<string, Set<string>>()
 
     // Events posted while no Stream subscription is active accumulate in
-    // `eventQueue`; the next `events()` subscription drains it before
+    // `eventQueue`; the next `events()` subscription drains it (FIFO) before
     // installing its own emit hook. This preserves the "subscribe → post →
     // events() observes the post" contract for callers that subscribe first
     // and consume later. `activeEmit` holds the live emit hook (or none);
-    // dispatch reads it then routes, so both live in Refs created with the
-    // binding.
-    const eventQueue = yield* Ref.make<ReadonlyArray<InboundEvent>>([])
+    // dispatch reads it then routes. Both are construction-time state — the
+    // pending events an unbounded `Queue`, the live hook a `Ref`.
+    const eventQueue = yield* Queue.unbounded<InboundEvent>()
     const activeEmit = yield* Ref.make(Option.none<Emit>())
 
     const dispatchEvent = (event: InboundEvent): Effect.Effect<void> =>
@@ -492,7 +494,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         Effect.flatMap(
           Option.match({
             onSome: (emit) => Effect.sync(() => emit(event)),
-            onNone: () => Ref.update(eventQueue, (q) => [...q, event]),
+            onNone: () => Queue.offer(eventQueue, event).pipe(Effect.asVoid),
           }),
         ),
       )
@@ -573,7 +575,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
           Effect.acquireRelease(
             Effect.gen(function* () {
               // Drain anything dispatched while no subscription was active.
-              const queued = yield* Ref.getAndSet(eventQueue, [])
+              const queued = yield* Queue.takeAll(eventQueue)
               for (const ev of queued) void emit.single(ev)
               const cb: Emit = (event) => {
                 void emit.single(event)
