@@ -134,6 +134,13 @@ test('thread narrow matches only the named thread within the channel', () => {
   expect(set.matches(buildMessagePosted('other', 'payments'), noBot)).toBe(false)
 })
 
+test('thread narrow does not alias a distinct channel/thread pair sharing a slash boundary', () => {
+  const set = createNarrowSet()
+  set.add(threadIntent('a', 'b/c'))
+  expect(set.matches(buildMessagePosted('a', 'b/c'), noBot)).toBe(true)
+  expect(set.matches(buildMessagePosted('a/b', 'c'), noBot)).toBe(false)
+})
+
 test('channel narrow matches reaction-added/removed on that channel', () => {
   const set = createNarrowSet()
   set.add(channelIntent('home'))
