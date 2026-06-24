@@ -61,7 +61,7 @@ export interface DirectoryLookup {
  */
 export interface MessageRefCache {
   set(id: string, ref: MessageRef): void
-  get(id: string): MessageRef | undefined
+  get(id: string): Option.Option<MessageRef>
 }
 
 export const createMessageRefCache = (maxSize = 10_000): MessageRefCache => {
@@ -77,10 +77,11 @@ export const createMessageRefCache = (maxSize = 10_000): MessageRefCache => {
     },
     get(id) {
       const ref = map.get(id)
-      if (ref === undefined) return undefined
-      map.delete(id)
-      map.set(id, ref)
-      return ref
+      if (ref !== undefined) {
+        map.delete(id)
+        map.set(id, ref)
+      }
+      return Option.fromNullable(ref)
     },
   }
 }
@@ -531,30 +532,31 @@ const processSingleEvent = (
       )
     }
     const reaction = parsedReaction.right
-    const cachedTarget = cache.get(String(reaction.message_id))
     const eventsForTarget = (
       target: MessageRef,
     ): Effect.Effect<ReadonlyArray<InboundEvent>, ParseResult.ParseError> =>
       reactionToInboundEvent(reaction, directory, target).pipe(Effect.map((ev) => [ev]))
-    if (cachedTarget !== undefined) {
-      return eventsForTarget(cachedTarget).pipe(
-        Effect.catchTag('ParseError', (err) =>
-          skipWithLog(
-            `commy zulip events: skipping reaction event id=${evt.id}: ${describeError(err)}`,
+    const resolveTarget: Effect.Effect<
+      ReadonlyArray<InboundEvent>,
+      ParseResult.ParseError | ZulipApiError
+    > = cache.get(String(reaction.message_id)).pipe(
+      Option.match({
+        onSome: eventsForTarget,
+        onNone: () =>
+          fetchMessageRef(config.http, reaction.message_id, config.permalinkBase).pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.succeed([] as ReadonlyArray<InboundEvent>),
+                onSome: (target) => {
+                  cache.set(target.id, target)
+                  return eventsForTarget(target)
+                },
+              }),
+            ),
           ),
-        ),
-      )
-    }
-    return fetchMessageRef(config.http, reaction.message_id, config.permalinkBase).pipe(
-      Effect.flatMap(
-        Option.match({
-          onNone: () => Effect.succeed([] as ReadonlyArray<InboundEvent>),
-          onSome: (target) => {
-            cache.set(target.id, target)
-            return eventsForTarget(target)
-          },
-        }),
-      ),
+      }),
+    )
+    return resolveTarget.pipe(
       // Only Schema parse errors on the cache-miss /messages response and
       // the reaction's own brand decode get logged+skipped — that mirrors
       // the pre-Stream iterator (comms-aod). A ZulipApiError on /messages
