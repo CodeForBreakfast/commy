@@ -5,11 +5,20 @@ import type {
   IdentityId,
   UnknownIdentity,
 } from '@commy/core/ports'
-import { Clock, Data, Effect } from 'effect'
+import { Clock, Data, Effect, SynchronizedRef } from 'effect'
 import type { ProjectSlug, SessionId } from './bootstrap.ts'
 import { composeBotName } from './bootstrap.ts'
 import type { EnsureBound } from './ensure-bound.ts'
 import { createEnsureBound } from './ensure-bound.ts'
+
+/**
+ * Error channel of the `EnsureBound` an `IdentityCache` hands out. A real
+ * slot acquires through the adapter (`UnknownIdentity | IdentityError`); the
+ * ephemeral unbound stub fails with `UnboundEphemeralSession`. The interface
+ * surfaces the union so consumers can run the bind Effect and `Effect.catchTag`
+ * whichever case applies.
+ */
+export type EnsureBoundError = UnknownIdentity | IdentityError | UnboundEphemeralSession
 
 /**
  * Identity binding strategy for a single MCP child (ass-2dhb).
@@ -51,14 +60,14 @@ export interface IdentityCache {
    *     didn't fire" apart from "different conversation, hook didn't
    *     fire" — and the latter leaked the prior conversation's seat
    *     into the new one across `/clear`. Stub's `current()` reads
-   *     unbound; calling it rejects with the "missing session_id"
-   *     error. The existing slot is left intact: a follow-up call
-   *     with the original sid still reaches the same binding.
+   *     unbound; running its bind Effect fails with the "missing
+   *     session_id" error. The existing slot is left intact: a follow-up
+   *     call with the original sid still reaches the same binding.
    */
   ensureBoundFor(
     sessionId: SessionId | undefined,
     project?: ProjectSlug,
-  ): Effect.Effect<EnsureBound>
+  ): Effect.Effect<EnsureBound<EnsureBoundError>>
   /**
    * IDs of currently-bound identities. Size is 0 or 1 in V1 — the set
    * shape leaves room for future N-identity adapters (see Path 2 note
@@ -73,18 +82,18 @@ export interface IdentityCache {
    * Release the currently-bound identity (if any). Invoked from the
    * shutdown body when the MCP child is exiting; idempotent.
    */
-  releaseAllBound(): Promise<void>
+  releaseAllBound(): Effect.Effect<void>
   /**
    * If the slot's last activity is older than `idleReleaseMs`, release
    * the bound identity and clear the slot. Called by a periodic timer
    * the server boot wires up in ephemeral mode. Persistent mode is a
    * no-op.
    */
-  sweepIdle(nowMs: number): Promise<void>
+  sweepIdle(nowMs: number): Effect.Effect<void>
 }
 
 export interface SingleIdentityCacheDeps {
-  readonly ensureBound: EnsureBound
+  readonly ensureBound: EnsureBound<UnknownIdentity | IdentityError>
 }
 
 export const createSingleIdentityCache = (deps: SingleIdentityCacheDeps): IdentityCache => {
@@ -95,15 +104,13 @@ export const createSingleIdentityCache = (deps: SingleIdentityCacheDeps): Identi
       const current = ensureBound.current()
       return current === undefined ? new Set() : new Set([current.identity.id])
     },
-    releaseAllBound: async () => {
-      // The persistent-mode release path runs through `release-shutdown.ts`
-      // (which calls `adapter.identity.release()` directly). The cache
-      // has no extra teardown to do; keeping this method present means
-      // server-boot wiring stays symmetric across the two factories.
-    },
-    sweepIdle: async () => {
-      // Persistent identities live for the child's lifetime.
-    },
+    // The persistent-mode release path runs through `release-shutdown.ts`
+    // (which calls `adapter.identity.release()` directly). The cache has no
+    // extra teardown to do; keeping these present means server-boot wiring
+    // stays symmetric across the two factories.
+    releaseAllBound: () => Effect.void,
+    // Persistent identities live for the child's lifetime.
+    sweepIdle: () => Effect.void,
   }
 }
 
@@ -158,8 +165,8 @@ export interface EphemeralIdentityCacheDeps {
 
 interface Slot {
   readonly sessionId: SessionId
-  readonly ensureBound: EnsureBound
-  lastUsedMs: number
+  readonly ensureBound: EnsureBound<UnknownIdentity | IdentityError>
+  readonly lastUsedMs: number
 }
 
 /**
@@ -168,15 +175,15 @@ interface Slot {
  * surfaces the `UnboundEphemeralSession:` discriminator instead of the
  * naked message — `Data.TaggedError` sets `name === _tag`, which the
  * edge reshape (tools.ts) keys on — and so callers can `Effect.catchTag`
- * it once the acquire chain is Effect-returning.
+ * it on the bind Effect's typed E channel.
  */
 export class UnboundEphemeralSession extends Data.TaggedError('UnboundEphemeralSession')<{
   readonly message: string
 }> {}
 
-const unboundStub: EnsureBound = Object.assign(
-  () =>
-    Promise.reject(
+const unboundStub: EnsureBound<UnboundEphemeralSession> = Object.assign(
+  (): Effect.Effect<AcquiredIdentity, UnboundEphemeralSession> =>
+    Effect.fail(
       new UnboundEphemeralSession({
         message:
           'commy: ephemeral mode requires a session_id; the plugin hook ' +
@@ -184,97 +191,123 @@ const unboundStub: EnsureBound = Object.assign(
           'session_id explicitly in the tool call arguments.',
       }),
     ),
-  { current: () => undefined as AcquiredIdentity | undefined },
+  { current: (): AcquiredIdentity | undefined => undefined },
 )
 
-export const createEphemeralIdentityCache = (deps: EphemeralIdentityCacheDeps): IdentityCache => {
-  const deriveBotName = (sessionId: SessionId, project: ProjectSlug | undefined): BotName =>
-    composeBotName({
-      sessionId,
-      ...(project !== undefined ? { project } : {}),
-    })
-  let slot: Slot | undefined
+export const createEphemeralIdentityCache = (
+  deps: EphemeralIdentityCacheDeps,
+): Effect.Effect<IdentityCache> =>
+  Effect.map(SynchronizedRef.make<Slot | undefined>(undefined), (slotRef): IdentityCache => {
+    const deriveBotName = (sessionId: SessionId, project: ProjectSlug | undefined): BotName =>
+      composeBotName({
+        sessionId,
+        ...(project !== undefined ? { project } : {}),
+      })
 
-  const releaseBoundSlot = async (): Promise<void> => {
-    if (slot === undefined) return
-    if (slot.ensureBound.current() !== undefined) {
-      await Effect.runPromise(deps.release())
+    const wrapWithOnAcquire =
+      (project: ProjectSlug | undefined) =>
+      (n: BotName): Effect.Effect<AcquiredIdentity, UnknownIdentity | IdentityError> =>
+        deps
+          .acquire(n)
+          .pipe(
+            Effect.tap((acquired) =>
+              deps.onAcquire !== undefined ? deps.onAcquire(acquired, project) : Effect.void,
+            ),
+          )
+
+    // Capture the prior slot's release into the new slot's first acquire:
+    // the release-then-acquire only fires if the prior identity actually
+    // bound. `priorEnsure.current()` is read when the new acquire runs, so a
+    // prior still mid-acquire (current() === undefined) skips release.
+    const acquireForTransition =
+      (
+        priorEnsure: EnsureBound<UnknownIdentity | IdentityError>,
+        project: ProjectSlug | undefined,
+      ) =>
+      (n: BotName): Effect.Effect<AcquiredIdentity, UnknownIdentity | IdentityError> =>
+        priorEnsure.current() !== undefined
+          ? deps.release().pipe(Effect.zipRight(wrapWithOnAcquire(project)(n)))
+          : wrapWithOnAcquire(project)(n)
+
+    const mintSlot = (
+      sessionId: SessionId,
+      project: ProjectSlug | undefined,
+      nowMs: number,
+      prior: Slot | undefined,
+    ): Effect.Effect<readonly [EnsureBound<UnknownIdentity | IdentityError>, Slot]> => {
+      const name = deriveBotName(sessionId, project)
+      const acquire =
+        prior !== undefined
+          ? acquireForTransition(prior.ensureBound, project)
+          : wrapWithOnAcquire(project)
+      return createEnsureBound({ acquire, name }).pipe(
+        Effect.map(
+          (ensureBound) => [ensureBound, { sessionId, ensureBound, lastUsedMs: nowMs }] as const,
+        ),
+      )
     }
-    slot = undefined
-  }
 
-  const wrapWithOnAcquire =
-    (project: ProjectSlug | undefined) =>
-    (n: BotName): Effect.Effect<AcquiredIdentity, UnknownIdentity | IdentityError> =>
-      deps
-        .acquire(n)
-        .pipe(
-          Effect.tap((acquired) =>
-            deps.onAcquire !== undefined ? deps.onAcquire(acquired, project) : Effect.void,
-          ),
-        )
-
-  return {
-    // Reads the activity stamp from Effect's `Clock` (the same source
-    // `forkIdleSweep` feeds `sweepIdle`), so the idle comparison is
-    // consistent and `TestClock`-drivable. The slot bookkeeping itself is
-    // synchronous: the Clock read is the only effectful step, then the
-    // entry is created/bumped with that single timestamp.
-    ensureBoundFor: (sessionId, project): Effect.Effect<EnsureBound> =>
-      Clock.currentTimeMillis.pipe(
-        Effect.map((nowMs): EnsureBound => {
-          if (sessionId === undefined) {
-            // Refuse to surface the slot when no sid was supplied (comms-67j).
-            // A missing sid means the PreToolUse hook either didn't fire or
-            // didn't see one in CC's event — and post-`/clear` that meant
-            // the prior conversation's seat leaked into the new one via
-            // `current_identity`/`post`/`react`/`unreact`. The slot itself
-            // is preserved: a follow-up call with the original sid still
-            // reaches the same binding.
-            return unboundStub
-          }
-          if (slot !== undefined && slot.sessionId === sessionId) {
-            slot.lastUsedMs = nowMs
-            return slot.ensureBound
-          }
-          if (slot !== undefined) {
-            // Different sid arriving. The release-then-acquire can't run
-            // here — this map is just the slot swap. The release happens
-            // inside the new entry's first acquire path: we capture the
-            // old release into the new EnsureBound's acquire wrapper.
-            const priorEnsure = slot.ensureBound
-            const name = deriveBotName(sessionId, project)
-            const acquireWithDefaults = wrapWithOnAcquire(project)
-            const acquire = (
-              n: BotName,
-            ): Effect.Effect<AcquiredIdentity, UnknownIdentity | IdentityError> =>
-              priorEnsure.current() !== undefined
-                ? deps.release().pipe(Effect.zipRight(acquireWithDefaults(n)))
-                : acquireWithDefaults(n)
-            const ensureBound = createEnsureBound({ acquire, name })
-            slot = { sessionId, ensureBound, lastUsedMs: nowMs }
-            return ensureBound
-          }
-          const name = deriveBotName(sessionId, project)
-          const ensureBound = createEnsureBound({
-            acquire: wrapWithOnAcquire(project),
-            name,
-          })
-          slot = { sessionId, ensureBound, lastUsedMs: nowMs }
-          return ensureBound
-        }),
+    // Atomic read-release-clear: the effectful release runs inside the
+    // SynchronizedRef's serialised region, so it never clobbers a slot a
+    // concurrent `ensureBoundFor` acquired between the read and the release
+    // (the lost-update window the plain-`let` version raced through).
+    const releaseBoundSlot: Effect.Effect<void> = SynchronizedRef.updateEffect(slotRef, (slot) =>
+      Effect.as(
+        slot !== undefined && slot.ensureBound.current() !== undefined
+          ? deps.release()
+          : Effect.void,
+        undefined,
       ),
-    boundIdentityIds: () => {
-      if (slot === undefined) return new Set()
-      const current = slot.ensureBound.current()
-      return current === undefined ? new Set() : new Set([current.identity.id])
-    },
-    releaseAllBound: releaseBoundSlot,
-    sweepIdle: async (nowMs) => {
-      if (slot === undefined) return
-      if (slot.ensureBound.current() === undefined) return
-      if (nowMs - slot.lastUsedMs <= deps.idleReleaseMs) return
-      await releaseBoundSlot()
-    },
-  }
-}
+    )
+
+    return {
+      // Reads the activity stamp from Effect's `Clock` (the same source
+      // `forkIdleSweep` feeds `sweepIdle`), so the idle comparison is
+      // consistent and `TestClock`-drivable. The slot swap is serialised
+      // through `SynchronizedRef.modifyEffect`, which also allocates the new
+      // entry's `EnsureBound` inside the atomic region.
+      ensureBoundFor: (sessionId, project): Effect.Effect<EnsureBound<EnsureBoundError>> =>
+        sessionId === undefined
+          ? // Refuse to surface the slot when no sid was supplied (comms-67j).
+            // A missing sid means the PreToolUse hook either didn't fire or
+            // didn't see one in CC's event — and post-`/clear` that meant the
+            // prior conversation's seat leaked into the new one via
+            // `current_identity`/`post`/`react`/`unreact`. The slot itself is
+            // preserved: a follow-up call with the original sid still reaches
+            // the same binding.
+            Effect.succeed(unboundStub)
+          : Clock.currentTimeMillis.pipe(
+              Effect.flatMap((nowMs) =>
+                SynchronizedRef.modifyEffect(slotRef, (slot) => {
+                  if (slot !== undefined && slot.sessionId === sessionId) {
+                    const bumped: Slot = { ...slot, lastUsedMs: nowMs }
+                    return Effect.succeed([slot.ensureBound, bumped] as const)
+                  }
+                  // Fresh sid or a transition off the prior slot. The prior
+                  // slot's release is captured into the new entry's first
+                  // acquire (see `acquireForTransition`).
+                  return mintSlot(sessionId, project, nowMs, slot)
+                }),
+              ),
+            ),
+      boundIdentityIds: () => {
+        const slot = Effect.runSync(SynchronizedRef.get(slotRef))
+        if (slot === undefined) return new Set()
+        const current = slot.ensureBound.current()
+        return current === undefined ? new Set() : new Set([current.identity.id])
+      },
+      releaseAllBound: () => releaseBoundSlot,
+      sweepIdle: (nowMs) =>
+        // Idle check and release are one atomic region — a slot a request
+        // fiber bumped (or replaced) between fork and sweep is re-read here,
+        // so the sweep only releases a slot still genuinely idle past the
+        // threshold; otherwise it leaves the slot untouched.
+        SynchronizedRef.updateEffect(slotRef, (slot) =>
+          slot !== undefined &&
+          slot.ensureBound.current() !== undefined &&
+          nowMs - slot.lastUsedMs > deps.idleReleaseMs
+            ? Effect.as(deps.release(), undefined)
+            : Effect.succeed(slot),
+        ),
+    }
+  })

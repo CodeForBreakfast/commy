@@ -546,12 +546,11 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        const ensureBound = await runEdge(
+        await runEdge(
           Effect.flatMap(projectForArgs(args), (project) =>
             identityCache.ensureBoundFor(readSessionId(args), project),
-          ),
+          ).pipe(Effect.flatMap((ensureBound) => ensureBound())),
         )
-        await ensureBound()
         const ref = await runEdge(
           Effect.gen(function* () {
             const { channel_name, body, thread, mentions, reply_to } =
@@ -607,12 +606,11 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        const ensureBound = await runEdge(
+        await runEdge(
           Effect.flatMap(projectForArgs(args), (project) =>
             identityCache.ensureBoundFor(readSessionId(args), project),
-          ),
+          ).pipe(Effect.flatMap((ensureBound) => ensureBound())),
         )
-        await ensureBound()
         const ref = await runEdge(
           Effect.gen(function* () {
             const { message_id, body, channel_name, thread } =
@@ -650,12 +648,11 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        const ensureBound = await runEdge(
+        await runEdge(
           Effect.flatMap(projectForArgs(args), (project) =>
             identityCache.ensureBoundFor(readSessionId(args), project),
-          ),
+          ).pipe(Effect.flatMap((ensureBound) => ensureBound())),
         )
-        await ensureBound()
         const ref = await runEdge(
           Effect.gen(function* () {
             const { message_id, emoji, channel_name, thread } =
@@ -687,12 +684,11 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        const ensureBound = await runEdge(
+        await runEdge(
           Effect.flatMap(projectForArgs(args), (project) =>
             identityCache.ensureBoundFor(readSessionId(args), project),
-          ),
+          ).pipe(Effect.flatMap((ensureBound) => ensureBound())),
         )
-        await ensureBound()
         await runEdge(
           Effect.gen(function* () {
             const { message_id, emoji, channel_name, thread } =

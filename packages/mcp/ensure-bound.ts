@@ -1,5 +1,5 @@
 import type { AcquiredIdentity, BotName } from '@commy/core/ports'
-import { Cause, Deferred, Effect, Exit, Ref } from 'effect'
+import { Deferred, Effect, Exit, Ref } from 'effect'
 
 export interface EnsureBoundDeps<E> {
   /**
@@ -35,14 +35,14 @@ export interface EnsureBoundDeps<E> {
  * `identity.release()` on exit; pre-acquire ephemeral sessions skip
  * release entirely.
  *
- * The acquire chain is Effect-native; the call site stays Promise-shaped
- * because the `IdentityCache` interface its consumers depend on is still
- * Promise/sync. `ensureBound()` is the single runtime call for this
- * island — it runs the acquire Effect and squashes the failure cause so
- * the caller sees the raw port error, not a FiberFailure wrapper.
+ * `ensureBound()` returns the acquire Effect verbatim, so the typed `E`
+ * channel flows through to whichever runtime edge runs it — no internal
+ * `runPromise`/`Cause.squash` bridge. The factory is itself an Effect so
+ * the backing state `Ref` allocates inside the program rather than at a
+ * stray `Effect.runSync` seam.
  */
-export interface EnsureBound {
-  (): Promise<AcquiredIdentity>
+export interface EnsureBound<E> {
+  (): Effect.Effect<AcquiredIdentity, E>
   /** AcquiredIdentity if acquire has resolved, undefined otherwise. */
   current(): AcquiredIdentity | undefined
 }
@@ -67,52 +67,46 @@ type AcquireDecision<E> =
   | { readonly kind: 'await'; readonly deferred: Deferred.Deferred<AcquiredIdentity, E> }
   | { readonly kind: 'run'; readonly deferred: Deferred.Deferred<AcquiredIdentity, E> }
 
-export const createEnsureBound = <E>(deps: EnsureBoundDeps<E>): EnsureBound => {
-  const stateRef = Effect.runSync(Ref.make<AcquireState<E>>({ kind: 'idle' }))
+export const createEnsureBound = <E>(deps: EnsureBoundDeps<E>): Effect.Effect<EnsureBound<E>> =>
+  Effect.map(Ref.make<AcquireState<E>>({ kind: 'idle' }), (stateRef): EnsureBound<E> => {
+    const acquire: Effect.Effect<AcquiredIdentity, E> = Effect.gen(function* () {
+      // A fresh Deferred per call; only the idle winner installs and uses
+      // its own, the rest discard theirs and await the pending one.
+      const fresh = yield* Deferred.make<AcquiredIdentity, E>()
+      const decision = yield* Ref.modify(
+        stateRef,
+        (state): readonly [AcquireDecision<E>, AcquireState<E>] => {
+          if (state.kind === 'acquired') {
+            return [{ kind: 'have', identity: state.identity }, state]
+          }
+          if (state.kind === 'pending') {
+            return [{ kind: 'await', deferred: state.deferred }, state]
+          }
+          return [
+            { kind: 'run', deferred: fresh },
+            { kind: 'pending', deferred: fresh },
+          ]
+        },
+      )
+      if (decision.kind === 'have') return decision.identity
+      if (decision.kind === 'await') return yield* Deferred.await(decision.deferred)
+      return yield* deps.acquire(deps.name).pipe(
+        Effect.onExit((exit) =>
+          Ref.set(
+            stateRef,
+            Exit.match(exit, {
+              onFailure: () => ({ kind: 'idle' as const }),
+              onSuccess: (identity) => ({ kind: 'acquired' as const, identity }),
+            }),
+          ).pipe(Effect.zipRight(Deferred.done(decision.deferred, exit))),
+        ),
+      )
+    })
 
-  const acquire: Effect.Effect<AcquiredIdentity, E> = Effect.gen(function* () {
-    // A fresh Deferred per call; only the idle winner installs and uses
-    // its own, the rest discard theirs and await the pending one.
-    const fresh = yield* Deferred.make<AcquiredIdentity, E>()
-    const decision = yield* Ref.modify(
-      stateRef,
-      (state): readonly [AcquireDecision<E>, AcquireState<E>] => {
-        if (state.kind === 'acquired') {
-          return [{ kind: 'have', identity: state.identity }, state]
-        }
-        if (state.kind === 'pending') {
-          return [{ kind: 'await', deferred: state.deferred }, state]
-        }
-        return [
-          { kind: 'run', deferred: fresh },
-          { kind: 'pending', deferred: fresh },
-        ]
-      },
-    )
-    if (decision.kind === 'have') return decision.identity
-    if (decision.kind === 'await') return yield* Deferred.await(decision.deferred)
-    return yield* deps.acquire(deps.name).pipe(
-      Effect.onExit((exit) =>
-        Ref.set(
-          stateRef,
-          Exit.match(exit, {
-            onFailure: () => ({ kind: 'idle' as const }),
-            onSuccess: (identity) => ({ kind: 'acquired' as const, identity }),
-          }),
-        ).pipe(Effect.zipRight(Deferred.done(decision.deferred, exit))),
-      ),
-    )
+    const ensureBound = (): Effect.Effect<AcquiredIdentity, E> => acquire
+    ensureBound.current = (): AcquiredIdentity | undefined => {
+      const state = Effect.runSync(Ref.get(stateRef))
+      return state.kind === 'acquired' ? state.identity : undefined
+    }
+    return ensureBound
   })
-
-  const ensureBound = (): Promise<AcquiredIdentity> =>
-    Effect.runPromiseExit(acquire).then((exit) =>
-      Exit.isSuccess(exit) ? exit.value : Promise.reject(Cause.squash(exit.cause)),
-    )
-
-  ensureBound.current = (): AcquiredIdentity | undefined => {
-    const state = Effect.runSync(Ref.get(stateRef))
-    return state.kind === 'acquired' ? state.identity : undefined
-  }
-
-  return ensureBound
-}
