@@ -804,7 +804,7 @@ export const zulipAdapter = (
                       userId: minted.userId,
                       http,
                     }
-                    yield* Ref.update(inboxRef, (state) => ({
+                    yield* SynchronizedRef.update(inboxRef, (state) => ({
                       ...state,
                       mentionsSubscribed: true,
                     }))
@@ -1125,7 +1125,7 @@ export const zulipAdapter = (
     // registered events-queue identity — as one immutable record behind a
     // single Ref. subscribe/unsubscribe are Ref.update transitions; reads
     // (currentMode, streamIsListening, shouldDeliver) snapshot the record.
-    const inboxRef = yield* Ref.make<InboxState>({
+    const inboxRef = yield* SynchronizedRef.make<InboxState>({
       mentionsSubscribed: false,
       subscribedChannels: HashSet.empty<string>(),
       newTopicsChannels: HashSet.empty<string>(),
@@ -1165,7 +1165,7 @@ export const zulipAdapter = (
       return SynchronizedRef.get(boundRef).pipe(
         Effect.flatMap((current) => {
           const me = Option.getOrUndefined(current)?.identity
-          return Ref.modify(inboxRef, (state) => {
+          return SynchronizedRef.modify(inboxRef, (state) => {
             if (!HashSet.has(state.newTopicsChannels, cid)) return [true, state]
             // Tick the seen state regardless of whether another narrow also
             // covers this channel — so unsubscribing the broader narrow later
@@ -1198,37 +1198,42 @@ export const zulipAdapter = (
     // bot — ass-220u makes the inbox a minter-side surface so lurking
     // sessions can receive events before any acquire happens.
     const ensureQueueRegistered = (): Effect.Effect<void, ZulipApiError | ParseResult.ParseError> =>
-      Ref.get(inboxRef).pipe(
-        Effect.flatMap((state) => {
-          const mode = currentMode(state)
-          if (Option.exists(state.registration, (r) => r.mode === mode)) {
-            return Effect.void
-          }
-          return registerQueue(minterHttp, mode).pipe(
-            Effect.flatMap((q) =>
-              Ref.update(inboxRef, (current) => ({
-                ...current,
-                registration: Option.some(Data.struct({ queue: q, mode })),
-              })),
-            ),
-          )
-        }),
-      )
+      // Atomic read-decide-register-write: the lock is held across registerQueue
+      // so two concurrent subscribe() calls can't both read registration=None
+      // and double-register the events queue (comms-tfar.16). The snapshot is
+      // current-under-lock, so the `{ ...state }` write-back cannot clobber a
+      // concurrent inboxRef mutation — they block on the same lock.
+      SynchronizedRef.modifyEffect(inboxRef, (state) => {
+        const mode = currentMode(state)
+        if (Option.exists(state.registration, (r) => r.mode === mode)) {
+          return Effect.succeed([undefined, state] as const)
+        }
+        return registerQueue(minterHttp, mode).pipe(
+          Effect.map(
+            (q) =>
+              [
+                undefined,
+                { ...state, registration: Option.some(Data.struct({ queue: q, mode })) },
+              ] as const,
+          ),
+        )
+      })
 
     const inbox: MessageInbox = {
       subscribe: (target) =>
         Effect.suspend(() => {
           if (target === 'mentions') {
-            return Ref.update(inboxRef, (state) => ({ ...state, mentionsSubscribed: true })).pipe(
-              Effect.flatMap(() => ensureQueueRegistered()),
-            )
+            return SynchronizedRef.update(inboxRef, (state) => ({
+              ...state,
+              mentionsSubscribed: true,
+            })).pipe(Effect.flatMap(() => ensureQueueRegistered()))
           }
           const channel = channelOf(target)
           if (channel === undefined) return ensureQueueRegistered()
           // Record the narrow first, snapshotting whether the channel was
           // already listened to under any narrow — that decides whether the
           // remote /users/me/subscriptions call is needed.
-          return Ref.modify(inboxRef, (state) => {
+          return SynchronizedRef.modify(inboxRef, (state) => {
             const wasListening = streamIsListening(state, channel.id)
             const next: InboxState = Predicate.hasProperty(target, 'kind')
               ? {
@@ -1260,13 +1265,16 @@ export const zulipAdapter = (
       unsubscribe: (target) =>
         Effect.suspend(() => {
           if (target === 'mentions') {
-            return Ref.update(inboxRef, (state) => ({ ...state, mentionsSubscribed: false }))
+            return SynchronizedRef.update(inboxRef, (state) => ({
+              ...state,
+              mentionsSubscribed: false,
+            }))
           }
           const channel = channelOf(target)
           if (channel === undefined) return Effect.void
           // Drop the narrow, snapshotting whether the channel is still
           // listened to afterward — if so, the minter stays subscribed.
-          return Ref.modify(inboxRef, (state) => {
+          return SynchronizedRef.modify(inboxRef, (state) => {
             const next: InboxState = Predicate.hasProperty(target, 'kind')
               ? {
                   ...state,
@@ -1292,7 +1300,7 @@ export const zulipAdapter = (
         }).pipe(Effect.mapError((cause) => new InboxError({ operation: 'unsubscribe', cause }))),
       events: () =>
         Stream.unwrap(
-          Effect.all([SynchronizedRef.get(boundRef), Ref.get(inboxRef)]).pipe(
+          Effect.all([SynchronizedRef.get(boundRef), SynchronizedRef.get(inboxRef)]).pipe(
             Effect.map(([current, state]) =>
               inboxEvents({
                 http: minterHttp,
