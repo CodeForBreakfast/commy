@@ -1647,6 +1647,34 @@ effectTest('inbox.subscribe with mentions target does not call /users/me/subscri
   }),
 )
 
+effectTest('inbox.subscribe(mentions) twice registers the events queue only once', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedRegisterOk(stub)
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.inbox.subscribe('mentions')
+    yield* adapter.inbox.subscribe('mentions')
+    const registers = (yield* stub.captured).filter(
+      (r) => r.method === 'POST' && r.url.pathname === '/api/v1/register',
+    )
+    expect(registers).toHaveLength(1)
+  }),
+)
+
+effectTest('inbox.subscribe flipping mentions -> all re-registers the events queue', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSubscribeOk(stub, 'general')
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.inbox.subscribe('mentions')
+    yield* adapter.inbox.subscribe(generalChannel)
+    const registers = (yield* stub.captured).filter(
+      (r) => r.method === 'POST' && r.url.pathname === '/api/v1/register',
+    )
+    expect(registers).toHaveLength(2)
+  }),
+)
+
 effectTest('inbox.unsubscribe(channel) DELETEs /users/me/subscriptions with the stream name', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
