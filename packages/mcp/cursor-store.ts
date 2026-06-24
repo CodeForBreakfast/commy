@@ -4,17 +4,7 @@ import type { IdentityId, Timestamp } from '@commy/core/ports'
 import { TimestampSchema } from '@commy/core/ports'
 import { FileSystem } from '@effect/platform'
 import type { PlatformError } from '@effect/platform/Error'
-import {
-  Config,
-  ConfigError,
-  Context,
-  Effect,
-  Either,
-  Layer,
-  Option,
-  type ParseResult,
-  Schema,
-} from 'effect'
+import { Config, Context, Effect, Layer, Option, type ParseResult, Schema } from 'effect'
 
 /**
  * Persistent per-identity "have-seen-up-to" cursor (comms-rxo).
@@ -128,16 +118,11 @@ const STATE_SEGMENT = 'commy'
 /**
  * The XDG state-home base, read from the ambient ConfigProvider at the
  * boot edge (comms-nrv). `XDG_STATE_HOME` is the base; an unset or empty
- * value falls back to `<home>/.local/state`. Empty is folded into
- * `MissingData` so `Config.withDefault` supplies the home-dir fallback for
- * both the unset and blank cases.
+ * value falls back to `<home>/.local/state`. `Config.nonEmptyString` emits
+ * `MissingData` for an empty value, so `Config.withDefault` supplies the
+ * home-dir fallback for both the unset and blank cases.
  */
-const stateBaseConfig: Config.Config<string> = Config.string('XDG_STATE_HOME').pipe(
-  Config.mapOrFail((value) =>
-    value.length === 0
-      ? Either.left(ConfigError.MissingData(['XDG_STATE_HOME'], 'XDG_STATE_HOME is empty'))
-      : Either.right(value),
-  ),
+const stateBaseConfig: Config.Config<string> = Config.nonEmptyString('XDG_STATE_HOME').pipe(
   Config.withDefault(join(homedir(), '.local', 'state')),
 )
 
