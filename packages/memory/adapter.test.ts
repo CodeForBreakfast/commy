@@ -213,6 +213,39 @@ test('history.messagePermalink returns None for an unknown id with no hint', asy
   expect(link).toEqual(Option.none())
 })
 
+test('history.messagePermalink synthesises a channel-near link from a hint', async () => {
+  const adapter = await acquired()
+  const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
+  const id = decodeMessageIdSync('77')
+  const link = await Effect.runPromise(
+    adapter.history.messagePermalink(id, { channel: decodeChannelNameSync('lobby') }),
+  )
+  expect(link).toEqual(Option.some(`memory://commy/channel/${channel.id}/near/${id}`))
+})
+
+test('history.messagePermalink synthesises a topic-near link from a hint with a thread', async () => {
+  const adapter = await acquired()
+  const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
+  const id = decodeMessageIdSync('88')
+  const link = await Effect.runPromise(
+    adapter.history.messagePermalink(id, {
+      channel: decodeChannelNameSync('lobby'),
+      thread: decodeThreadNameSync('topic-a'),
+    }),
+  )
+  expect(link).toEqual(Option.some(`memory://commy/channel/${channel.id}/topic/topic-a/near/${id}`))
+})
+
+test('history.messagePermalink returns None for a hint naming an unknown channel', async () => {
+  const adapter = await acquired()
+  const link = await Effect.runPromise(
+    adapter.history.messagePermalink(decodeMessageIdSync('99'), {
+      channel: decodeChannelNameSync('never-seeded-channel'),
+    }),
+  )
+  expect(link).toEqual(Option.none())
+})
+
 test('separate constructed adapters hold independent counter state', async () => {
   const a = await Effect.runPromise(memoryAdapter())
   await Effect.runPromise(a.identity.acquire(decodeBotNameSync('hermes-agent')))

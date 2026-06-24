@@ -695,10 +695,9 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       messagePermalink: (id, hint) =>
         Effect.sync(() => {
           if (hint !== undefined) {
-            const channel = channelsByName.get(hint.channel)
-            return channel === undefined
-              ? Option.none<string>()
-              : Option.some(synthMessagePermalink(channel.id, id, hint.thread))
+            return Option.fromNullable(channelsByName.get(hint.channel)).pipe(
+              Option.map((channel) => synthMessagePermalink(channel.id, id, hint.thread)),
+            )
           }
           const stored = messagesById.get(id)
           return stored === undefined
