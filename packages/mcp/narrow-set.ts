@@ -1,5 +1,11 @@
-import type { IdentityId, InboundEvent, MessageRef } from '@commy/core/ports'
-import { Match } from 'effect'
+import type {
+  ChannelName,
+  IdentityId,
+  InboundEvent,
+  MessageRef,
+  ThreadName,
+} from '@commy/core/ports'
+import { Data, HashSet, Match, Option } from 'effect'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 
 /**
@@ -29,112 +35,116 @@ export interface NarrowSet {
   size(): number
 }
 
-const MENTIONS_KEY = 'mentions' as const
-
 /**
- * Internal key representation. A template-literal union (instead of
- * plain `string`) lets the compiler verify that every key constructed
- * inside this module is one of the three legal shapes. The Set is
- * typed as `Set<IntentKey>`, so `has()` rejects free-form strings —
- * the only entry points are `intentKey`, `channelKey`, and
- * `threadKey` below.
+ * Internal key representation. Each key is a `Data.struct`, so membership
+ * is by structural value equality rather than the JS `===` of a
+ * delimiter-joined string. Two distinct `(channel, thread)` pairs whose
+ * names happen to contain `:` or `/` can no longer alias the same key —
+ * the channel and thread names live in separate, individually-compared
+ * fields instead of a single `thread:<ch>/<thread>` literal. Both the
+ * `intents` membership set and the `seenTopics` first-message ledger key
+ * on this type.
  */
+const MENTIONS_KEY = Data.struct({ kind: 'mentions' as const })
+const channelKeyOf = (channelName: ChannelName) =>
+  Data.struct({ kind: 'channel' as const, channelName })
+const threadKeyOf = (channelName: ChannelName, threadName: ThreadName) =>
+  Data.struct({ kind: 'thread' as const, channelName, threadName })
+const newTopicsKeyOf = (channelName: ChannelName) =>
+  Data.struct({ kind: 'new-topics' as const, channelName })
+
 type IntentKey =
   | typeof MENTIONS_KEY
-  | `channel:${string}`
-  | `thread:${string}/${string}`
-  | `new-topics:${string}`
+  | ReturnType<typeof channelKeyOf>
+  | ReturnType<typeof threadKeyOf>
+  | ReturnType<typeof newTopicsKeyOf>
 
 const intentKey = (intent: SubscribeIntent): IntentKey =>
   Match.value(intent).pipe(
     Match.discriminatorsExhaustive('kind')({
       mentions: (): IntentKey => MENTIONS_KEY,
-      channel: (i): IntentKey => `channel:${i.channelName}`,
-      thread: (i): IntentKey => `thread:${i.channelName}/${i.threadName}`,
-      'new-topics-in-channel': (i): IntentKey => `new-topics:${i.channelName}`,
+      channel: (i): IntentKey => channelKeyOf(i.channelName),
+      thread: (i): IntentKey => threadKeyOf(i.channelName, i.threadName),
+      'new-topics-in-channel': (i): IntentKey => newTopicsKeyOf(i.channelName),
     }),
   )
 
-const channelKey = (ref: MessageRef): IntentKey => `channel:${ref.channel.name}`
+const channelKey = (ref: MessageRef): IntentKey => channelKeyOf(ref.channel.name)
 
-const newTopicsKey = (ref: MessageRef): IntentKey => `new-topics:${ref.channel.name}`
+const newTopicsKey = (ref: MessageRef): IntentKey => newTopicsKeyOf(ref.channel.name)
 
-const threadKey = (ref: MessageRef): IntentKey | undefined =>
-  ref.thread === undefined ? undefined : `thread:${ref.channel.name}/${ref.thread.name}`
+const threadKey = (ref: MessageRef): Option.Option<IntentKey> =>
+  Option.fromNullable(ref.thread).pipe(
+    Option.map((thread) => threadKeyOf(ref.channel.name, thread.name)),
+  )
 
-const refMatches = (ref: MessageRef, intents: ReadonlySet<IntentKey>): boolean => {
-  if (intents.has(channelKey(ref))) return true
-  const tk = threadKey(ref)
-  return tk !== undefined && intents.has(tk)
-}
-
-/**
- * First-message-per-topic match for a `new-topics:<ch>` intent
- * (comms-bb7.2). A `new-topics` narrow delivers the first message of each
- * topic in a channel exactly once, consistent with the catch-up layer's
- * `firstMessagePerTopic` (channels-catch-up.ts) and the port contract
- * (ports.ts `NewTopicsInChannelSubscription`) — not channel-wide like a
- * `channel:<ch>` narrow.
- *
- * This is the one stateful match in the set: the decision *is* the record,
- * so it mutates `seenTopics`. A topic is identified by the same key shape a
- * `thread:` intent uses (`thread:<ch>/<topic>`), kept in a set separate from
- * `intents`. Topic-less messages never surface — "new topic" presupposes a
- * topic. `seenTopics` persists for the set's lifetime (an unsubscribe /
- * resubscribe does not re-surface an already-seen topic), matching the
- * port's "exactly once per adapter-instance lifetime" semantics.
- *
- * The pump calls `matches` once per event before its self-echo and dedup
- * guards (event-pump.ts), which is intentional: the bot's own first post in
- * a topic marks it seen (the bot created the topic; replies aren't "new"),
- * and new-topics only matches `message-posted`, so a given message id reaches
- * this path once.
- */
-const newTopicsMatches = (
-  ref: MessageRef,
-  intents: ReadonlySet<IntentKey>,
-  seenTopics: Set<IntentKey>,
-): boolean => {
-  const tk = threadKey(ref)
-  if (tk === undefined) return false
-  if (!intents.has(newTopicsKey(ref))) return false
-  if (seenTopics.has(tk)) return false
-  seenTopics.add(tk)
-  return true
-}
-
-const messagePostedMatches = (
-  ref: MessageRef,
-  intents: ReadonlySet<IntentKey>,
-  seenTopics: Set<IntentKey>,
-): boolean => refMatches(ref, intents) || newTopicsMatches(ref, intents, seenTopics)
+const refMatches = (ref: MessageRef, intents: HashSet.HashSet<IntentKey>): boolean =>
+  HashSet.has(intents, channelKey(ref)) ||
+  Option.exists(threadKey(ref), (tk) => HashSet.has(intents, tk))
 
 const mentionsMatches = (
-  intents: ReadonlySet<IntentKey>,
+  intents: HashSet.HashSet<IntentKey>,
   mentions: ReadonlyArray<{ readonly id: IdentityId }>,
   botIdentityId: IdentityId | undefined,
 ): boolean => {
   if (botIdentityId === undefined) return false
-  if (!intents.has(MENTIONS_KEY)) return false
+  if (!HashSet.has(intents, MENTIONS_KEY)) return false
   return mentions.some((m) => m.id === botIdentityId)
 }
 
 export const createNarrowSet = (): NarrowSet => {
-  const intents = new Set<IntentKey>()
-  const seenTopics = new Set<IntentKey>()
+  let intents = HashSet.empty<IntentKey>()
+  let seenTopics = HashSet.empty<IntentKey>()
+
+  /**
+   * First-message-per-topic match for a `new-topics:<ch>` intent
+   * (comms-bb7.2). A `new-topics` narrow delivers the first message of each
+   * topic in a channel exactly once, consistent with the catch-up layer's
+   * `firstMessagePerTopic` (channels-catch-up.ts) and the port contract
+   * (ports.ts `NewTopicsInChannelSubscription`) — not channel-wide like a
+   * `channel:<ch>` narrow.
+   *
+   * This is the one stateful match in the set: the decision *is* the record,
+   * so it appends to `seenTopics`. A topic is identified by the same key a
+   * `thread:` intent uses, kept in a set separate from `intents`. Topic-less
+   * messages never surface — "new topic" presupposes a topic. `seenTopics`
+   * persists for the set's lifetime (an unsubscribe / resubscribe does not
+   * re-surface an already-seen topic), matching the port's "exactly once per
+   * adapter-instance lifetime" semantics.
+   *
+   * The pump calls `matches` once per event before its self-echo and dedup
+   * guards (event-pump.ts), which is intentional: the bot's own first post in
+   * a topic marks it seen (the bot created the topic; replies aren't "new"),
+   * and new-topics only matches `message-posted`, so a given message id reaches
+   * this path once.
+   */
+  const newTopicsMatches = (ref: MessageRef): boolean =>
+    Option.match(threadKey(ref), {
+      onNone: () => false,
+      onSome: (tk) => {
+        if (!HashSet.has(intents, newTopicsKey(ref))) return false
+        if (HashSet.has(seenTopics, tk)) return false
+        seenTopics = HashSet.add(seenTopics, tk)
+        return true
+      },
+    })
+
+  const messagePostedMatches = (ref: MessageRef): boolean =>
+    refMatches(ref, intents) || newTopicsMatches(ref)
+
   return {
     add: (intent) => {
-      intents.add(intentKey(intent))
+      intents = HashSet.add(intents, intentKey(intent))
     },
     remove: (intent) => {
-      intents.delete(intentKey(intent))
+      intents = HashSet.remove(intents, intentKey(intent))
     },
-    size: () => intents.size,
+    size: () => HashSet.size(intents),
     matches: (event, botIdentityId): boolean =>
       Match.value(event).pipe(
         Match.discriminatorsExhaustive('kind')({
           'message-posted': (e) =>
-            messagePostedMatches(e.message.ref, intents, seenTopics) ||
+            messagePostedMatches(e.message.ref) ||
             mentionsMatches(intents, e.message.mentions, botIdentityId),
           'mention-received': (e) =>
             refMatches(e.message.ref, intents) ||
