@@ -1079,6 +1079,48 @@ effectTest('history.readChannel narrows by channel and maps each message to the 
   }),
 )
 
+effectTest(
+  'history.readChannel maps reactions, resolving reactors via the directory and falling back for unknown ids',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* seedUsers(stub, [HERMES, GRAEME])
+      yield* seedMessages(stub, [
+        {
+          id: 555,
+          sender_id: 5,
+          sender_full_name: 'Graeme Foster',
+          stream_id: 1234,
+          display_recipient: 'general',
+          subject: 'lobby',
+          content: 'hi all',
+          timestamp: 1715000000,
+          reactions: [
+            { user_id: 5, emoji_name: 'thumbs_up' },
+            { user_id: 999, emoji_name: 'thumbs_up' },
+            { user_id: 5, emoji_name: 'tada' },
+          ],
+        },
+      ])
+      const messages = yield* adapter.history.readChannel(generalChannel, { limit: 50 })
+      const graeme: Identity = {
+        id: decodeIdentityIdSync('5'),
+        name: decodeDisplayNameSync('Graeme Foster'),
+        kind: 'human',
+      }
+      const unknownReactor: Identity = {
+        id: decodeIdentityIdSync('999'),
+        name: decodeDisplayNameSync('user-999'),
+        kind: 'human',
+      }
+      expect(messages[0]?.reactions).toEqual([
+        { emoji: decodeEmojiSync('thumbs_up'), by: [graeme, unknownReactor] },
+        { emoji: decodeEmojiSync('tada'), by: [graeme] },
+      ])
+    }),
+)
+
 effectTest('history.messagePermalink builds a link from a channel hint via the streams cache', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
