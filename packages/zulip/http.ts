@@ -118,7 +118,10 @@ const decodeEnvelope = Schema.decodeUnknownEither(Schema.parseJson(envelopeSchem
 export type ZulipParamValue = string | number | boolean
 export type ZulipParams = Readonly<Record<string, ZulipParamValue>>
 
-declare const UserUploadPathBrand: unique symbol
+export const UserUploadPathSchema = Schema.NonEmptyString.pipe(
+  Schema.pattern(/^\/user_uploads\//),
+  Schema.brand('UserUploadPath'),
+)
 
 /**
  * Realm-relative `/user_uploads/...` path to an uploaded file. The brand
@@ -130,13 +133,12 @@ declare const UserUploadPathBrand: unique symbol
  * Zulip adapter (not core/ports) because `/user_uploads/` is a Zulip URL
  * convention, not a port-level concept.
  */
-export type UserUploadPath = string & { readonly [UserUploadPathBrand]: never }
+export type UserUploadPath = typeof UserUploadPathSchema.Type
 
-export const UserUploadPathSchema = Schema.NonEmptyString.pipe(Schema.pattern(/^\/user_uploads\//))
 export const decodeUserUploadPath = (
   raw: unknown,
 ): Effect.Effect<UserUploadPath, ParseResult.ParseError> =>
-  Schema.decodeUnknown(UserUploadPathSchema)(raw).pipe(Effect.map((v) => v as UserUploadPath))
+  Schema.decodeUnknown(UserUploadPathSchema)(raw)
 
 /**
  * Synchronous decoder for TEST FIXTURES (comms-spj3.35) — sibling of
@@ -145,7 +147,7 @@ export const decodeUserUploadPath = (
  * case. PRODUCTION code must use `decodeUserUploadPath`, never this.
  */
 export const decodeUserUploadPathSync = (raw: string): UserUploadPath =>
-  Schema.decodeSync(UserUploadPathSchema)(raw) as UserUploadPath
+  Schema.decodeSync(UserUploadPathSchema)(raw)
 
 export interface RawDownload {
   readonly data: Uint8Array
