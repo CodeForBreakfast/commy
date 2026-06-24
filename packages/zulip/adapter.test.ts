@@ -1661,6 +1661,31 @@ effectTest('inbox.subscribe(mentions) twice registers the events queue only once
   }),
 )
 
+// comms-tfar.16: ensureQueueRegistered is a read-decide-effectful-write on the
+// minter-scoped inboxRef. Two subscribe() calls can interleave — both read
+// registration=None, both POST /register — double-registering the events queue
+// (one leaks, GC'd by Zulip's TTL). Reachable in production: a single
+// process-singleton adapter, no MCP-side serialization, parallel subscribe tool
+// calls in one agent turn. The SynchronizedRef.modifyEffect holds the lock
+// across registerQueue so the second call observes the first's write and skips.
+effectTest(
+  'concurrent inbox.subscribe(mentions) calls register the events queue only once (comms-tfar.16)',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* seedRegisterOk(stub)
+      const adapter = yield* buildAdapter(stub)
+      yield* Effect.all(
+        [adapter.inbox.subscribe('mentions'), adapter.inbox.subscribe('mentions')],
+        { concurrency: 2 },
+      )
+      const registers = (yield* stub.captured).filter(
+        (r) => r.method === 'POST' && r.url.pathname === '/api/v1/register',
+      )
+      expect(registers).toHaveLength(1)
+    }),
+)
+
 effectTest('inbox.subscribe flipping mentions -> all re-registers the events queue', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
