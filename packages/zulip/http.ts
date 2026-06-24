@@ -228,9 +228,9 @@ export const rateLimitSchedule = (): Schedule.Schedule<Duration.Duration, ZulipA
     },
   )
 
-const parseEnvelope = (text: string): Envelope | undefined => {
-  if (text.length === 0) return undefined
-  return Either.getOrUndefined(decodeEnvelope(text))
+const parseEnvelope = (text: string): Option.Option<Envelope> => {
+  if (text.length === 0) return Option.none()
+  return Either.getRight(decodeEnvelope(text))
 }
 
 const classifyEnvelope = (
@@ -238,39 +238,33 @@ const classifyEnvelope = (
   status: number,
   url: string,
 ): Either.Either<string, ZulipApiError> => {
-  const env = parseEnvelope(text)
-  if (env !== undefined && env.result === 'error') {
-    return Either.left(
-      new ZulipApiError({
-        message: env.msg ?? `HTTP ${status}`,
-        status,
-        code: env.code,
-        retryAfter: env['retry-after'],
-      }),
-    )
-  }
-  if (status < 200 || status >= 300) {
-    const message = env?.msg ?? (text.length > 0 ? text : `HTTP ${status}`)
-    return Either.left(
-      new ZulipApiError({
-        message,
-        status,
-        code: env?.code,
-        retryAfter: env?.['retry-after'],
-      }),
-    )
-  }
-  if (env === undefined) {
-    return Either.left(
-      new ZulipApiError({
-        message: `non-JSON response from ${url}`,
-        status,
-        code: undefined,
-        retryAfter: undefined,
-      }),
-    )
-  }
-  return Either.right(text)
+  const outOfRange = status < 200 || status >= 300
+  return Option.match(parseEnvelope(text), {
+    onNone: () =>
+      Either.left(
+        new ZulipApiError({
+          message: outOfRange
+            ? text.length > 0
+              ? text
+              : `HTTP ${status}`
+            : `non-JSON response from ${url}`,
+          status,
+          code: undefined,
+          retryAfter: undefined,
+        }),
+      ),
+    onSome: (env) =>
+      env.result === 'error' || outOfRange
+        ? Either.left(
+            new ZulipApiError({
+              message: env.result === 'error' ? (env.msg ?? `HTTP ${status}`) : (env.msg ?? text),
+              status,
+              code: env.code,
+              retryAfter: env['retry-after'],
+            }),
+          )
+        : Either.right(text),
+  })
 }
 
 /**

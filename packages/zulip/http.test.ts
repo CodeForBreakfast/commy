@@ -317,6 +317,45 @@ effectTest('GET throws ZulipApiError on non-JSON, non-2xx upstream', () =>
   }),
 )
 
+effectTest(
+  'GET throws ZulipApiError "non-JSON response" on a 2xx body that is not a JSON envelope',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* stub.respond('GET', '/api/v1/users/me', {
+        body: 'totally not json',
+        status: 200,
+        headers: { 'content-type': 'text/plain' },
+      })
+      const http = yield* makeHttp(stub)
+      const err = yield* Effect.flip(http.get('/users/me', userMeSchema))
+      expect(err).toBeInstanceOf(ZulipApiError)
+      const apiErr = err as ZulipApiError
+      expect(apiErr.message).toContain('non-JSON response')
+      expect(apiErr.status).toBe(200)
+      expect(apiErr.code).toBeUndefined()
+    }),
+)
+
+effectTest(
+  'GET throws ZulipApiError carrying the envelope msg/code when a non-error envelope arrives with a non-2xx status',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* stub.respond('GET', '/api/v1/users/me', {
+        body: { result: 'success', msg: 'odd state', code: 'WAT' },
+        status: 418,
+      })
+      const http = yield* makeHttp(stub)
+      const err = yield* Effect.flip(http.get('/users/me', userMeSchema))
+      expect(err).toBeInstanceOf(ZulipApiError)
+      const apiErr = err as ZulipApiError
+      expect(apiErr.message).toBe('odd state')
+      expect(apiErr.code).toBe('WAT')
+      expect(apiErr.status).toBe(418)
+    }),
+)
+
 effectTest('POST surfaces Zulip API errors the same way GET does', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
