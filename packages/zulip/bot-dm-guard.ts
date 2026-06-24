@@ -88,7 +88,7 @@ export const wrapBotHttp = (
         ? checkNotBotToBotDirect(body, resolveDirectory, selfUserId)
         : Effect.void
     return guard.pipe(
-      Effect.flatMap(() => inner.post(path, schema, body)),
+      Effect.andThen(inner.post(path, schema, body)),
       // Bot-to-bot direct messages are a defensive guard against a code
       // path that should not exist — surface as a defect so it fails loud
       // for the caller and stays out of the typed publisher.post E channel.
