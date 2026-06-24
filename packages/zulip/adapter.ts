@@ -216,13 +216,13 @@ const sentMessageSchema = Schema.Struct({
 const successSchema = Schema.Struct({ result: Schema.Literal('success') })
 
 interface HistoricalReaction {
-  readonly userId: number
+  readonly userId: ZulipUserRef
   readonly emojiName: string
 }
 
 interface HistoricalMessage {
   readonly id: MessageId
-  readonly senderId: number
+  readonly senderId: ZulipUserRef
   readonly senderFullName: string
   readonly subject: ThreadName
   readonly content: string
@@ -247,7 +247,7 @@ const historicalMessageRawSchema = Schema.Struct({
 
 const toHistoricalReaction = (
   r: Schema.Schema.Type<typeof historicalReactionSchema>,
-): HistoricalReaction => ({ userId: r.user_id, emojiName: r.emoji_name })
+): HistoricalReaction => ({ userId: ZulipUserRef(r.user_id), emojiName: r.emoji_name })
 
 const toHistoricalMessage = (
   m: Schema.Schema.Type<typeof historicalMessageRawSchema>,
@@ -260,7 +260,7 @@ const toHistoricalMessage = (
     Effect.map(
       ({ id, subject, ts }): HistoricalMessage => ({
         id,
-        senderId: m.sender_id,
+        senderId: ZulipUserRef(m.sender_id),
         senderFullName: m.sender_full_name,
         subject,
         content: m.content,
@@ -445,7 +445,7 @@ export const zulipAdapter = (
     > => minterHttp.get('/users', usersSchema).pipe(Effect.map((res) => res.members))
 
     interface DirectoryLookup {
-      readonly byId: ReadonlyMap<number, Identity>
+      readonly byId: ReadonlyMap<ZulipUserRef, Identity>
       readonly byName: ReadonlyMap<string, Identity>
       readonly byIdentityId: ReadonlyMap<IdentityId, ZulipUserRef>
     }
@@ -457,12 +457,12 @@ export const zulipAdapter = (
       fetchMembers().pipe(
         Effect.flatMap((members) =>
           Effect.gen(function* () {
-            const byId = new Map<number, Identity>()
+            const byId = new Map<ZulipUserRef, Identity>()
             const byName = new Map<string, Identity>()
             const byIdentityId = new Map<IdentityId, ZulipUserRef>()
             for (const u of members) {
               const ident = yield* toIdentity(u)
-              byId.set(u.user_id, ident)
+              byId.set(ZulipUserRef(u.user_id), ident)
               byName.set(u.full_name, ident)
               byIdentityId.set(ident.id, ZulipUserRef(u.user_id))
             }
