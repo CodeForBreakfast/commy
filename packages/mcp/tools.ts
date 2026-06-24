@@ -393,7 +393,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     Option.getOrUndefined(parseSessionId(args['session_id']))
   const readCwd = (args: Readonly<Record<string, unknown>>): string | undefined => {
     const raw = args['cwd']
-    return typeof raw === 'string' ? raw : undefined
+    return Predicate.isString(raw) ? raw : undefined
   }
   const projectForArgs = (
     args: Readonly<Record<string, unknown>>,
