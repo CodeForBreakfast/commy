@@ -188,4 +188,8 @@ describe('cursorDirConfig', () => {
       join(homedir(), '.local', 'state', 'commy', 'cursors'),
     )
   })
+
+  test('treats a whitespace-only XDG_STATE_HOME as a value, not as unset', () => {
+    expect(resolveCursorDir({ XDG_STATE_HOME: '   ' })).toBe(join('   ', 'commy', 'cursors'))
+  })
 })
