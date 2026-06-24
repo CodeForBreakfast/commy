@@ -103,14 +103,15 @@ const requestBodyInit = (body: HttpBody.HttpBody): string | Uint8Array | FormDat
 }
 
 const responseBodyInit = (response: StubBody): string | Uint8Array => {
-  if (response.body instanceof Uint8Array) return response.body
-  if (typeof response.body === 'string') return response.body
+  if (Predicate.isUint8Array(response.body)) return response.body
+  if (Predicate.isString(response.body)) return response.body
   return JSON.stringify(response.body)
 }
 
 const responseHeaders = (response: StubBody): Record<string, string> => {
-  const base: Record<string, string> =
-    response.body instanceof Uint8Array ? {} : { 'content-type': 'application/json' }
+  const base: Record<string, string> = Predicate.isUint8Array(response.body)
+    ? {}
+    : { 'content-type': 'application/json' }
   return { ...base, ...response.headers }
 }
 
