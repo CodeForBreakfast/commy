@@ -12,6 +12,7 @@ import {
   ScheduleDecision,
   ScheduleInterval,
   Schema,
+  String as Str,
 } from 'effect'
 
 const decodeUrl = Schema.decodeEither(Schema.URL)
@@ -229,7 +230,7 @@ export const rateLimitSchedule = (): Schedule.Schedule<Duration.Duration, ZulipA
   )
 
 const parseEnvelope = (text: string): Option.Option<Envelope> => {
-  if (text.length === 0) return Option.none()
+  if (Str.isEmpty(text)) return Option.none()
   return Either.getRight(decodeEnvelope(text))
 }
 

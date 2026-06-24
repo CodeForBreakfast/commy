@@ -1,5 +1,5 @@
 import type { IdentityId, InboundEvent, Timestamp } from '@commy/core/ports'
-import { Array as Arr, Option, Record as Rec } from 'effect'
+import { Array as Arr, Option, Record as Rec, String as Str } from 'effect'
 
 /**
  * Wire shape of a single inbound event after rendering. Drives the
@@ -104,7 +104,7 @@ export const formatReaction = (
 }
 
 export const formatError = (kind: string, message: string): ChannelEventPayload => {
-  const resolvedKind = kind.length === 0 ? 'unknown' : kind
+  const resolvedKind = Str.isEmpty(kind) ? 'unknown' : kind
   const meta = buildMeta([['error_kind', resolvedKind]])
   return { content: message, meta }
 }
