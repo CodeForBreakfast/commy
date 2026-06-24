@@ -20,7 +20,7 @@ import {
   Option,
   ParseResult,
   Redacted,
-  type Schema,
+  Schema,
   String as Str,
 } from 'effect'
 import type { NarrowSet } from './narrow-set.ts'
@@ -50,7 +50,6 @@ declare const ProjectSlugBrand: unique symbol
  */
 export type ProjectSlug = string & { readonly [ProjectSlugBrand]: never }
 
-declare const SessionIdBrand: unique symbol
 /**
  * Per-conversation session identifier (comms-uqf). Brand fences off the
  * `string` channel: only `parseSessionId` can mint one, and only from a
@@ -59,27 +58,24 @@ declare const SessionIdBrand: unique symbol
  * mint a malformed `cc-<project>-<garbage>` identity — which is exactly
  * what happened when a missing PreToolUse hook left a non-CC client's
  * `session_id` arg in place (see comms-uqf root-cause notes).
- */
-export type SessionId = string & { readonly [SessionIdBrand]: never }
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-/**
- * Validating constructor for `SessionId`. Returns `Option.none()` for any
- * input that isn't a UUID-shaped string. The single mint point — every
- * call site that needs a `SessionId` must come through here.
  *
  * UUID-shape is the tightening: Claude Code's `CLAUDE_CODE_SESSION_ID`
  * is a UUID, so the hook-injected path always passes; non-CC MCP clients
  * must supply a UUID (e.g. via `crypto.randomUUID()`), which is a small
  * ask in exchange for making malformed identities unrepresentable
- * downstream.
+ * downstream. `Schema.UUID`'s built-in regex is byte-equivalent to the
+ * old hand-rolled `UUID_RE` (both case-insensitive, anchored).
  */
-export const parseSessionId = (raw: unknown): Option.Option<SessionId> => {
-  if (typeof raw !== 'string') return Option.none()
-  if (!UUID_RE.test(raw)) return Option.none()
-  return Option.some(raw as SessionId)
-}
+const SessionIdSchema = Schema.UUID.pipe(Schema.brand('SessionId'))
+export type SessionId = typeof SessionIdSchema.Type
+
+/**
+ * Validating constructor for `SessionId`. Returns `Option.none()` for any
+ * input that isn't a UUID-shaped string. The single mint point — every
+ * call site that needs a `SessionId` must come through here.
+ */
+export const parseSessionId: (raw: unknown) => Option.Option<SessionId> =
+  Schema.decodeUnknownOption(SessionIdSchema)
 
 export type { BotName } from '@commy/core/ports'
 
