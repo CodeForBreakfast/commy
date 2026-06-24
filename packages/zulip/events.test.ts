@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { captureLogger } from '@commy/core/logging'
-import type { Identity, InboundEvent } from '@commy/core/ports'
+import type { Identity, InboundEvent, MessageRef } from '@commy/core/ports'
 import {
   decodeChannelIdSync,
   decodeChannelNameSync,
@@ -124,6 +124,24 @@ test('does not fire mention-received when bound identity is not in content', () 
   const mention = events.find((e) => e.kind === 'mention-received')
 
   expect(mention).toBeUndefined()
+})
+
+test('MessageRefCache.get is None on miss and Some on hit', () => {
+  const cache = createMessageRefCache()
+  const id = '4242'
+  const ref: MessageRef = {
+    id: decodeMessageIdSync(id),
+    channel: {
+      id: decodeChannelIdSync('1'),
+      name: decodeChannelNameSync('general'),
+    },
+  }
+
+  expect(cache.get(id)).toStrictEqual(Option.none())
+
+  cache.set(id, ref)
+
+  expect(cache.get(id)).toStrictEqual(Option.some(ref))
 })
 
 const dmRawEvent = (
