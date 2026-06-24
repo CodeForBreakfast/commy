@@ -9,6 +9,8 @@ import {
   decodeMessageBodySync,
   decodeThreadNameSync,
   HistoryError,
+  type IdentityError,
+  type UnknownIdentity,
 } from '@commy/core/ports'
 import { type MemoryAdapter, memoryAdapter } from '@commy/memory/adapter'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -28,25 +30,25 @@ type MemoryAdapterRig = MemoryAdapter
 
 const buildDeps = (
   adapter: MemoryAdapterRig,
-): {
-  ensureBound: EnsureBound
+): Effect.Effect<{
+  ensureBound: EnsureBound<UnknownIdentity | IdentityError>
   identityCache: IdentityCache
   narrowSet: NarrowSet
-} => {
-  const ensureBound = createEnsureBound({
+}> =>
+  createEnsureBound({
     acquire: adapter.identity.acquire,
     name: decodeBotNameSync('test-bot'),
-  })
-  return {
-    ensureBound,
-    identityCache: createSingleIdentityCache({ ensureBound }),
-    narrowSet: createNarrowSet(),
-  }
-}
+  }).pipe(
+    Effect.map((ensureBound) => ({
+      ensureBound,
+      identityCache: createSingleIdentityCache({ ensureBound }),
+      narrowSet: createNarrowSet(),
+    })),
+  )
 
 interface ConnectedRig {
   readonly adapter: MemoryAdapterRig
-  readonly ensureBound: EnsureBound
+  readonly ensureBound: EnsureBound<UnknownIdentity | IdentityError>
   readonly narrowSet: NarrowSet
   readonly cache: ToolsCache
   readonly client: Client
@@ -66,7 +68,11 @@ type ExtraToolDeps = Partial<{
  */
 const mountAndConnect = (
   adapter: MemoryAdapterRig,
-  deps: { identityCache: IdentityCache; narrowSet: NarrowSet; ensureBound: EnsureBound },
+  deps: {
+    identityCache: IdentityCache
+    narrowSet: NarrowSet
+    ensureBound: EnsureBound<UnknownIdentity | IdentityError>
+  },
   extra: ExtraToolDeps = {},
 ): Effect.Effect<ConnectedRig, never, Scope.Scope> =>
   Effect.gen(function* () {
@@ -98,11 +104,14 @@ const mountAndConnect = (
   })
 
 const withRig = <E>(
-  setup: (adapter: MemoryAdapterRig, ensureBound: EnsureBound) => Effect.Effect<void, E>,
+  setup: (
+    adapter: MemoryAdapterRig,
+    ensureBound: EnsureBound<UnknownIdentity | IdentityError>,
+  ) => Effect.Effect<void, E>,
 ): Effect.Effect<ConnectedRig, E, Scope.Scope> =>
   Effect.gen(function* () {
     const adapter = yield* memoryAdapter()
-    const deps = buildDeps(adapter)
+    const deps = yield* buildDeps(adapter)
     yield* setup(adapter, deps.ensureBound)
     return yield* mountAndConnect(adapter, deps)
   })
@@ -111,12 +120,12 @@ const withRigAndCache = <E>(
   setup: (
     adapter: MemoryAdapterRig,
     cache: ToolsCache,
-    ensureBound: EnsureBound,
+    ensureBound: EnsureBound<UnknownIdentity | IdentityError>,
   ) => Effect.Effect<void, E>,
 ): Effect.Effect<ConnectedRig, E, Scope.Scope> =>
   Effect.gen(function* () {
     const adapter = yield* memoryAdapter()
-    const deps = buildDeps(adapter)
+    const deps = yield* buildDeps(adapter)
     const rig = yield* mountAndConnect(adapter, deps)
     yield* setup(adapter, rig.cache, deps.ensureBound)
     return rig
@@ -126,9 +135,7 @@ test('tools/list advertises current_identity with optional session_id (ass-2dhb)
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const rig = yield* withRig((_adapter, ensureBound) =>
-          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
-        )
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
         const result = yield* Effect.promise(() => rig.client.listTools())
         const tool = result.tools.find((t) => t.name === 'current_identity')
         expect(tool).toBeDefined()
@@ -151,9 +158,7 @@ test('current_identity returns the bound identity after ensureBound resolves', (
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const rig = yield* withRig((_adapter, ensureBound) =>
-          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
-        )
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
         const expected = yield* rig.adapter.identity.currentIdentity()
         const result = yield* Effect.promise(() =>
           rig.client.callTool({ name: 'current_identity', arguments: {} }),
@@ -229,7 +234,7 @@ test('current_identity includes recent_threads showing where the bot posted (com
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
             cache.rememberChannel(yield* adapter.seedChannel('project-x').pipe(Effect.orDie))
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             yield* adapter.publisher.post(
               { id: decodeChannelIdSync('1'), name: decodeChannelNameSync('project-x') },
               decodeMessageBodySync('first response'),
@@ -286,8 +291,8 @@ test('current_identity fails soft when the recent_threads enrichment throws — 
               ),
           },
         }
-        const deps = buildDeps(adapter)
-        yield* Effect.promise(() => deps.ensureBound())
+        const deps = yield* buildDeps(adapter)
+        yield* deps.ensureBound()
         const rig = yield* mountAndConnect(adapter, deps)
 
         const result = yield* Effect.promise(() =>
@@ -310,9 +315,7 @@ test('calling an unknown tool surfaces a protocol error', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const rig = yield* withRig((_adapter, ensureBound) =>
-          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
-        )
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
         const error = yield* Effect.flip(
           Effect.tryPromise({
             try: () => rig.client.callTool({ name: 'no_such_tool', arguments: {} }),
@@ -328,9 +331,7 @@ test('tools/list advertises resolve with a name argument', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const rig = yield* withRig((_adapter, ensureBound) =>
-          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
-        )
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
         const result = yield* Effect.promise(() => rig.client.listTools())
         const tool = result.tools.find((t) => t.name === 'resolve')
         expect(tool).toBeDefined()
@@ -350,7 +351,7 @@ test('resolve returns the matching identity by name', () =>
       Effect.gen(function* () {
         const rig = yield* withRig((adapter, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             yield* adapter.seedAgent('peer-bot').pipe(Effect.orDie)
           }),
         )
@@ -372,9 +373,7 @@ test('resolve returns identity=null when nothing matches', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const rig = yield* withRig((_adapter, ensureBound) =>
-          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
-        )
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
         const result = yield* Effect.promise(() =>
           rig.client.callTool({
             name: 'resolve',
@@ -393,7 +392,7 @@ test('list_agents returns only agent-kind identities seeded in the directory', (
       Effect.gen(function* () {
         const rig = yield* withRig((adapter, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             yield* adapter.seedAgent('peer-a').pipe(Effect.orDie)
             yield* adapter.seedAgent('peer-b').pipe(Effect.orDie)
             yield* adapter.seedHuman('graeme').pipe(Effect.orDie)
@@ -423,7 +422,7 @@ test('presence reads cache after list_agents populates it', () =>
       Effect.gen(function* () {
         const rig = yield* withRig((adapter, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             yield* adapter.seedAgent('peer-a').pipe(Effect.orDie)
           }),
         )
@@ -456,7 +455,7 @@ test('presence reads cache after resolve populates it', () =>
       Effect.gen(function* () {
         const rig = yield* withRig((adapter, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             yield* adapter.seedAgent('peer-b').pipe(Effect.orDie)
           }),
         )
@@ -486,9 +485,7 @@ test('presence for an unknown id surfaces UnknownIdentity', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const rig = yield* withRig((_adapter, ensureBound) =>
-          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
-        )
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
         const error = yield* Effect.flip(
           Effect.tryPromise({
             try: () =>
@@ -510,7 +507,7 @@ test('list_humans returns only human-kind identities', () =>
       Effect.gen(function* () {
         const rig = yield* withRig((adapter, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             yield* adapter.seedAgent('peer-a').pipe(Effect.orDie)
             yield* adapter.seedHuman('graeme').pipe(Effect.orDie)
             yield* adapter.seedHuman('mhairi').pipe(Effect.orDie)
@@ -540,7 +537,7 @@ test('list_channels returns every channel seeded in the substrate', () =>
       Effect.gen(function* () {
         const rig = yield* withRig((adapter, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             yield* adapter.seedChannel('home').pipe(Effect.orDie)
             yield* adapter.seedChannel('general').pipe(Effect.orDie)
             yield* adapter.seedChannel('commy').pipe(Effect.orDie)
@@ -567,7 +564,7 @@ test('read_channel returns posted messages within the given range', () =>
       Effect.gen(function* () {
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
             cache.rememberChannel(channelRef)
             yield* adapter.publisher.post(channelRef, decodeMessageBodySync('hello one'))
@@ -594,7 +591,7 @@ test('read_channel honours the limit argument', () =>
       Effect.gen(function* () {
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
             cache.rememberChannel(channelRef)
             yield* adapter.publisher.post(channelRef, decodeMessageBodySync('one'))
@@ -620,7 +617,7 @@ test('post returns a clickable permalink for the new message (comms-e7my)', () =
       Effect.gen(function* () {
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
           }),
         )
@@ -649,7 +646,7 @@ test('read_channel decorates each message with message and channel permalinks (c
       Effect.gen(function* () {
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
             cache.rememberChannel(channelRef)
             yield* adapter.publisher.post(channelRef, decodeMessageBodySync('hello one'))
@@ -684,7 +681,7 @@ test('list_channels decorates each channel with a permalink (comms-e7my)', () =>
       Effect.gen(function* () {
         const rig = yield* withRig((adapter, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             yield* adapter.seedChannel('home').pipe(Effect.orDie)
           }),
         )
@@ -707,7 +704,7 @@ test('message_link returns the cached permalink for a known message id (comms-e7
       Effect.gen(function* () {
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
           }),
         )
@@ -736,7 +733,7 @@ test('message_link builds a permalink from a channel hint for an uncached id (co
       Effect.gen(function* () {
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
           }),
         )
@@ -772,7 +769,7 @@ test('subscribe with channel:<name> calls inbox.subscribe with a matching Channe
           Effect.sync(() => {
             subscribed.push(target)
           }).pipe(Effect.flatMap(() => originalSubscribe(target)))
-        const deps = buildDeps(adapter)
+        const deps = yield* buildDeps(adapter)
         const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
         const rig = yield* mountAndConnect(adapter, deps)
 
@@ -795,9 +792,7 @@ test('subscribe with malformed target surfaces a protocol error', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const rig = yield* withRig((_adapter, ensureBound) =>
-          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
-        )
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
         const error = yield* Effect.flip(
           Effect.tryPromise({
             try: () =>
@@ -824,7 +819,7 @@ test('unsubscribe routes through inbox.unsubscribe with the parsed target', () =
           Effect.sync(() => {
             unsubscribed.push(target)
           }).pipe(Effect.flatMap(() => originalUnsubscribe(target)))
-        const deps = buildDeps(adapter)
+        const deps = yield* buildDeps(adapter)
         const rig = yield* mountAndConnect(adapter, deps)
 
         const result = yield* Effect.promise(() =>
@@ -845,7 +840,7 @@ test('post returns message_id + channel_name and posts via the adapter', () =>
       Effect.gen(function* () {
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
             cache.rememberChannel(channelRef)
           }),
@@ -879,7 +874,7 @@ test('post supports thread arg', () =>
       Effect.gen(function* () {
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
           }),
         )
@@ -906,7 +901,7 @@ test('post to a thread auto-subscribes the poster to that thread (comms-1q8)', (
           Effect.sync(() => {
             subscribed.push(target)
           }).pipe(Effect.flatMap(() => originalSubscribe(target)))
-        const deps = buildDeps(adapter)
+        const deps = yield* buildDeps(adapter)
         const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
         const rig = yield* mountAndConnect(adapter, deps)
         rig.cache.rememberChannel(channelRef)
@@ -940,7 +935,7 @@ test('post without a thread does NOT auto-subscribe (comms-1q8)', () =>
           Effect.sync(() => {
             subscribed.push(target)
           }).pipe(Effect.flatMap(() => originalSubscribe(target)))
-        const deps = buildDeps(adapter)
+        const deps = yield* buildDeps(adapter)
         const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
         const rig = yield* mountAndConnect(adapter, deps)
         rig.cache.rememberChannel(channelRef)
@@ -969,7 +964,7 @@ test('posting to the same thread twice subscribes only once (comms-1q8 idempoten
           Effect.sync(() => {
             subscribed.push(target)
           }).pipe(Effect.flatMap(() => originalSubscribe(target)))
-        const deps = buildDeps(adapter)
+        const deps = yield* buildDeps(adapter)
         const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
         const rig = yield* mountAndConnect(adapter, deps)
         rig.cache.rememberChannel(channelRef)
@@ -998,7 +993,7 @@ test('react after a prior post hits the MessageRef cache without channel_name', 
       Effect.gen(function* () {
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
           }),
         )
@@ -1026,7 +1021,7 @@ test('react with explicit channel_name works on a cache-miss id', () =>
       Effect.gen(function* () {
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
             cache.rememberChannel(channelRef)
             // post directly via adapter — bypasses the plugin's MessageRef cache
@@ -1053,9 +1048,7 @@ test('react with cache miss and no channel_name surfaces UnknownMessage', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const rig = yield* withRig((_adapter, ensureBound) =>
-          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
-        )
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
         const error = yield* Effect.flip(
           Effect.tryPromise({
             try: () =>
@@ -1080,7 +1073,7 @@ test('react with a malformed emoji arg yields a typed ParseError tool error, not
         // typed tool-error response rather than surfacing as a defect/crash.
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
           }),
         )
@@ -1112,7 +1105,7 @@ test('edit_message rewrites the body, visible via history.readChannel', () =>
       Effect.gen(function* () {
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
           }),
         )
@@ -1144,7 +1137,7 @@ test('edit_message with explicit channel_name works on a cache-miss id', () =>
       Effect.gen(function* () {
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
             cache.rememberChannel(channelRef)
             yield* adapter.publisher.post(channelRef, decodeMessageBodySync('pre-existing'))
@@ -1172,9 +1165,7 @@ test('edit_message with cache miss and no channel_name surfaces UnknownMessage',
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const rig = yield* withRig((_adapter, ensureBound) =>
-          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
-        )
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
         const error = yield* Effect.flip(
           Effect.tryPromise({
             try: () =>
@@ -1196,7 +1187,7 @@ test('unreact mirrors react: routes through publisher.unreact', () =>
       Effect.gen(function* () {
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
           }),
         )
@@ -1245,7 +1236,7 @@ test('post into an existing thread (other agent posted first) auto-subscribes th
         })
         yield* adapter.identity.release()
 
-        const deps = buildDeps(adapter)
+        const deps = yield* buildDeps(adapter)
         const rig = yield* mountAndConnect(adapter, deps)
         rig.cache.rememberChannel(channelRef)
 
@@ -1295,7 +1286,7 @@ test('react to a message in a thread auto-subscribes the reactor (comms-iut)', (
         )
         yield* adapter.identity.release()
 
-        const deps = buildDeps(adapter)
+        const deps = yield* buildDeps(adapter)
         const rig = yield* mountAndConnect(adapter, deps)
         rig.cache.rememberChannel(channelRef)
 
@@ -1341,7 +1332,7 @@ test('react to a top-level (no-thread) message does NOT auto-subscribe (comms-iu
         )
         yield* adapter.identity.release()
 
-        const deps = buildDeps(adapter)
+        const deps = yield* buildDeps(adapter)
         const rig = yield* mountAndConnect(adapter, deps)
         rig.cache.rememberChannel(channelRef)
 
@@ -1383,7 +1374,7 @@ test('reacting to the same thread twice subscribes only once (comms-iut idempote
         })
         yield* adapter.identity.release()
 
-        const deps = buildDeps(adapter)
+        const deps = yield* buildDeps(adapter)
         const rig = yield* mountAndConnect(adapter, deps)
         rig.cache.rememberChannel(channelRef)
 
@@ -1443,7 +1434,7 @@ test('unreact does not change subscription state (comms-iut: no unsub-on-disenga
         )
         yield* adapter.identity.release()
 
-        const deps = buildDeps(adapter)
+        const deps = yield* buildDeps(adapter)
         const rig = yield* mountAndConnect(adapter, deps)
         rig.cache.rememberChannel(channelRef)
 
@@ -1483,7 +1474,7 @@ test('read_thread returns only messages in the given thread', () =>
       Effect.gen(function* () {
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
             cache.rememberChannel(channelRef)
             yield* adapter.publisher.post(channelRef, decodeMessageBodySync('top-level message'))
@@ -1508,9 +1499,7 @@ test('read_thread schema uses thread not thread_name (comms-476)', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const rig = yield* withRig((_adapter, ensureBound) =>
-          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
-        )
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
         const result = yield* Effect.promise(() => rig.client.listTools())
         const tool = result.tools.find((t) => t.name === 'read_thread')
         expect(tool).toBeDefined()
@@ -1530,7 +1519,7 @@ test('post with unknown argument rejects instead of silently dropping (comms-476
       Effect.gen(function* () {
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
           }),
         )
@@ -1560,7 +1549,7 @@ test('post with a non-string required arg rejects via the typed args decode (com
         // unchecked value.
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
           }),
         )
@@ -1590,7 +1579,7 @@ test('post with valid args decodes to the typed shape and posts (comms-o52)', ()
         // post lands with the parsed values.
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
           }),
         )
@@ -1617,7 +1606,7 @@ test('react with unknown argument rejects (comms-476)', () =>
       Effect.gen(function* () {
         const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
           Effect.gen(function* () {
-            yield* Effect.promise(() => ensureBound())
+            yield* ensureBound()
             cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
             const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
             const ref = yield* adapter.publisher.post(channelRef, decodeMessageBodySync('msg'))
@@ -1655,8 +1644,8 @@ const withDownloadRig = (
 ): Effect.Effect<DownloadRig, never, Scope.Scope> =>
   Effect.gen(function* () {
     const adapter = yield* memoryAdapter()
-    const deps = buildDeps(adapter)
-    yield* Effect.promise(() => deps.ensureBound())
+    const deps = yield* buildDeps(adapter)
+    yield* deps.ensureBound().pipe(Effect.orDie)
     const rig = yield* mountAndConnect(adapter, deps, { downloadFile })
     return { client: rig.client }
   })
@@ -1691,9 +1680,7 @@ test('tools/list does not advertise download_file when downloadFile dep is missi
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const rig = yield* withRig((_adapter, ensureBound) =>
-          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
-        )
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
         const result = yield* Effect.promise(() => rig.client.listTools())
         const tool = result.tools.find((t) => t.name === 'download_file')
         expect(tool).toBeUndefined()
@@ -1774,8 +1761,8 @@ const withUploadRig = (
 ): Effect.Effect<UploadRig, never, Scope.Scope> =>
   Effect.gen(function* () {
     const adapter = yield* memoryAdapter()
-    const deps = buildDeps(adapter)
-    yield* Effect.promise(() => deps.ensureBound())
+    const deps = yield* buildDeps(adapter)
+    yield* deps.ensureBound().pipe(Effect.orDie)
     const rig = yield* mountAndConnect(adapter, deps, { upload })
     return { client: rig.client }
   })
@@ -1810,9 +1797,7 @@ test('tools/list does not advertise upload_file when the upload dep is missing (
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const rig = yield* withRig((_adapter, ensureBound) =>
-          Effect.promise(() => ensureBound()).pipe(Effect.asVoid),
-        )
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
         const result = yield* Effect.promise(() => rig.client.listTools())
         const tool = result.tools.find((t) => t.name === 'upload_file')
         expect(tool).toBeUndefined()

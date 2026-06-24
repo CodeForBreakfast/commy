@@ -133,17 +133,15 @@ const EPHEMERAL_IDLE_SWEEP_INTERVAL_MS = 5 * 60 * 1000
  *
  * The sweep reads the current wall-clock from Effect's `Clock` rather
  * than `Date.now()`, so tests can drive it deterministically with
- * `TestClock`. `sweepIdle` is the deliberately Promise-shaped cache seam
- * (see `identity-cache.ts`), lifted via `Effect.promise` exactly as the
- * shutdown body lifts `adapter.close()`.
+ * `TestClock`. `sweepIdle` is Effect-native (see `identity-cache.ts`), so
+ * it sequences straight into the scheduled body with no `Effect.promise`
+ * lift.
  */
 export const forkIdleSweep = (
   cache: Pick<IdentityCache, 'sweepIdle'>,
   intervalMs: number,
 ): Effect.Effect<void, never, Scope.Scope> => {
-  const sweep = Clock.currentTimeMillis.pipe(
-    Effect.flatMap((nowMs) => Effect.promise(() => cache.sweepIdle(nowMs))),
-  )
+  const sweep = Clock.currentTimeMillis.pipe(Effect.flatMap((nowMs) => cache.sweepIdle(nowMs)))
   return Effect.asVoid(
     Effect.forkScoped(Effect.repeat(sweep, Schedule.spaced(Duration.millis(intervalMs)))),
   )
@@ -270,13 +268,12 @@ const buildIdentityCache = (
     acquired: AcquiredIdentity,
     project: ProjectSlug | undefined,
   ) => Effect.Effect<void>,
-): IdentityCache => {
+): Effect.Effect<IdentityCache> => {
   if (botName !== undefined) {
-    const ensureBound = createEnsureBound({
+    return createEnsureBound({
       acquire: adapter.identity.acquire,
       name: botName,
-    })
-    return createSingleIdentityCache({ ensureBound })
+    }).pipe(Effect.map((ensureBound) => createSingleIdentityCache({ ensureBound })))
   }
   return createEphemeralIdentityCache({
     acquire: adapter.identity.acquire,
@@ -435,7 +432,7 @@ export const makeProgram = (
               )
           : undefined
 
-      const identityCache = buildIdentityCache(adapter, parsed.botName, ephemeralOnAcquire)
+      const identityCache = yield* buildIdentityCache(adapter, parsed.botName, ephemeralOnAcquire)
 
       // Persistent mode (COMMY_BOT_NAME set): eager acquire so a
       // misconfigured concierge dies at boot rather than on first message
@@ -445,14 +442,16 @@ export const makeProgram = (
       if (parsed.botName !== undefined) {
         const botName = parsed.botName
         const ensureBound = yield* identityCache.ensureBoundFor(undefined)
-        type1Intents = yield* Effect.tryPromise({
-          // `ensureBound()` is a Promise edge owned by the acquire seam
-          // (ensure-bound.ts); it squashes its own Cause, so the caught
-          // value is the raw error, wrapped verbatim into the BootError.
-          try: () => ensureBound(),
-          catch: (err): BootError =>
-            new BootError({ message: Predicate.isError(err) ? err.message : String(err) }),
-        }).pipe(
+        type1Intents = yield* ensureBound().pipe(
+          // `ensureBound()` is the acquire Effect (ensure-bound.ts). Squash the
+          // whole Cause — typed acquire failure OR an adapter defect — into the
+          // BootError the operator must fix, the way the old Promise edge did.
+          Effect.catchAllCause((cause) => {
+            const err = Cause.squash(cause)
+            return Effect.fail(
+              new BootError({ message: Predicate.isError(err) ? err.message : String(err) }),
+            )
+          }),
           Effect.matchEffect({
             onFailure: (bootErr) =>
               Effect.logError(

@@ -31,7 +31,7 @@ const buildSessionRig = (
   Effect.gen(function* () {
     const idleReleaseMs = options.idleReleaseMs ?? 60 * 60 * 1000
     const adapter = yield* memoryAdapter()
-    const identityCache = createEphemeralIdentityCache({
+    const identityCache = yield* createEphemeralIdentityCache({
       acquire: adapter.identity.acquire,
       release: adapter.identity.release,
       idleReleaseMs,

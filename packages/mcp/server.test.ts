@@ -589,9 +589,10 @@ const buildSweepSpyCache = (): SweepSpyCache => {
   return {
     nowMsCalls,
     cache: {
-      sweepIdle: async (nowMs) => {
-        nowMsCalls.push(nowMs)
-      },
+      sweepIdle: (nowMs) =>
+        Effect.sync(() => {
+          nowMsCalls.push(nowMs)
+        }),
     },
   }
 }
