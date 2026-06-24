@@ -351,8 +351,10 @@ interface InboxState {
   readonly subscribedChannels: HashSet.HashSet<string>
   readonly newTopicsChannels: HashSet.HashSet<string>
   readonly seenTopicsByChannel: HashMap.HashMap<string, HashSet.HashSet<string>>
-  readonly registeredQueue: Option.Option<QueueState>
-  readonly registeredMode: Option.Option<'all' | 'mentions'>
+  readonly registration: Option.Option<{
+    readonly queue: QueueState
+    readonly mode: 'all' | 'mentions'
+  }>
 }
 
 const streamIsListening = (state: InboxState, channelId: string): boolean =>
@@ -1128,8 +1130,7 @@ export const zulipAdapter = (
       subscribedChannels: HashSet.empty<string>(),
       newTopicsChannels: HashSet.empty<string>(),
       seenTopicsByChannel: HashMap.empty<string, HashSet.HashSet<string>>(),
-      registeredQueue: Option.none<QueueState>(),
-      registeredMode: Option.none<'all' | 'mentions'>(),
+      registration: Option.none(),
     })
     // Adapter-scoped so the cache outlives any single `events()`
     // iterator — consumers that re-call `events()` retain the
@@ -1200,15 +1201,14 @@ export const zulipAdapter = (
       Ref.get(inboxRef).pipe(
         Effect.flatMap((state) => {
           const mode = currentMode(state)
-          if (Option.isSome(state.registeredQueue) && Option.contains(state.registeredMode, mode)) {
+          if (Option.exists(state.registration, (r) => r.mode === mode)) {
             return Effect.void
           }
           return registerQueue(minterHttp, mode).pipe(
             Effect.flatMap((q) =>
               Ref.update(inboxRef, (current) => ({
                 ...current,
-                registeredQueue: Option.some(q),
-                registeredMode: Option.some(mode),
+                registration: Option.some(Data.struct({ queue: q, mode })),
               })),
             ),
           )
@@ -1310,9 +1310,9 @@ export const zulipAdapter = (
                   onNone: () => ({}),
                   onSome: (b) => ({ boundIdentity: b.identity }),
                 }),
-                ...Option.match(state.registeredQueue, {
+                ...Option.match(state.registration, {
                   onNone: () => ({}),
-                  onSome: (q) => ({ initialQueue: q }),
+                  onSome: (r) => ({ initialQueue: r.queue }),
                 }),
               }),
             ),
