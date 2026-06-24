@@ -182,6 +182,19 @@ test('parseEnv rejects CLAUDE_CODE_SESSION_ID when value is an unsubstituted ${.
     }),
   ))
 
+test('parseEnv rejects a set-but-invalid CLAUDE_CODE_SESSION_ID with a UUID message', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const err = yield* expectParseEnvError({
+        ...fullEnv,
+        CLAUDE_CODE_SESSION_ID: 'homelab-iphone-vpn-debug',
+      })
+      expect(err.message).toContain('CLAUDE_CODE_SESSION_ID')
+      expect(err.message).toContain('must be a UUID')
+      expect(err.message).toContain('homelab-iphone-vpn-debug')
+    }),
+  ))
+
 // --- COMMY_* env config ---
 // Optional COMMY_* keys are read from the canonical form; a value that is
 // present but invalid fails loudly rather than being silently ignored.
@@ -201,12 +214,17 @@ test('parseEnv reads botName from canonical COMMY_BOT_NAME', () =>
     }),
   ))
 
-test('parseEnv rejects a set-but-invalid COMMY_BOT_NAME', () =>
+test('parseEnv rejects a set-but-invalid COMMY_BOT_NAME with a substrate-safe message', () =>
   Effect.runPromise(
-    expectParseEnvError({
-      ...requiredOnlyEnv,
-      COMMY_BOT_NAME: 'Has Spaces',
-    }).pipe(Effect.asVoid),
+    Effect.gen(function* () {
+      const err = yield* expectParseEnvError({
+        ...requiredOnlyEnv,
+        COMMY_BOT_NAME: 'Has Spaces',
+      })
+      expect(err.message).toContain('COMMY_BOT_NAME')
+      expect(err.message).toContain('must be substrate-safe')
+      expect(err.message).toContain('Has Spaces')
+    }),
   ))
 
 test('parseEnv reads subscribe from canonical COMMY_SUBSCRIBE', () =>
