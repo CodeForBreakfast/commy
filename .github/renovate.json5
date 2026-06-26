@@ -15,7 +15,11 @@
   // CI (the `check` gate) is the arbiter of whether an update is good.
   // platformAutomerge (default true) enqueues GitHub's native auto-merge, which
   // respects the no-bypass branch ruleset on main and merges only on a green
-  // `check`. With the 7-day age gate below, this is the zero-intervention loop.
+  // `check`. Default-on here, then the packageRule below holds minor + major
+  // for agent review — so patch, digest, pin and lock-file maintenance flow
+  // unattended (low semver risk, and the 7-day age gate plus the CI install-age
+  // gate keep a fresh release from ever going green), while semver bumps that
+  // can carry behaviour changes wait for the `/renovate` skill to evaluate.
   automerge: true,
   dependencyDashboard: true,
 
@@ -27,6 +31,16 @@
       // the only age gate; bun also enforces it at install time.
       matchPackageNames: ["*"],
       minimumReleaseAge: "7 days",
+    },
+    {
+      // Hold semver bumps that can carry behaviour changes for agent review:
+      // they stay as ordinary open PRs (no auto-merge) labelled for the
+      // `/renovate` skill to find, evaluate (changelog + migration for majors,
+      // incompatible-dependency check) and merge or report. Patch / digest /
+      // pin / lock-file maintenance keep auto-merging via the default above.
+      matchUpdateTypes: ["minor", "major"],
+      automerge: false,
+      addLabels: ["renovate/needs-review"],
     },
     {
       // Bun pinning is owned by bunfig.toml (`exact = true` + its own
