@@ -39,6 +39,17 @@ commy = ["plugin.yaml"]
 # tests can import the real SDK and run a real stub-server subprocess.
 dev = ["pytest==9.0.3", "pyyaml==6.0.3", "ruff==0.15.16", "mcp==1.27.2"]
 
+[tool.uv]
+# Refuse to resolve package versions less than 7 days old — the uv mirror of
+# bunfig.toml's `minimumReleaseAge = 604800`. Supply-chain defence against fresh
+# malicious pushes: gives the community time to notice before we pull a release.
+# This is the *enforcing* gate — it lives in the install step, so a too-fresh
+# dependency fails CI for any change, whoever raised it. (Renovate's own
+# `minimumReleaseAge` is only an optimisation that keeps it from opening PRs CI
+# would reject.) uv records this as a relative `exclude-newer-span` in uv.lock,
+# so the lock stays stable while the window is re-evaluated on every resolve.
+exclude-newer = "7 days"
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
