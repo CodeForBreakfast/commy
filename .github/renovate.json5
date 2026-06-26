@@ -34,9 +34,9 @@
       // release age (renovatebot/renovate#40288): it would pin to the newest
       // version, which bun then refuses to install while it is <7 days old, so
       // bun.lock could never regenerate and the PR would wedge. `replace` keeps
-      // the manifest's already-exact versions exact and DOES respect
+      // the manifest's already-exact versions exact and respects
       // minimumReleaseAge, so Renovate's bumps stay aligned with what bun will
-      // install — fully automated, no manual pinning.
+      // install.
       matchManagers: ["bun"],
       rangeStrategy: "replace",
     },
