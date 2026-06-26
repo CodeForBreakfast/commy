@@ -33,9 +33,9 @@ permissions:
 
 jobs:
   verify-tag:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      # SHA-pinned like ci.yml; Dependabot (.github/dependabot.yml) bumps it.
+      # SHA-pinned like ci.yml; Renovate (.github/renovate.json5) bumps it.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Verify tag matches plugin manifest
         env:
@@ -52,12 +52,12 @@ jobs:
 
   publish-npm:
     needs: verify-tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write # mint the OIDC token npm verifies for trusted publishing
     steps:
-      # SHA-pinned like ci.yml; Dependabot (.github/dependabot.yml) bumps them.
+      # SHA-pinned like ci.yml; Renovate (.github/renovate.json5) bumps them.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
@@ -71,9 +71,13 @@ jobs:
       - name: Stage the npm package
         run: nix develop .#ci --command bash -euo pipefail -c 'bun install --frozen-lockfile && bun run pack:npm'
       # Trusted publishing (OIDC) needs npm >= 11.5.1; Node 24 still ships npm
-      # 10.x, so upgrade the publish CLI explicitly.
+      # 10.x, so upgrade the publish CLI explicitly. Pinned to an exact version
+      # rather than `@latest`: a publish run is exactly when grabbing the newest
+      # release blind would defeat the supply-chain caution this repo's pinning
+      # buys — and any npm >= 11.5.1 satisfies OIDC, so this floor never needs
+      # to move on its own. Bump it deliberately when a newer npm is wanted.
       - name: Upgrade npm for trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@11.17.0
       # No NODE_AUTH_TOKEN: with id-token write + a registered trusted publisher,
       # npm exchanges the OIDC token itself and attaches provenance by default.
       - name: Publish to npm via OIDC trusted publishing
