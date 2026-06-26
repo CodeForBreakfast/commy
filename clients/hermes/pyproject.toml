@@ -4,7 +4,7 @@ version = "0.14.1"
 description = "commy platform adapter for Hermes Agent (pattern B inbound-axis consumer)"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.11"
+requires-python = "==3.14.6"
 # No runtime dependencies: the host Hermes runtime provides BasePlatformAdapter
 # and the Platform enum at pod runtime, so the plugin deliberately does not
 # bundle or pin `hermes-agent` (or its tree). See README for the test recipe.
@@ -20,7 +20,7 @@ dependencies = []
 commy-platform = "commy"
 
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools==82.0.1"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
@@ -37,7 +37,7 @@ commy = ["plugin.yaml"]
 # host Hermes already provides `mcp` (hermes-agent depends on it), the same way
 # it provides `gateway`/`hermes_cli`. It lives in the dev group so the lifecycle
 # tests can import the real SDK and run a real stub-server subprocess.
-dev = ["pytest>=8", "pyyaml>=6", "ruff>=0.6", "mcp>=1.2"]
+dev = ["pytest==9.0.3", "pyyaml==6.0.3", "ruff==0.15.16", "mcp==1.27.2"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
