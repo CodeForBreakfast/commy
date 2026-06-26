@@ -1,15 +1,27 @@
 name: Release
 
-# Verify-only on tag push. The curated GitHub Release is cut LOCALLY by the
-# `release-plugin` maintainer skill once this check is green (see that skill's
-# "Write the curated notes and cut the GitHub Release" step) — the notes are
-# written by hand, classified by impact, never drawn from raw `git log`. This
-# workflow no longer authors a Release; auto-generated commit-log notes are
-# exactly what the curated Release replaces. Its sole job is to re-check that a
-# pushed `commy-vX.Y.Z` tag matches the plugin manifest version, so the tag
-# can't drift from the six-site lockstep group
-# (clients/claude-code/manifests.test.ts) that ci.yml already enforces on the
-# tagged commit.
+# Fires on a pushed `commy-vX.Y.Z` tag and does two things in order:
+#
+#   1. verify-tag — re-check that the tag matches the plugin manifest version,
+#      so the tag can't drift from the six-site lockstep group
+#      (clients/claude-code/manifests.test.ts) that ci.yml already enforces on
+#      the tagged commit.
+#   2. publish-npm — build the `@codeforbreakfast/commy-mcp` node bundle and
+#      publish it to npm via OIDC trusted publishing (no NPM_TOKEN). Gated on
+#      verify-tag, so a mismatched tag never reaches the registry.
+#
+# Trusted publishing means npm trusts THIS workflow (org/repo/filename), not a
+# stored token: each run mints a short-lived signed OIDC token the registry
+# verifies against the package's trusted-publisher config. Because the repo and
+# package are public, npm attaches a provenance attestation automatically — no
+# `--provenance` flag, no secret to rotate or leak. Configure the publisher
+# once at npmjs.com → package settings → Trusted Publisher (GitHub Actions,
+# org `CodeForBreakfast`, repo `commy`, workflow `release.yml`).
+#
+# The curated GitHub Release is still cut LOCALLY by the `release-plugin`
+# maintainer skill once this workflow is green — this workflow does not author a
+# Release (auto-generated commit-log notes are exactly what the curated Release
+# replaces).
 
 on:
   push:
@@ -37,3 +49,32 @@ jobs:
             exit 1
           fi
           echo "Tag ${TAG} matches plugin.json version ${manifest}; the curated GitHub Release is cut locally by the release-plugin skill."
+
+  publish-npm:
+    needs: verify-tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # mint the OIDC token npm verifies for trusted publishing
+    steps:
+      # SHA-pinned like ci.yml; Dependabot (.github/dependabot.yml) bumps them.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.0.0
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      # Build the publishable bundle with the flake-pinned bun, the same way
+      # ci.yml runs the gate — `bun run pack:npm` stages the node-target,
+      # dependency-inlined server.js plus a generated package.json (version read
+      # from plugin.json) at packages/mcp/dist.
+      - name: Stage the npm package
+        run: nix develop .#ci --command bash -euo pipefail -c 'bun install --frozen-lockfile && bun run pack:npm'
+      # Trusted publishing (OIDC) needs npm >= 11.5.1; Node 24 still ships npm
+      # 10.x, so upgrade the publish CLI explicitly.
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@latest
+      # No NODE_AUTH_TOKEN: with id-token write + a registered trusted publisher,
+      # npm exchanges the OIDC token itself and attaches provenance by default.
+      - name: Publish to npm via OIDC trusted publishing
+        run: npm publish packages/mcp/dist
