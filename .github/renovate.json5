@@ -33,12 +33,14 @@
       // `minimumReleaseAge`), not Renovate. Renovate's `pin` operation ignores
       // release age (renovatebot/renovate#40288): it would pin to the newest
       // version, which bun then refuses to install while it is <7 days old, so
-      // bun.lock could never regenerate and the PR would wedge. `replace` keeps
-      // the manifest's already-exact versions exact and respects
-      // minimumReleaseAge, so Renovate's bumps stay aligned with what bun will
-      // install.
+      // bun.lock could never regenerate and the PR would wedge. `bump` instead
+      // updates exact deps to the new exact version and raises the `^` security
+      // override floors (undici/hono/ws/fast-uri) as newer versions appear —
+      // both via age-gated PRs, since bump respects minimumReleaseAge. (replace
+      // would leave the in-range override updates to bun lockFileMaintenance,
+      // which is unreliable — renovatebot/renovate#38692.)
       matchManagers: ["bun"],
-      rangeStrategy: "replace",
+      rangeStrategy: "bump",
     },
     {
       // External requirements are compatibility floors, not pinned dependencies.
