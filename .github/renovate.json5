@@ -8,29 +8,37 @@
   // detection, and weekly lock-file maintenance.
   extends: ["config:best-practices"],
 
-  // Pin every range we can to an exact version. The manifests are already
-  // exact-pinned by hand (effect "3.21.2", not "^3.21.2"); this keeps new
-  // updates pinned too, so the lockfile is the single source of truth.
+  // Internal dependencies pin to an exact version. The packageRules below carve
+  // out the things that are NOT dependencies but compatibility floors.
   rangeStrategy: "pin",
 
-  // CI (the `check` gate) is the arbiter of whether an update is good. Enable
-  // automerge for everything — platformAutomerge (default true) enqueues
-  // GitHub's native auto-merge, which respects the no-bypass branch ruleset on
-  // main and merges only once `check` is green. Combined with the 7-day age
-  // gate below, this is the zero-manual-intervention loop Graeme asked for.
+  // CI (the `check` gate) is the arbiter of whether an update is good.
+  // platformAutomerge (default true) enqueues GitHub's native auto-merge, which
+  // respects the no-bypass branch ruleset on main and merges only on a green
+  // `check`. With the 7-day age gate below, this is the zero-intervention loop.
   automerge: true,
   dependencyDashboard: true,
 
-  // Supply-chain-attack protection: never act on a release until it has been
-  // public for 7 days. minimumReleaseAge suppresses PR creation (not just the
-  // merge) until then, so a freshly-compromised release can't auto-merge.
-  // best-practices bundles security:minimumReleaseAgeNpm (only 3 days, npm
-  // only); packageRules are last-wins, so this trailing rule lifts the whole
-  // realm — npm/bun, GitHub Actions, PyPI/uv — to 7 days.
   packageRules: [
     {
+      // Supply-chain-attack protection: never act on a release until it has
+      // been public for 7 days. Kept realm-wide and deliberately aligned with
+      // bunfig.toml's own `minimumReleaseAge = 604800` — bun enforces the same
+      // 7 days at install time, so if Renovate proposed anything younger, bun
+      // would refuse to resolve it and bun.lock could never regenerate. For
+      // GitHub Actions and PyPI/uv (no install-time gate) this is the only gate.
       matchPackageNames: ["*"],
       minimumReleaseAge: "7 days",
+    },
+    {
+      // External requirements are compatibility floors, not pinned dependencies.
+      // `requires-python` declares the Python range commy supports;
+      // `build-system.requires` declares the minimum build tooling. Both must
+      // stay `>=` floors — pinning them to one exact version would wrongly
+      // narrow which interpreters and build environments we accept. Renovate
+      // leaves them to deliberate human change.
+      matchDepTypes: ["requires-python", "build-system.requires"],
+      enabled: false,
     },
   ],
 }

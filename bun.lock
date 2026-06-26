@@ -25,7 +25,7 @@
     },
     "clients/claude-code": {
       "name": "commy-plugin",
-      "version": "0.14.0",
+      "version": "0.14.1",
       "dependencies": {
         "@commy/mcp": "workspace:*",
       },
@@ -40,7 +40,7 @@
     },
     "packages/mcp": {
       "name": "@commy/mcp",
-      "version": "0.14.0",
+      "version": "0.14.1",
       "dependencies": {
         "@commy/core": "workspace:*",
         "@commy/zulip": "workspace:*",
@@ -79,10 +79,10 @@
     },
   },
   "overrides": {
-    "fast-uri": "^3.1.2",
-    "hono": "^4.12.25",
-    "undici": "^7.28.0",
-    "ws": "^8.21.0",
+    "fast-uri": "3.1.2",
+    "hono": "4.12.25",
+    "undici": "7.28.0",
+    "ws": "8.21.0",
   },
   "packages": {
     "@biomejs/biome": ["@biomejs/biome@2.4.15", "", { "optionalDependencies": { "@biomejs/cli-darwin-arm64": "2.4.15", "@biomejs/cli-darwin-x64": "2.4.15", "@biomejs/cli-linux-arm64": "2.4.15", "@biomejs/cli-linux-arm64-musl": "2.4.15", "@biomejs/cli-linux-x64": "2.4.15", "@biomejs/cli-linux-x64-musl": "2.4.15", "@biomejs/cli-win32-arm64": "2.4.15", "@biomejs/cli-win32-x64": "2.4.15" }, "bin": { "biome": "bin/biome" } }, "sha512-j5VH3a/h/HXTKBM50MDMxRCzkeLv9S2XJcW2WgnZT1+xyisi+0bISrXR82gCX+8S9lvK0skEvHJRN+3Ktr2hlw=="],

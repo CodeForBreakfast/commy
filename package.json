@@ -32,10 +32,10 @@
     "effect": "3.21.2"
   },
   "overrides": {
-    "undici": "^7.28.0",
-    "hono": "^4.12.25",
-    "ws": "^8.21.0",
-    "fast-uri": "^3.1.2"
+    "undici": "7.28.0",
+    "hono": "4.12.25",
+    "ws": "8.21.0",
+    "fast-uri": "3.1.2"
   },
   "devDependencies": {
     "@commy/testing": "workspace:*",
