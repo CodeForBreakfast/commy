@@ -1,9 +1,0 @@
-version: 2
-updates:
-  # Keep the commit-SHA-pinned actions in .github/workflows/ from rotting:
-  # Dependabot opens PRs that bump the SHA and the trailing `# version`
-  # comment together, preserving the digest pin. See comms-0m15.
-  - package-ecosystem: github-actions
-    directory: /
-    schedule:
-      interval: weekly

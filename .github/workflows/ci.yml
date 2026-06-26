@@ -11,8 +11,8 @@ jobs:
     steps:
       # Actions pinned to commit-SHA digests, not mutable tags/branches, to
       # close the supply-chain hole a force-pushed tag/branch would open. The
-      # trailing comment tracks the human-readable version; Dependabot
-      # (.github/dependabot.yml) bumps the SHAs so the pins don't rot.
+      # trailing comment tracks the human-readable version; Renovate
+      # (.github/renovate.json5) bumps the SHAs so the pins don't rot.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
       # All gate tooling (bun + uv) comes from the flake's lean .#ci shell, so

@@ -1,0 +1,36 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+
+  // config:best-practices gives us the whole maintainability spine in one line:
+  // config:recommended + dependency dashboard, GitHub Actions & Docker digest
+  // pinning (helpers:pinGitHubActionDigests replaces what dependabot.yml did),
+  // dev-dependency pinning, automatic config-migration PRs, abandoned-package
+  // detection, and weekly lock-file maintenance.
+  extends: ["config:best-practices"],
+
+  // Pin every range we can to an exact version. The manifests are already
+  // exact-pinned by hand (effect "3.21.2", not "^3.21.2"); this keeps new
+  // updates pinned too, so the lockfile is the single source of truth.
+  rangeStrategy: "pin",
+
+  // CI (the `check` gate) is the arbiter of whether an update is good. Enable
+  // automerge for everything — platformAutomerge (default true) enqueues
+  // GitHub's native auto-merge, which respects the no-bypass branch ruleset on
+  // main and merges only once `check` is green. Combined with the 7-day age
+  // gate below, this is the zero-manual-intervention loop Graeme asked for.
+  automerge: true,
+  dependencyDashboard: true,
+
+  // Supply-chain-attack protection: never act on a release until it has been
+  // public for 7 days. minimumReleaseAge suppresses PR creation (not just the
+  // merge) until then, so a freshly-compromised release can't auto-merge.
+  // best-practices bundles security:minimumReleaseAgeNpm (only 3 days, npm
+  // only); packageRules are last-wins, so this trailing rule lifts the whole
+  // realm — npm/bun, GitHub Actions, PyPI/uv — to 7 days.
+  packageRules: [
+    {
+      matchPackageNames: ["*"],
+      minimumReleaseAge: "7 days",
+    },
+  ],
+}
