@@ -62,7 +62,7 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
       - uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
         with:
-          node-version: '24'
+          node-version: '24.18.0'
           registry-url: 'https://registry.npmjs.org'
       # Build the publishable bundle with the flake-pinned bun, the same way
       # ci.yml runs the gate — `bun run pack:npm` stages the node-target,
