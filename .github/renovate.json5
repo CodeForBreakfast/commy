@@ -23,6 +23,15 @@
   automerge: true,
   dependencyDashboard: true,
 
+  // packages/core is the substrate-neutral ports layer and is dependency-free
+  // by design. With a single shared bun.lock, every lock regen sweeps it via
+  // Renovate's non-updated-package-files artifact loop; the re-extract finds no
+  // deps and Renovate logs a benign "Could not re-extract the packageFile after
+  // updating it" repository-problem warning. Excluding the file from extraction
+  // silences that noise. Remove this entry if @commy/core ever gains a
+  // dependency — otherwise its updates would go unmanaged.
+  ignorePaths: ["packages/core/package.json"],
+
   packageRules: [
     {
       // Supply-chain-attack protection: never act on a release until it has
