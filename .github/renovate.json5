@@ -12,11 +12,22 @@
   // out the bun ecosystem (owned by bunfig.toml) and the compatibility floors.
   rangeStrategy: "pin",
 
-  // CI (the `check` gate) is the arbiter of whether an update is good.
-  // platformAutomerge (default true) enqueues GitHub's native auto-merge, which
-  // respects the no-bypass branch ruleset on main and merges only on a green
-  // `check`. With the 7-day age gate below, this is the zero-intervention loop.
+  // CI (the `check` gate) is the arbiter of whether an update is good, and the
+  // 7-day age gate below is the supply-chain arbiter. Renovate does the merge
+  // itself (`platformAutomerge: false`) rather than enqueuing GitHub's native
+  // auto-merge: native auto-merge only waits for *required* branch-protection
+  // checks (we require only `check`), so it ignores the `renovate/stability-days`
+  // age check and merges a still-aging pin PR the instant `check` goes green —
+  // the `pin` op selects the newest version ignoring age (renovatebot/renovate
+  // #40288), so pin PRs are born with stability-days pending and slip straight
+  // through. Renovate's own merge instead honours stability-days as branch
+  // status and holds the PR until it ages, closing that hole for every update
+  // type. (Making stability-days a *required* check would hang every human PR —
+  // the check is never reported on non-Renovate PRs, and rulesets can't scope a
+  // required check to one author.) Cost: merges land on Renovate's scan cadence
+  // rather than instantly — immaterial for dependency updates.
   automerge: true,
+  platformAutomerge: false,
   dependencyDashboard: true,
 
   packageRules: [
