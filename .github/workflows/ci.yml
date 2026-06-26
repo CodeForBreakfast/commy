@@ -7,7 +7,11 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # Pinned to a specific runner image, not `ubuntu-latest`, so a GitHub
+    # `-latest` migration can't silently change the build environment. Renovate
+    # (github-actions manager, github-runners datasource) bumps this via the
+    # same age-gated PRs as the action SHAs; it can't manage `-latest` itself.
+    runs-on: ubuntu-24.04
     steps:
       # Actions pinned to commit-SHA digests, not mutable tags/branches, to
       # close the supply-chain hole a force-pushed tag/branch would open. The
