@@ -78,10 +78,11 @@ force.
 ## 5. Keep the upgrade PR minimal
 
 When research surfaces that the new version lets us delete a workaround, adopt a
-simpler API, or drop a deprecated call — **don't do it in the upgrade PR.** Open
-a separate follow-up issue for each opportunity and keep the bump PR to the
-minimum that makes it mergeable. This keeps the upgrade reviewable and decouples
-"upgrade the dependency" from "adopt its new features."
+simpler API, drop a deprecated call, or use a new capability worth adopting —
+**don't do it in the upgrade PR.** Open a separate follow-up issue for each
+opportunity and keep the bump PR to the minimum that makes it mergeable. This
+keeps the upgrade reviewable and decouples "upgrade the dependency" from "adopt
+its new features."
 
 Dedup follow-up issues by **package name, not PR number** — Renovate closes and
 reopens PRs for the same update under new numbers, so a PR-number key
