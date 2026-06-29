@@ -297,3 +297,64 @@ test('new-topics narrow remove drops only the new-topics entry', () => {
   expect(set.size()).toBe(1)
   expect(set.matches(buildReactionAdded('home'), noBot)).toBe(true)
 })
+
+const sortIntents = (intents: ReadonlyArray<SubscribeIntent>): ReadonlyArray<SubscribeIntent> =>
+  [...intents].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+
+test('intents() on an empty set returns no intents', () => {
+  const set = createNarrowSet()
+  expect(set.intents()).toEqual([])
+})
+
+test('intents() returns every added intent, reconstructing the new-topics-in-channel kind', () => {
+  const set = createNarrowSet()
+  const added = [
+    mentionsIntent(),
+    channelIntent('home'),
+    threadIntent('home', 'payments'),
+    newTopicsIntent('general'),
+  ]
+  for (const intent of added) set.add(intent)
+  expect(sortIntents(set.intents())).toEqual(sortIntents(added))
+})
+
+test('intents() excludes a removed intent', () => {
+  const set = createNarrowSet()
+  set.add(channelIntent('home'))
+  set.add(mentionsIntent())
+  set.remove(channelIntent('home'))
+  expect(set.intents()).toEqual([mentionsIntent()])
+})
+
+test('intents() does not leak the seen-topics ledger after a new-topics match', () => {
+  const set = createNarrowSet()
+  set.add(newTopicsIntent('home'))
+  expect(set.matches(buildMessagePosted('home', 'fresh-topic'), noBot)).toBe(true)
+  expect(set.intents()).toEqual([newTopicsIntent('home')])
+})
+
+test('replace() sets the intents on an empty set', () => {
+  const set = createNarrowSet()
+  set.replace([channelIntent('home'), mentionsIntent()])
+  expect(sortIntents(set.intents())).toEqual(sortIntents([channelIntent('home'), mentionsIntent()]))
+  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(true)
+})
+
+test('replace() clears the prior intents — the old set no longer matches', () => {
+  const set = createNarrowSet()
+  set.add(channelIntent('home'))
+  set.replace([channelIntent('work')])
+  expect(set.intents()).toEqual([channelIntent('work')])
+  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(false)
+  expect(set.matches(buildMessagePosted('work', undefined), noBot)).toBe(true)
+})
+
+test('replace() with an empty array drops every narrow — matches nothing', () => {
+  const set = createNarrowSet()
+  set.add(channelIntent('home'))
+  set.add(mentionsIntent())
+  set.replace([])
+  expect(set.intents()).toEqual([])
+  expect(set.size()).toBe(0)
+  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(false)
+})

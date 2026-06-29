@@ -160,6 +160,7 @@ export interface EphemeralIdentityCacheDeps {
   readonly onAcquire?: (
     acquired: AcquiredIdentity,
     project: ProjectSlug | undefined,
+    sessionId: SessionId,
   ) => Effect.Effect<void>
 }
 
@@ -205,13 +206,15 @@ export const createEphemeralIdentityCache = (
       })
 
     const wrapWithOnAcquire =
-      (project: ProjectSlug | undefined) =>
+      (project: ProjectSlug | undefined, sessionId: SessionId) =>
       (n: BotName): Effect.Effect<AcquiredIdentity, UnknownIdentity | IdentityError> =>
         deps
           .acquire(n)
           .pipe(
             Effect.tap((acquired) =>
-              deps.onAcquire !== undefined ? deps.onAcquire(acquired, project) : Effect.void,
+              deps.onAcquire !== undefined
+                ? deps.onAcquire(acquired, project, sessionId)
+                : Effect.void,
             ),
           )
 
@@ -223,11 +226,12 @@ export const createEphemeralIdentityCache = (
       (
         priorEnsure: EnsureBound<UnknownIdentity | IdentityError>,
         project: ProjectSlug | undefined,
+        sessionId: SessionId,
       ) =>
       (n: BotName): Effect.Effect<AcquiredIdentity, UnknownIdentity | IdentityError> =>
         priorEnsure.current() !== undefined
-          ? deps.release().pipe(Effect.zipRight(wrapWithOnAcquire(project)(n)))
-          : wrapWithOnAcquire(project)(n)
+          ? deps.release().pipe(Effect.zipRight(wrapWithOnAcquire(project, sessionId)(n)))
+          : wrapWithOnAcquire(project, sessionId)(n)
 
     const mintSlot = (
       sessionId: SessionId,
@@ -238,8 +242,8 @@ export const createEphemeralIdentityCache = (
       const name = deriveBotName(sessionId, project)
       const acquire =
         prior !== undefined
-          ? acquireForTransition(prior.ensureBound, project)
-          : wrapWithOnAcquire(project)
+          ? acquireForTransition(prior.ensureBound, project, sessionId)
+          : wrapWithOnAcquire(project, sessionId)
       return createEnsureBound({ acquire, name }).pipe(
         Effect.map(
           (ensureBound) => [ensureBound, { sessionId, ensureBound, lastUsedMs: nowMs }] as const,

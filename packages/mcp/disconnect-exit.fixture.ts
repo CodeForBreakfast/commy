@@ -26,8 +26,14 @@ import { substrateAdapterLayer } from './bootstrap.ts'
 import { CursorStoreTag } from './cursor-store.ts'
 import { completeAsSubstrate } from './memory-substrate.ts'
 import { clientDisconnect, makeProgram } from './server.ts'
+import { SubscriptionStoreTag } from './subscription-store.ts'
 
 const inMemoryCursorStore = {
+  read: () => Effect.succeed(Option.none()),
+  write: () => Effect.void,
+}
+
+const inMemorySubscriptionStore = {
   read: () => Effect.succeed(Option.none()),
   write: () => Effect.void,
 }
@@ -70,6 +76,7 @@ NodeRuntime.runMain(
         Layer.mergeAll(
           substrateAdapterLayer(substrate),
           Layer.succeed(CursorStoreTag, inMemoryCursorStore),
+          Layer.succeed(SubscriptionStoreTag, inMemorySubscriptionStore),
           stderrLoggerLayer,
         ),
         Layer.mergeAll(

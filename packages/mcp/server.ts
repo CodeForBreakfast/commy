@@ -15,12 +15,14 @@ import {
   Data,
   Duration,
   Effect,
+  HashSet,
   Layer,
   Option,
   Predicate,
   Schedule,
+  SynchronizedRef,
 } from 'effect'
-import type { BotName, GitContext, ProjectSlug } from './bootstrap.ts'
+import type { BotName, GitContext, ProjectSlug, SessionId } from './bootstrap.ts'
 import {
   readGitContext as defaultReadGitContext,
   deriveProject,
@@ -44,6 +46,8 @@ import { createNarrowSet } from './narrow-set.ts'
 import { raceReleaseAgainstTimeout } from './release-shutdown.ts'
 import type { SubscribeIntent, SubscribeTokenError } from './subscribe-parser.ts'
 import { intentToTarget } from './subscribe-parser.ts'
+import { persistSubscriptions, restoreOrSeedSubscriptions } from './subscription-restore.ts'
+import { FileSubscriptionStoreLive, SubscriptionStoreTag } from './subscription-store.ts'
 import { registerTools } from './tools.ts'
 
 /**
@@ -164,14 +168,14 @@ export const forkIdleSweep = (
 const createType2DefaultsOnAcquire = (
   narrowSet: NarrowSet,
   inbox: MessageInbox,
-): ((identity: AcquiredIdentity, project: ProjectSlug | undefined) => Effect.Effect<void>) => {
+): ((project: ProjectSlug | undefined) => Effect.Effect<void>) => {
   const registerIntent = (intent: SubscribeIntent): Effect.Effect<void, InboxError> =>
     Effect.sync(() => narrowSet.add(intent)).pipe(
       Effect.zipRight(
         intentToTarget(intent).pipe(Effect.flatMap((target) => inbox.subscribe(target))),
       ),
     )
-  return (_identity, project) =>
+  return (project) =>
     registerIntent({ kind: 'mentions' }).pipe(
       Effect.zipRight(
         project !== undefined
@@ -267,6 +271,7 @@ const buildIdentityCache = (
   ephemeralOnAcquire?: (
     acquired: AcquiredIdentity,
     project: ProjectSlug | undefined,
+    sessionId: SessionId,
   ) => Effect.Effect<void>,
 ): Effect.Effect<IdentityCache> => {
   if (botName !== undefined) {
@@ -338,13 +343,18 @@ export const makeProgram = (
 ): Effect.Effect<
   void,
   BootError | EnvConfigError | SubscribeTokenError | InboxError,
-  SubstrateAdapter | CursorStoreTag | FileSystem.FileSystem | CommandExecutor.CommandExecutor
+  | SubstrateAdapter
+  | CursorStoreTag
+  | SubscriptionStoreTag
+  | FileSystem.FileSystem
+  | CommandExecutor.CommandExecutor
 > =>
   Effect.scoped(
     Effect.gen(function* () {
       const parsed = yield* parseEnv
       const adapter = yield* SubstrateAdapter
       const cursorStore = yield* CursorStoreTag
+      const subscriptionStore = yield* SubscriptionStoreTag
       // The download/upload tool builders execute against this filesystem,
       // captured once from context (NodeContext.layer, provided in the
       // app layer) instead of self-providing a platform layer per call
@@ -403,23 +413,80 @@ export const makeProgram = (
       const mcp = buildMcpServer()
       const notifier = params.notifier ?? channelNotifier(mcp)
 
-      // Ephemeral-mode post-acquire hook (comms-iyf + comms-ae4): register
-      // Type-2 default subs and replay missed @-mentions on every fresh
-      // slot. The cache runs this via ensure-bound's own runtime edge, so
-      // the logger layer is provided here on the composed Effect — keeps
-      // onAcquire diagnostics off the MCP STDOUT channel. Undefined in
-      // persistent mode (which uses its own post-acquire catch-up below).
+      // Ephemeral-mode Type-2 default subs (comms-iyf). Undefined in
+      // persistent mode (which registers Type-1 defaults at boot instead).
       const registerType2Defaults =
         parsed.botName === undefined
           ? createType2DefaultsOnAcquire(narrowSet, adapter.inbox)
           : undefined
+
+      // Subscription restore/persist (comms-4pgy). Ephemeral mode only: a
+      // persistent COMMY_BOT_NAME pane gets a new session_id every launch, so
+      // its store is always absent → the fresh path → COMMY_SUBSCRIBE-only,
+      // exactly as before. `restoredSessions` memoises the once-per-session_id
+      // restore decision so the store's presence is a true resume signal and
+      // never a file this same process just wrote via `subscribe`.
+      const restoredSessions = yield* SynchronizedRef.make(HashSet.empty<SessionId>())
+      const seedDefaults = (project: ProjectSlug | undefined): Effect.Effect<void> =>
+        registerType2Defaults !== undefined ? registerType2Defaults(project) : Effect.void
+      const ensureSessionSubscriptions = (
+        sessionId: SessionId,
+        project: ProjectSlug | undefined,
+      ): Effect.Effect<void> =>
+        parsed.botName !== undefined
+          ? Effect.void
+          : SynchronizedRef.updateEffect(restoredSessions, (seen) =>
+              HashSet.has(seen, sessionId)
+                ? Effect.succeed(seen)
+                : restoreOrSeedSubscriptions(
+                    {
+                      subscriptionStore,
+                      narrowSet,
+                      inbox: adapter.inbox,
+                      registerDefaults: seedDefaults,
+                    },
+                    sessionId,
+                    project,
+                  ).pipe(
+                    // A corrupt or unreadable store must not strand the session:
+                    // log and fall back to the fresh defaults rather than refuse.
+                    Effect.catchAll((err) =>
+                      Effect.logError(
+                        `commy plugin: subscription restore failed for ${sessionId}: ${Predicate.isError(err) ? err.message : String(err)}`,
+                      ).pipe(Effect.zipRight(seedDefaults(project))),
+                    ),
+                    Effect.provide(loggerLayer),
+                    Effect.as(HashSet.add(seen, sessionId)),
+                  ),
+            )
+      // Persisting is best-effort: a disk hiccup logs but never fails the
+      // user's subscribe/unsubscribe call.
+      const persistSessionSubscriptions = (sessionId: SessionId): Effect.Effect<void> =>
+        parsed.botName !== undefined
+          ? Effect.void
+          : persistSubscriptions(subscriptionStore, narrowSet, sessionId).pipe(
+              Effect.catchAll((err) =>
+                Effect.logError(
+                  `commy plugin: subscription persist failed for ${sessionId}: ${Predicate.isError(err) ? err.message : String(err)}`,
+                ),
+              ),
+              Effect.provide(loggerLayer),
+            )
+
+      // Ephemeral-mode post-acquire hook (comms-ae4 + comms-4pgy): restore (or
+      // seed) the narrow set on the first action of this session_id, then
+      // replay missed @-mentions. The cache runs this via ensure-bound's own
+      // runtime edge; the composed Effect self-provides the logger so
+      // diagnostics stay off the MCP STDOUT channel. Undefined in persistent
+      // mode (which uses its own post-acquire catch-up below).
       const ephemeralOnAcquire =
         parsed.botName === undefined
-          ? (acquired: AcquiredIdentity, project: ProjectSlug | undefined): Effect.Effect<void> =>
-              (registerType2Defaults !== undefined
-                ? registerType2Defaults(acquired, project)
-                : Effect.void
-              ).pipe(
+          ? (
+              acquired: AcquiredIdentity,
+              project: ProjectSlug | undefined,
+              sessionId: SessionId,
+            ): Effect.Effect<void> =>
+              ensureSessionSubscriptions(sessionId, project).pipe(
                 Effect.zipRight(
                   catchUpMentions({
                     cursorStore,
@@ -495,6 +562,8 @@ export const makeProgram = (
         identityCache,
         narrowSet,
         projectForCwd,
+        ensureSessionSubscriptions,
+        persistSessionSubscriptions,
         downloadFile: (urlPath) =>
           Effect.gen(function* () {
             const result = yield* adapter.downloadFile(urlPath)
@@ -596,20 +665,25 @@ export const makeProgram = (
 
 /**
  * Production app Layer (comms-spj3.39): the substrate adapter (Zulip,
- * `close()` as a finalizer), the file-backed cursor store, and the
- * stderr logger. Reads `HttpClient` + `FileSystem` from context — the
- * platform layers are fed in once at the edge (comms-5db) so the Zulip
- * adapter and cursor store inject the held services at construction
- * rather than self-providing a layer per call. The ConfigProvider is fed
- * in the same way — built first, so `ZulipAdapterLive`'s own `parseEnv`
- * reads it during the layer build and the program fiber inherits the
- * same source.
+ * `close()` as a finalizer), the file-backed cursor store, the file-backed
+ * subscription store, and the stderr logger. Reads `HttpClient` +
+ * `FileSystem` from context — the platform layers are fed in once at the
+ * edge (comms-5db) so the Zulip adapter and stores inject the held services
+ * at construction rather than self-providing a layer per call. The
+ * ConfigProvider is fed in the same way — built first, so
+ * `ZulipAdapterLive`'s own `parseEnv` reads it during the layer build and
+ * the program fiber inherits the same source.
  */
 const AppLayer: Layer.Layer<
-  SubstrateAdapter | CursorStoreTag,
+  SubstrateAdapter | CursorStoreTag | SubscriptionStoreTag,
   EnvConfigError,
   HttpClient.HttpClient | FileSystem.FileSystem
-> = Layer.mergeAll(ZulipAdapterLive, FileCursorStoreLive, stderrLoggerLayer)
+> = Layer.mergeAll(
+  ZulipAdapterLive,
+  FileCursorStoreLive,
+  FileSubscriptionStoreLive,
+  stderrLoggerLayer,
+)
 
 /**
  * Production dependency bundle: the config source (read from
@@ -643,6 +717,7 @@ export const PlatformLive: Layer.Layer<
 export const MainLive: Layer.Layer<
   | SubstrateAdapter
   | CursorStoreTag
+  | SubscriptionStoreTag
   | HttpClient.HttpClient
   | FileSystem.FileSystem
   | CommandExecutor.CommandExecutor,

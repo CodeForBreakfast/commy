@@ -38,6 +38,7 @@ import {
   TestClock,
   TestContext,
 } from 'effect'
+import type { SessionId } from './bootstrap.ts'
 import { EnvConfigError, NotInRepo, parseEnv, substrateAdapterLayer } from './bootstrap.ts'
 import type { CursorStore } from './cursor-store.ts'
 import { CursorStoreTag } from './cursor-store.ts'
@@ -50,6 +51,9 @@ import type { IdentityCache } from './identity-cache.ts'
 // directly.
 import { completeAsSubstrate, type ZulipAdapter } from './memory-substrate.ts'
 import { clientDisconnect, forkIdleSweep, makeProgram, type ProgramParams } from './server.ts'
+import type { SubscribeIntent } from './subscribe-parser.ts'
+import type { SubscriptionStore } from './subscription-store.ts'
+import { SubscriptionStoreTag } from './subscription-store.ts'
 import { testPlatformLayer } from './test-platform.ts'
 
 /**
@@ -65,6 +69,21 @@ const inMemoryCursorStore = (): CursorStore => {
         const prior = store.get(id as string)
         if (prior !== undefined && prior >= ts) return
         store.set(id as string, ts)
+      }),
+  }
+}
+
+/**
+ * In-memory subscription store for the boot tests — keeps the runner's
+ * homedir untouched, the same reason the cursor store is faked here.
+ */
+const inMemorySubscriptionStore = (): SubscriptionStore => {
+  const store = new Map<string, ReadonlyArray<SubscribeIntent>>()
+  return {
+    read: (id: SessionId) => Effect.sync(() => Option.fromNullable(store.get(id as string))),
+    write: (id: SessionId, intents: ReadonlyArray<SubscribeIntent>) =>
+      Effect.sync(() => {
+        store.set(id as string, intents)
       }),
   }
 }
@@ -89,6 +108,7 @@ const runProgram = (
           Layer.mergeAll(
             substrateAdapterLayer(parseEnv.pipe(Effect.as(adapter))),
             Layer.succeed(CursorStoreTag, inMemoryCursorStore()),
+            Layer.succeed(SubscriptionStoreTag, inMemorySubscriptionStore()),
             loggerLayer,
           ),
           testPlatformLayer(env),

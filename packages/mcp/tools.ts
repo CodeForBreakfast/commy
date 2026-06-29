@@ -141,6 +141,23 @@ export interface RegisterToolsDeps {
    * omitted (tests that don't care about per-session derivation).
    */
   readonly projectForCwd?: (cwd: string | undefined) => Effect.Effect<ProjectSlug | undefined>
+  /**
+   * Restore (or seed) this session's narrow set on its first `subscribe`/
+   * `unsubscribe` — memoised once per session_id in `server.ts`, so it runs
+   * before any persistence write and the store's presence stays a true resume
+   * signal (comms-4pgy). Omitted in tests that don't exercise persistence;
+   * when absent, subscribe/unsubscribe behave exactly as before.
+   */
+  readonly ensureSessionSubscriptions?: (
+    sessionId: SessionId,
+    project: ProjectSlug | undefined,
+  ) => Effect.Effect<void>
+  /**
+   * Persist the current narrow set under the session_id after a
+   * `subscribe`/`unsubscribe` mutation (comms-4pgy). Best-effort — never
+   * fails the tool call. Omitted in tests that don't exercise persistence.
+   */
+  readonly persistSessionSubscriptions?: (sessionId: SessionId) => Effect.Effect<void>
   readonly downloadFile?: (
     urlPath: UserUploadPath,
   ) => Effect.Effect<
@@ -712,6 +729,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             description:
               'Subscribe-target token: "channel:<name>", "thread:<channel>/<thread>", "new-topics:<channel>", or "mentions"',
           },
+          session_id: sessionIdField,
+          cwd: cwdField,
         },
         required: ['target'],
         additionalProperties: false,
@@ -721,6 +740,13 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           Effect.gen(function* () {
             const { target: raw } = yield* Schema.decodeUnknown(SubscribeArgs)(args)
             const intent = yield* parseSubscribeTarget(raw)
+            const sessionId = readSessionId(args)
+            // Restore (or seed) this session's set before the first mutation, so
+            // the snapshot persisted below captures the full live set and the
+            // store's presence stays a true resume signal (comms-4pgy).
+            if (sessionId !== undefined && deps.ensureSessionSubscriptions !== undefined) {
+              yield* deps.ensureSessionSubscriptions(sessionId, yield* projectForArgs(args))
+            }
             // Two sinks (see bootstrap.subscribeFromEnv): the consumer-side
             // narrow tells the event pump to tee matching events through;
             // the substrate-side call subscribes the minter to streams the
@@ -728,6 +754,9 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             narrowSet.add(intent)
             const target = yield* intentToTarget(intent)
             yield* adapter.inbox.subscribe(target)
+            if (sessionId !== undefined && deps.persistSessionSubscriptions !== undefined) {
+              yield* deps.persistSessionSubscriptions(sessionId)
+            }
           }),
         )
         return {}
@@ -744,6 +773,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             description:
               'Subscribe-target token: "channel:<name>", "thread:<channel>/<thread>", "new-topics:<channel>", or "mentions"',
           },
+          session_id: sessionIdField,
+          cwd: cwdField,
         },
         required: ['target'],
         additionalProperties: false,
@@ -753,9 +784,16 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           Effect.gen(function* () {
             const { target: raw } = yield* Schema.decodeUnknown(SubscribeArgs)(args)
             const intent = yield* parseSubscribeTarget(raw)
+            const sessionId = readSessionId(args)
+            if (sessionId !== undefined && deps.ensureSessionSubscriptions !== undefined) {
+              yield* deps.ensureSessionSubscriptions(sessionId, yield* projectForArgs(args))
+            }
             narrowSet.remove(intent)
             const target = yield* intentToTarget(intent)
             yield* adapter.inbox.unsubscribe(target)
+            if (sessionId !== undefined && deps.persistSessionSubscriptions !== undefined) {
+              yield* deps.persistSessionSubscriptions(sessionId)
+            }
           }),
         )
         return {}

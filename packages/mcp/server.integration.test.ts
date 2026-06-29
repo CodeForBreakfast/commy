@@ -31,6 +31,7 @@ import { memoryAdapter } from '@commy/memory/adapter'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { Deferred, Effect, FiberId, Layer, Option, Stream } from 'effect'
+import type { SessionId } from './bootstrap.ts'
 import { parseEnv, substrateAdapterLayer } from './bootstrap.ts'
 import type { CursorStore } from './cursor-store.ts'
 import { CursorStoreTag } from './cursor-store.ts'
@@ -40,6 +41,9 @@ import { CursorStoreTag } from './cursor-store.ts'
 // `SubstrateAdapter` port; no Zulip type or brand is named directly here.
 import { completeAsSubstrate } from './memory-substrate.ts'
 import { makeProgram } from './server.ts'
+import type { SubscribeIntent } from './subscribe-parser.ts'
+import type { SubscriptionStore } from './subscription-store.ts'
+import { SubscriptionStoreTag } from './subscription-store.ts'
 import { testPlatformLayer } from './test-platform.ts'
 
 const createMemoryCursorStore = (): CursorStore => {
@@ -51,6 +55,17 @@ const createMemoryCursorStore = (): CursorStore => {
         const prior = store.get(id as string)
         if (prior !== undefined && prior >= ts) return
         store.set(id as string, ts)
+      }),
+  }
+}
+
+const createMemorySubscriptionStore = (): SubscriptionStore => {
+  const store = new Map<string, ReadonlyArray<SubscribeIntent>>()
+  return {
+    read: (id: SessionId) => Effect.sync(() => Option.fromNullable(store.get(id as string))),
+    write: (id: SessionId, intents: ReadonlyArray<SubscribeIntent>) =>
+      Effect.sync(() => {
+        store.set(id as string, intents)
       }),
   }
 }
@@ -111,6 +126,8 @@ interface AdapterOverrides {
   readonly subscribe?: string
   /** Override the cursor store (default: in-memory). */
   readonly cursorStore?: CursorStore
+  /** Override the subscription store (default: in-memory). */
+  readonly subscriptionStore?: SubscriptionStore
   /**
    * Boot in ephemeral mode (omits COMMY_BOT_NAME). First
    * attribution-producing tool call must include a `session_id`
@@ -325,6 +342,7 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
   const loggerLayer =
     overrides.capturedLogs !== undefined ? captureLogger(overrides.capturedLogs) : stderrLoggerLayer
   const cursorStore = overrides.cursorStore ?? createMemoryCursorStore()
+  const subscriptionStore = overrides.subscriptionStore ?? createMemorySubscriptionStore()
   const runExit = Effect.runPromiseExit(
     makeProgram({
       transport: serverTransport,
@@ -335,6 +353,7 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
           Layer.mergeAll(
             substrateAdapterLayer(parseEnv.pipe(Effect.as(adapter))),
             Layer.succeed(CursorStoreTag, cursorStore),
+            Layer.succeed(SubscriptionStoreTag, subscriptionStore),
             loggerLayer,
           ),
           testPlatformLayer(env),
@@ -474,9 +493,10 @@ test('no allowlist code path exists in server.ts source', () => {
 test('static audit: no plugin source imports or calls fs-write APIs', () => {
   const pluginDir = import.meta.dir
   // Sanctioned writers:
-  //   cursor-store.ts — per-identity mentions cursor under <XDG_STATE_HOME> (comms-rxo)
-  //   server.ts        — download_file temp files under os.tmpdir() (comms-xos)
-  const writeAllowlist = new Set(['cursor-store.ts', 'server.ts'])
+  //   cursor-store.ts        — per-identity mentions cursor under <XDG_STATE_HOME> (comms-rxo)
+  //   subscription-store.ts  — per-session_id narrow-set snapshot under <XDG_STATE_HOME> (comms-4pgy)
+  //   server.ts              — download_file temp files under os.tmpdir() (comms-xos)
+  const writeAllowlist = new Set(['cursor-store.ts', 'subscription-store.ts', 'server.ts'])
   const sources = readdirSync(pluginDir).filter(
     (n) =>
       n.endsWith('.ts') &&
@@ -1654,6 +1674,77 @@ test('ephemeral mode + project: distinct session_ids each register their own def
       return acc
     }, {})
     expect(counts).toEqual({ mentions: 2, 'thread:brewlife/general': 2 })
+  } finally {
+    await h.cleanup()
+  }
+})
+
+// ─── comms-4pgy: subscription persist + restore across ephemeral resume ─────
+
+test('ephemeral subscribe persists the live narrow set (defaults + new sub) under the session_id', async () => {
+  const writes: { sid: string; intents: ReadonlyArray<SubscribeIntent> }[] = []
+  const subscriptionStore: SubscriptionStore = {
+    read: () => Effect.succeed(Option.none()),
+    write: (id, intents) =>
+      Effect.sync(() => {
+        writes.push({ sid: id as string, intents })
+      }),
+  }
+  const sid = '5b5c81b5-0000-4000-8000-0000000000a1'
+  const h = await buildHarness({
+    ephemeral: true,
+    seedChannels: ['home'],
+    subscriptionStore,
+  })
+  try {
+    await callTool(h.client, 'subscribe', { target: 'channel:home', session_id: sid })
+    await waitFor(() => writes.length > 0, 200)
+    const last = writes.at(-1)
+    expect(last?.sid).toBe(sid)
+    // The snapshot is the full live set: the fresh-path Type-2 default
+    // (mentions, no project) seeded before the write, plus the channel just
+    // subscribed. So a later resume restores both.
+    expect(new Set((last?.intents ?? []).map((i) => JSON.stringify(i)))).toEqual(
+      new Set([
+        JSON.stringify({ kind: 'mentions' }),
+        JSON.stringify({ kind: 'channel', channelName: decodeChannelNameSync('home') }),
+      ]),
+    )
+  } finally {
+    await h.cleanup()
+  }
+})
+
+test('ephemeral resume restores the persisted narrow set and does NOT re-apply Type-2 defaults', async () => {
+  // A prior session persisted a single channel and had dropped the mentions
+  // default. Resume must honour that exactly — restore channel:home, and never
+  // re-add mentions (a dropped default stays dropped).
+  const persisted: ReadonlyArray<SubscribeIntent> = [
+    { kind: 'channel', channelName: decodeChannelNameSync('home') },
+  ]
+  const subscriptionStore: SubscriptionStore = {
+    read: () => Effect.succeed(Option.some(persisted)),
+    write: () => Effect.void,
+  }
+  const cap = captureSubscribes()
+  const h = await buildHarness({
+    ephemeral: true,
+    env: { COMMY_PROJECT: 'brewlife' },
+    seedChannels: ['brewlife', 'home'],
+    subscriptionStore,
+    inboxOverrides: cap.inboxOverrides,
+  })
+  try {
+    // First acquiring call → onAcquire → restore. Even with a project set
+    // (whose fresh path would seed mentions + thread:brewlife/general), the
+    // resume path restores the persisted set verbatim and skips the defaults.
+    await callTool(h.client, 'post', {
+      channel_name: 'home',
+      body: 'resumed',
+      session_id: '5e54e5e5-0000-4000-8000-0000000000a2',
+    })
+    await waitFor(() => cap.tokens.length > 0, 200)
+    expect(new Set(cap.tokens)).toEqual(new Set(['channel:home']))
   } finally {
     await h.cleanup()
   }
