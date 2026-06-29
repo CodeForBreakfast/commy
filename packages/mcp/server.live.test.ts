@@ -47,6 +47,7 @@ import {
 import { parseEnv, substrateAdapterLayer } from './bootstrap.ts'
 import { FileCursorStoreLive } from './cursor-store.ts'
 import { makeProgram } from './server.ts'
+import { FileSubscriptionStoreLive } from './subscription-store.ts'
 import { testPlatformLayer } from './test-platform.ts'
 
 const httpClient = Effect.runSync(HttpClient.HttpClient.pipe(Effect.provide(FetchHttpClient.layer)))
@@ -195,6 +196,7 @@ const buildHarness = (
           Layer.mergeAll(
             substrateAdapterLayer(parseEnv.pipe(Effect.as(wrappedAdapter))),
             FileCursorStoreLive,
+            FileSubscriptionStoreLive,
             stderrLoggerLayer,
           ),
           testPlatformLayer(mainEnv),

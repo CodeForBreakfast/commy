@@ -5,7 +5,7 @@ import type {
   MessageRef,
   ThreadName,
 } from '@commy/core/ports'
-import { Data, HashSet, Match, Option } from 'effect'
+import { Array as Arr, Data, HashSet, Match, Option } from 'effect'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 
 /**
@@ -33,6 +33,19 @@ export interface NarrowSet {
   remove(intent: SubscribeIntent): void
   matches(event: InboundEvent, botIdentityId: IdentityId | undefined): boolean
   size(): number
+  /**
+   * Snapshot the current subscription intents (the membership set, not the
+   * `seenTopics` first-message ledger). The persistence layer (comms-4pgy)
+   * captures this on every mutation so a resumed session restores the exact
+   * set it had.
+   */
+  intents(): ReadonlyArray<SubscribeIntent>
+  /**
+   * Replace the entire membership set with `intents`, dropping whatever was
+   * there before. Used once on resume (comms-4pgy) to restore the persisted
+   * set — including prior unsubscribes — over whatever boot-time seeding ran.
+   */
+  replace(intents: ReadonlyArray<SubscribeIntent>): void
 }
 
 /**
@@ -66,6 +79,28 @@ const intentKey = (intent: SubscribeIntent): IntentKey =>
       channel: (i): IntentKey => channelKeyOf(i.channelName),
       thread: (i): IntentKey => threadKeyOf(i.channelName, i.threadName),
       'new-topics-in-channel': (i): IntentKey => newTopicsKeyOf(i.channelName),
+    }),
+  )
+
+/**
+ * Reverse of {@link intentKey}: reconstruct the `SubscribeIntent` a stored key
+ * came from. The only non-identity mapping is `new-topics` → the intent's
+ * `new-topics-in-channel` discriminator (the key normalises the longer name).
+ */
+const keyToIntent = (key: IntentKey): SubscribeIntent =>
+  Match.value(key).pipe(
+    Match.discriminatorsExhaustive('kind')({
+      mentions: (): SubscribeIntent => ({ kind: 'mentions' }),
+      channel: (k): SubscribeIntent => ({ kind: 'channel', channelName: k.channelName }),
+      thread: (k): SubscribeIntent => ({
+        kind: 'thread',
+        channelName: k.channelName,
+        threadName: k.threadName,
+      }),
+      'new-topics': (k): SubscribeIntent => ({
+        kind: 'new-topics-in-channel',
+        channelName: k.channelName,
+      }),
     }),
   )
 
@@ -140,6 +175,10 @@ export const createNarrowSet = (): NarrowSet => {
       intents = HashSet.remove(intents, intentKey(intent))
     },
     size: () => HashSet.size(intents),
+    intents: () => Arr.fromIterable(intents).map(keyToIntent),
+    replace: (next) => {
+      intents = HashSet.fromIterable(next.map(intentKey))
+    },
     matches: (event, botIdentityId): boolean =>
       Match.value(event).pipe(
         Match.discriminatorsExhaustive('kind')({
