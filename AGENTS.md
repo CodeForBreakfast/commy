@@ -51,6 +51,11 @@ Work on a branch and open a pull request against `main`. CI runs the same
 `bun run check` gate inside the nix CI shell; a green gate is required to
 merge. File bugs and feature requests as GitHub issues.
 
+Cutting a release is its own flow — see [docs/releasing.md](docs/releasing.md):
+bump the seven lockstep version sites, write `RELEASE-NOTES/<version>.md`, open
+the bump PR. The maintainer's merge is the single trigger; CI tags, publishes to
+npm, and cuts the GitHub Release.
+
 Maintainers additionally track internal work in a
 [bd (beads)](https://github.com/gastownhall/beads) tracker that is not part of
 this repository — external contributors don't need it and should use GitHub

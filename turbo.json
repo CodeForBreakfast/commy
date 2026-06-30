@@ -1,5 +1,6 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
+  "globalPassThroughEnv": ["FORCE", "GITHUB_OUTPUT"],
   "tasks": {
     "//#build": {
       "inputs": [
