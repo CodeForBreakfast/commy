@@ -1,61 +1,96 @@
 name: Release
 
-# Fires on a pushed `commy-vX.Y.Z` tag and does two things in order:
+# B2 release automation. Graeme's merge of a release-bump commit to `main` is
+# the SINGLE trigger; CI does everything outward-facing from there. No agent
+# ever pushes a tag or publishes anything — see docs/releasing.md for the
+# worker flow that produces the bump PR this workflow consumes.
 #
-#   1. verify-tag — re-check that the tag matches the plugin manifest version,
-#      so the tag can't drift from the six-site lockstep group
-#      (clients/claude-code/manifests.test.ts) that ci.yml already enforces on
-#      the tagged commit.
-#   2. publish-npm — build the `@codeforbreakfast/commy-mcp` node bundle and
-#      publish it to npm via OIDC trusted publishing (no NPM_TOKEN). Gated on
-#      verify-tag, so a mismatched tag never reaches the registry.
+# In one run, when a release commit lands on `main`:
+#   1. detect      — read the canonical version (plugin.json) and decide whether
+#      this push is a release: a checked-in RELEASE-NOTES/<version>.md must be
+#      present (the bump PR's opt-in) AND the commy-v<version> tag must not exist
+#      yet (idempotency — every later push to main re-runs detect, and the tag is
+#      what stops a re-publish). Logic lives in scripts/release-detection.ts and
+#      is unit-tested (scripts/release-detection.test.ts).
+#   2. verify parity — re-run the seven-site lockstep test so the artifact, tag,
+#      and Release can't ship a partially-bumped version.
+#   3. tag         — create+push the commy-v<version> tag as the record.
+#   4. publish-npm — build and publish @codeforbreakfast/commy-mcp to npm via
+#      OIDC trusted publishing (no NPM_TOKEN).
+#   5. release     — cut the GitHub Release from the checked-in notes file.
+#
+# TWO LOAD-BEARING CONSTRAINTS:
+#   * npm's Trusted Publisher (OIDC) is pinned to THIS workflow's filename
+#     (`release.yml`). The publish step must stay in this file — renaming or
+#     moving it makes npm reject the OIDC publish (filename mismatch), which
+#     needs a Graeme-side npm-config change to fix.
+#   * A tag pushed by the default GITHUB_TOKEN does NOT trigger another
+#     `on: push: tags` workflow. So this workflow triggers DIRECTLY on the
+#     release-commit-to-main (guarded by `detect`); it never relies on the tag
+#     it pushes to fire a second run. `workflow_dispatch` is the manual fallback
+#     (the live auto-trigger is first exercised on the next real release).
 #
 # Trusted publishing means npm trusts THIS workflow (org/repo/filename), not a
 # stored token: each run mints a short-lived signed OIDC token the registry
 # verifies against the package's trusted-publisher config. Because the repo and
 # package are public, npm attaches a provenance attestation automatically — no
-# `--provenance` flag, no secret to rotate or leak. Configure the publisher
-# once at npmjs.com → package settings → Trusted Publisher (GitHub Actions,
-# org `CodeForBreakfast`, repo `commy`, workflow `release.yml`).
-#
-# The curated GitHub Release is still cut LOCALLY by the `release-plugin`
-# maintainer skill once this workflow is green — this workflow does not author a
-# Release (auto-generated commit-log notes are exactly what the curated Release
-# replaces).
+# `--provenance` flag, no secret to rotate or leak. Configure the publisher once
+# at npmjs.com → package settings → Trusted Publisher (GitHub Actions, org
+# `CodeForBreakfast`, repo `commy`, workflow `release.yml`).
 
 on:
   push:
-    tags:
-      - 'commy-v*'
+    branches: [main]
+    # Cheap pre-filter: a version bump always edits the canonical version site,
+    # so only bump pushes start the workflow at all. `detect` is the
+    # authoritative guard; this just keeps ordinary main pushes from spinning a
+    # runner.
+    paths:
+      - 'clients/claude-code/.claude-plugin/plugin.json'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Re-run even if the version is already tagged (recover a release that tagged but failed before publishing). The RELEASE-NOTES file must still be present.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+# Serialise releases: never let two runs race on the tag/publish/Release.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  verify-tag:
+  detect:
     runs-on: ubuntu-24.04
+    outputs:
+      release: ${{ steps.detect.outputs.release }}
+      version: ${{ steps.detect.outputs.version }}
+      tag: ${{ steps.detect.outputs.tag }}
     steps:
       # SHA-pinned like ci.yml; Renovate (.github/renovate.json5) bumps it.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Verify tag matches plugin manifest
+      - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      # Same module the unit tests cover, run with the flake-pinned bun. It reads
+      # plugin.json, checks the notes file, queries the remote for the tag, and
+      # writes release/version/tag to $GITHUB_OUTPUT.
+      - id: detect
         env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          version="${TAG#commy-v}"
-          manifest="$(jq -r .version clients/claude-code/.claude-plugin/plugin.json)"
-          if [ "$version" != "$manifest" ]; then
-            echo "::error::Tag ${TAG} (version ${version}) does not match plugin.json version ${manifest} — release the bump through the release-plugin skill so the lockstep group and tag agree." >&2
-            exit 1
-          fi
-          echo "Tag ${TAG} matches plugin.json version ${manifest}; the curated GitHub Release is cut locally by the release-plugin skill."
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force }}
+        run: nix develop .#ci --command bun scripts/release-detection.ts
 
-  publish-npm:
-    needs: verify-tag
+  release:
+    needs: detect
+    if: needs.detect.outputs.release == 'true'
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
+      contents: write # push the record tag and cut the GitHub Release
       id-token: write # mint the OIDC token npm verifies for trusted publishing
+    env:
+      TAG: ${{ needs.detect.outputs.tag }}
+      VERSION: ${{ needs.detect.outputs.version }}
     steps:
       # SHA-pinned like ci.yml; Renovate (.github/renovate.json5) bumps them.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -64,6 +99,30 @@ jobs:
         with:
           node-version: '24.18.0'
           registry-url: 'https://registry.npmjs.org'
+
+      # Re-check the seven-site version lockstep on the commit being released,
+      # before any outward act — a partially-bumped commit must never reach the
+      # registry. manifests.test.ts asserts all seven sites agree with
+      # plugin.json (the six hand-edited sites plus the uv.lock self-entry).
+      - name: Verify seven-site version parity
+        run: nix develop .#ci --command bash -euo pipefail -c 'bun install --frozen-lockfile && bun test clients/claude-code/manifests.test.ts'
+
+      # The record tag, created from the released commit. checkout persists the
+      # GITHUB_TOKEN in the remote, so the push authenticates via contents:write.
+      # Idempotent so a forced re-run after a partial failure doesn't fail here.
+      - name: Create and push the record tag
+        run: |
+          set -euo pipefail
+          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q .; then
+            echo "Tag ${TAG} already exists on origin; skipping tag creation (forced re-run)."
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git tag -a "${TAG}" -m "commy ${VERSION}"
+            git push origin "${TAG}"
+            echo "Pushed ${TAG}."
+          fi
+
       # Build the publishable bundle with the flake-pinned bun, the same way
       # ci.yml runs the gate — `bun run pack:npm` stages the node-target,
       # dependency-inlined server.js plus a generated package.json (version read
@@ -80,5 +139,19 @@ jobs:
         run: npm install -g npm@11.17.0
       # No NODE_AUTH_TOKEN: with id-token write + a registered trusted publisher,
       # npm exchanges the OIDC token itself and attaches provenance by default.
+      # This step stays in release.yml (filename unchanged) — the OIDC pin is on
+      # the workflow filename.
       - name: Publish to npm via OIDC trusted publishing
         run: npm publish packages/mcp/dist
+
+      # Cut the curated GitHub Release from the notes the bump PR checked in —
+      # not raw git-log notes. --verify-tag refuses if the record tag is missing.
+      - name: Cut the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${TAG}" \
+            --title "commy ${VERSION}" \
+            --notes-file "RELEASE-NOTES/${VERSION}.md" \
+            --verify-tag
