@@ -79,7 +79,7 @@ import {
   Stream,
 } from 'effect'
 
-// Synthesised, stable permalinks (comms-e7my). The memory substrate has no web
+// Synthesised, stable permalinks. The memory substrate has no web
 // client, so these are deliberately fake `memory://` URIs — their only job is to
 // let the MCP tools rig assert that the permalink field is plumbed on every
 // surface without a live Zulip realm. They mirror the message/channel/topic
@@ -141,7 +141,7 @@ export type MemoryAdapter = AgentComms & {
    */
   readonly seedHuman: (name: string) => Effect.Effect<Identity, ParseResult.ParseError>
   /**
-   * Inject a message AUTHORED BY `peer` (sender ≠ the bound self) into the
+   * Inject a message authored by `peer` (sender ≠ the bound self) into the
    * substrate, running the same fan-out as a real post. The contract's
    * mention-floor tests use this to prove a peer's @-mention of self surfaces
    * on self's `events()` — a shape the single-identity `publisher.post`

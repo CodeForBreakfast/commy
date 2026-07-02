@@ -23,7 +23,7 @@ const BOT_ID: IdentityIdType = decodeIdentityIdSync('bot-42')
 
 const sender: Identity = {
   id: decodeIdentityIdSync('user-7'),
-  name: decodeDisplayNameSync('Graeme'),
+  name: decodeDisplayNameSync('Carol'),
   kind: 'human',
 }
 
@@ -74,12 +74,12 @@ test('formatMessage — content is the message body verbatim', () => {
   expect(out.content).toBe('hello world')
 })
 
-test('formatMessage — body passes @**name** mention markers through verbatim (comms-dtcm.2)', () => {
+test('formatMessage — body passes @**name** mention markers through verbatim', () => {
   // The body is the agent's authoritative "where was I mentioned" anchor: the
   // mention marker sits inline at the mention site. A future body-sanitiser
   // that stripped or transformed @**name** would blind the agent to where it
   // was addressed. This pins the passthrough.
-  const body = 'hey @**cc-nixos-config-352c0d96** and @**Graeme**, can you review?'
+  const body = 'hey @**cc-myproject-352c0d96** and @**Carol**, can you review?'
   const out = formatMessage(
     messagePosted(baseMessage({ body: decodeMessageBodySync(body) })),
     BOT_ID,
@@ -94,7 +94,7 @@ test('formatMessage — meta carries identifying attributes', () => {
   expect(out.meta['thread']).toBe('payments')
   expect(out.meta['message_id']).toBe('msg-1')
   expect(out.meta['sender_id']).toBe('user-7')
-  expect(out.meta['sender_name']).toBe('Graeme')
+  expect(out.meta['sender_name']).toBe('Carol')
   expect(out.meta['sender_kind']).toBe('human')
   expect(out.meta['ts']).toBe('1715450000')
 })
@@ -116,7 +116,7 @@ const messageWithPermalinks = (): Message =>
     },
   })
 
-test('formatMessage — meta carries message, channel and topic permalinks (comms-e7my)', () => {
+test('formatMessage — meta carries message, channel and topic permalinks', () => {
   const out = formatMessage(messagePosted(messageWithPermalinks()), BOT_ID)
   expect(out.meta['permalink']).toBe(
     'https://zulip.example.com/#narrow/channel/9-home/topic/payments/near/1',
@@ -228,7 +228,7 @@ test('formatMessage — mention-received produces the same payload as message-po
   expect(mentioned).toEqual(posted)
 })
 
-test('formatMessage — replayed=true on the event surfaces as meta.replayed="true" (comms-jnn)', () => {
+test('formatMessage — replayed=true on the event surfaces as meta.replayed="true"', () => {
   const replayed: InboundEvent & { kind: 'message-posted' } = {
     kind: 'message-posted',
     message: baseMessage(),
@@ -238,7 +238,7 @@ test('formatMessage — replayed=true on the event surfaces as meta.replayed="tr
   expect(out.meta['replayed']).toBe('true')
 })
 
-test('formatMessage — replayed=true also flagged on mention-received (comms-jnn)', () => {
+test('formatMessage — replayed=true also flagged on mention-received', () => {
   const replayed: InboundEvent & { kind: 'mention-received' } = {
     kind: 'mention-received',
     message: baseMessage({ mentions: [alice] }),
@@ -249,7 +249,7 @@ test('formatMessage — replayed=true also flagged on mention-received (comms-jn
   expect(out.meta['replayed']).toBe('true')
 })
 
-test('formatMessage — live (no replayed flag) omits the replayed meta attribute (comms-jnn)', () => {
+test('formatMessage — live (no replayed flag) omits the replayed meta attribute', () => {
   const out = formatMessage(messagePosted(baseMessage()), BOT_ID)
   expect(out.meta).not.toHaveProperty('replayed')
 })
@@ -298,7 +298,7 @@ test('formatReaction — reaction-added on a channel-root message omits target_t
   expect(out.meta['target_channel_name']).toBe('home')
   expect(out.meta).not.toHaveProperty('target_thread')
   expect(out.meta['by_id']).toBe('user-7')
-  expect(out.meta['by_name']).toBe('Graeme')
+  expect(out.meta['by_name']).toBe('Carol')
   expect(out.meta['by_kind']).toBe('human')
   expect(out.meta['ts']).toBe('1715450010')
 })
@@ -314,7 +314,7 @@ test('formatReaction — reaction-removed renders reaction_action="remove"', () 
   expect(out.meta['reaction_action']).toBe('remove')
 })
 
-test('formatReaction — meta carries the target permalink when the ref has one (comms-e7my)', () => {
+test('formatReaction — meta carries the target permalink when the ref has one', () => {
   const target: MessageRef = {
     ...threadedRef,
     permalink: 'https://zulip.example.com/#narrow/channel/9-home/topic/payments/near/1',

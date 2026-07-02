@@ -47,8 +47,8 @@ test('returns empty report when minter is already up to date', async () => {
 test('batches a single subscribe call for every unsubscribed stream', async () => {
   const streams = [
     { name: decodeChannelNameSync('commy') },
-    { name: decodeChannelNameSync('assistant') },
-    { name: decodeChannelNameSync('homelab') },
+    { name: decodeChannelNameSync('myproject-a') },
+    { name: decodeChannelNameSync('myproject-b') },
   ]
   const deps = buildDeps({
     listUnsubscribedPublicStreams: () => Effect.succeed(streams),
@@ -60,22 +60,22 @@ test('batches a single subscribe call for every unsubscribed stream', async () =
   expect(report).toEqual({
     added: [
       decodeChannelNameSync('commy'),
-      decodeChannelNameSync('assistant'),
-      decodeChannelNameSync('homelab'),
+      decodeChannelNameSync('myproject-a'),
+      decodeChannelNameSync('myproject-b'),
     ],
     error: undefined,
   })
 })
 
 test('reports only the streams the substrate confirms as newly subscribed', async () => {
-  // Race: another process already subscribed `homelab` in the window
+  // Race: another process already subscribed `myproject-b` in the window
   // between list and subscribe. The substrate response excludes it
   // from `subscribed`. The reconciler reports only the actual adds.
   const deps = buildDeps({
     listUnsubscribedPublicStreams: () =>
       Effect.succeed([
         { name: decodeChannelNameSync('commy') },
-        { name: decodeChannelNameSync('homelab') },
+        { name: decodeChannelNameSync('myproject-b') },
       ]),
     subscribeToStreams: () => Effect.succeed([decodeChannelNameSync('commy')]),
   })

@@ -3,17 +3,16 @@
  * (adapter → ZulipHttp → HttpClient) on the **owned-fake stub HttpClient +
  * TestClock** — no `Bun.serve`, no real socket.
  *
- * These are the long-poll / reconnect tests that used to drive a real
- * `FetchHttpClient` against an in-process `Bun.serve` realm in `adapter.test.ts`.
- * Moving the LOGIC onto the stub makes them deterministic and dissolves the
- * real-socket contention flake (comms-hbm9 / comms-xwqm): the infinite
- * long-poll hold becomes a stub `{ hang: true }` response that parks on
- * `Effect.never`, and scope-close interruption of `Effect.never` is
- * deterministic. The retry/backoff sleeps run on the virtual clock.
+ * These long-poll / reconnect tests run the LOGIC on the stub rather than a
+ * real socket, which makes them deterministic and avoids real-socket
+ * contention flakes: the infinite long-poll hold becomes a stub
+ * `{ hang: true }` response that parks on `Effect.never`, and scope-close
+ * interruption of `Effect.never` is deterministic. The retry/backoff sleeps
+ * run on the virtual clock.
  *
  * SCOPE EDGE: the stub proves the *Effect fiber-interrupt* logic. The genuine
  * `AbortSignal → fetch → TCP teardown` of an in-flight `FetchHttpClient`
- * long-poll on scope close stays a real-socket Tier-3 test (comms-4lz5) — that
+ * long-poll on scope close stays a real-socket Tier-3 test — that
  * integration cannot move off the socket.
  *
  * The producer-level pump logic (transient-retry breadcrumbs, the exponential
@@ -66,10 +65,10 @@ const HERMES = {
   role: 400,
 } as const
 
-const GRAEME = {
+const MAINTAINER = {
   user_id: 5,
-  email: 'graeme@example.com',
-  full_name: 'Graeme Foster',
+  email: 'user@example.com',
+  full_name: 'Robin Reyes',
   is_bot: false,
   is_active: true,
   role: 100,
@@ -94,7 +93,7 @@ const buildAdapter = (
   stub: StubHttpClient,
 ): Effect.Effect<ZulipAdapter, IdentityError | UnknownIdentity> =>
   Effect.gen(function* () {
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedRegenerate(stub, HERMES.user_id)
     const config = {
       realmUrl: yield* RealmUrl(REALM_URL).pipe(Effect.orDie),
@@ -108,13 +107,13 @@ const buildAdapter = (
     return adapter
   })
 
-// Attach-mode adapter (comms-9usb): bind HERMES via a supplied stable key —
+// Attach-mode adapter: bind HERMES via a supplied stable key —
 // seed NEITHER regenerate NOR mint, so the bind proves it took the attach path.
 const buildAttachAdapter = (
   stub: StubHttpClient,
 ): Effect.Effect<ZulipAdapter, IdentityError | UnknownIdentity> =>
   Effect.gen(function* () {
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     const config = {
       realmUrl: yield* RealmUrl(REALM_URL).pipe(Effect.orDie),
       minterEmail: yield* BotEmail('minter@example.com').pipe(Effect.orDie),
@@ -202,8 +201,8 @@ const aZulipMessage = (
   }> = {},
 ): Record<string, unknown> => ({
   id: 100,
-  sender_id: GRAEME.user_id,
-  sender_full_name: GRAEME.full_name,
+  sender_id: MAINTAINER.user_id,
+  sender_full_name: MAINTAINER.full_name,
   stream_id: 1234,
   display_recipient: 'general',
   subject: 'lobby',
@@ -224,8 +223,8 @@ const gapMessagesBody = (content: string): Record<string, unknown> => ({
   messages: [
     {
       id: 150,
-      sender_id: GRAEME.user_id,
-      sender_full_name: GRAEME.full_name,
+      sender_id: MAINTAINER.user_id,
+      sender_full_name: MAINTAINER.full_name,
       stream_id: 1234,
       display_recipient: 'general',
       subject: 'lobby',
@@ -274,8 +273,8 @@ effectTest(
   { layer: TestContext.TestContext },
 )
 
-// comms-9usb concierge-parity capability: a session ATTACHED to a persona via a
-// supplied stable key wakes on `@persona` mentioned in a DIFFERENT channel than
+// Attached-persona capability: a session attached to a persona via a
+// supplied stable key wakes on `@persona` mentioned in a different channel than
 // the one it subscribed — because attach binds the persona as the session's own
 // identity, so the existing content-synthesis mention path fires for `@persona`
 // realm-wide. The home channel subscribe puts the queue in mode-'all'; the
@@ -375,7 +374,7 @@ effectTest(
 )
 
 effectTest(
-  'inbox.events backfills the gap via inbox.replay() on BAD_EVENT_QUEUE_ID and marks events replayed=true (comms-jnn)',
+  'inbox.events backfills the gap via inbox.replay() on BAD_EVENT_QUEUE_ID and marks events replayed=true',
   () =>
     Effect.gen(function* () {
       // Live message at ts=1000 sets the watermark; BAD_EVENT_QUEUE_ID dies the
@@ -436,7 +435,7 @@ effectTest(
 )
 
 effectTest(
-  'inbox.events persists the gap-replay watermark across iterator instances so reconnect-then-BAD_EVENT_QUEUE_ID still backfills (comms-4au)',
+  'inbox.events persists the gap-replay watermark across iterator instances so reconnect-then-BAD_EVENT_QUEUE_ID still backfills',
   () =>
     Effect.gen(function* () {
       // The gap-replay watermark lives at the adapter, not in the iterator's
@@ -518,7 +517,7 @@ effectTest(
 )
 
 effectTest(
-  'inbox.events recovers when /events returns 429 RATE_LIMIT_HIT (comms-9wi)',
+  'inbox.events recovers when /events returns 429 RATE_LIMIT_HIT',
   () =>
     Effect.gen(function* () {
       // A 429 from /events is backpressure: the send path waits out the
@@ -550,7 +549,7 @@ effectTest(
 )
 
 effectTest(
-  'inbox.events recovers when /register returns 429 RATE_LIMIT_HIT (comms-9wi)',
+  'inbox.events recovers when /register returns 429 RATE_LIMIT_HIT',
   () =>
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
@@ -581,13 +580,13 @@ effectTest(
 )
 
 effectTest(
-  'inbox.events long-poll fiber interrupts cleanly when the consumer scope closes (comms-spj3.8)',
+  'inbox.events long-poll fiber interrupts cleanly when the consumer scope closes',
   () =>
     Effect.gen(function* () {
       // A hung long-poll must not pin the pump on shutdown. The stub holds the
       // /events poll open (Effect.never); scope close interrupts the forked
       // Stream fiber. The test passes iff the outer scope close completes — the
-      // genuine AbortSignal→fetch→TCP teardown is the Tier-3 residue (comms-4lz5).
+      // genuine AbortSignal→fetch→TCP teardown is the Tier-3 residue.
       const stub = yield* makeStubHttpClient
       const adapter = yield* buildAdapter(stub)
       yield* seedRegister(stub)

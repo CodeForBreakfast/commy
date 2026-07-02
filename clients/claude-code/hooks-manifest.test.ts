@@ -6,13 +6,9 @@ import hooksManifest from './hooks/hooks.json'
  * The PreToolUse hook in `hooks/hooks.json` injects `session_id` (and
  * `cwd`) into MCP tool args before the call reaches the server. Its
  * matcher is a hand-curated alternation over tool names. Every tool
- * whose handler calls `identityCache.ensureBoundFor(...)` MUST be in
+ * whose handler calls `identityCache.ensureBoundFor(...)` must be in
  * the alternation — otherwise the handler sees `session_id`
  * undefined and `readSessionId` falls back to ephemeral binding.
- *
- * That drift has already happened once: comms-dsr added `edit_message`
- * to the mint set without updating the matcher (see comms-bhp). This
- * test pins the two declarations together at the unit-test bar.
  *
  * Direct callers only — if `ensureBoundFor` is invoked through a
  * helper indirection, the parser will miss it. Add the wrapper here

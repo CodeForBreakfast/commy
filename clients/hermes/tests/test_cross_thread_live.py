@@ -1,11 +1,11 @@
-"""End-to-end live proof of structural cross-thread isolation (comms-a7j.6).
+"""End-to-end live proof of structural cross-thread isolation.
 
-Drives the REAL assembled receive path + connection pool — ``CommyAdapter``
+Drives the real assembled receive path + connection pool — ``CommyAdapter``
 + ``TopicConnectionManager`` + the real ``McpTopicTransport`` spawning
-``bun packages/mcp/server.ts`` — against the REAL Zulip realm. No mocks.
+``bun packages/mcp/server.ts`` — against the real Zulip realm. No mocks.
 
-The property under proof is that per-topic isolation is **STRUCTURAL, not
-conventional**: a per-topic identity never receives another thread's frames
+The property under proof is that per-topic isolation is structural, not
+conventional: a per-topic identity never receives another thread's frames
 unless it subscribes, because the substrate narrow (``narrow-set.ts``) simply
 does not match them — not because an adapter withholds them.
 
@@ -14,7 +14,7 @@ The scenario models one Hermes pod (``owner``) that owns thread-A. A separate
 
 * **AC1** — owner, subscribed ``thread:<ch>/A,mentions``, is mentioned in
   thread-B. It receives the *mention* frame (the ``mentions`` narrow matches)
-  but NOT the plain thread-B message posted alongside it (no narrow matches).
+  but not the plain thread-B message posted alongside it (no narrow matches).
 * **AC2a** — owner *chooses to subscribe* thread-B by calling
   ``ensure_topic_connection(<ch>, B)`` (the pool's own API — "its context now
   spans both, by its own choice"). A subsequent plain thread-B message now
@@ -23,7 +23,7 @@ The scenario models one Hermes pod (``owner``) that owns thread-A. A separate
   isolated from thread-B.
 
 Absence is proven by ordering fences, not bare sleeps: a positive-control
-message that MUST arrive is posted after the message that MUST NOT, so once the
+message that must arrive is posted after the message that must not, so once the
 control is observed the excluded message has had at least as long to arrive.
 Markers are run-unique so persistent-mode catch-up replay of prior runs is
 filtered out, and catch-up is disabled (window 0) so a fresh subscribe never
@@ -178,7 +178,7 @@ async def _connected_pod(
 
 class _ZulipPoster:
     """Stimulus only: posts thread-B / thread-C traffic straight to the realm
-    over the Zulip REST API as the minter. Deliberately NOT an commy
+    over the Zulip REST API as the minter. Deliberately not a commy
     server — a fourth per-topic server would add a fourth concurrent ``/events``
     long-poll on the one minter identity and trip the per-user rate limit. The
     consumer derives mentions from message *content* (``@**name**``), so a raw
@@ -200,7 +200,7 @@ class _ZulipPoster:
         # honor the server's Retry-After in full and retry — Zulip hands back
         # the real drain time, so waiting exactly that long rides out the limit
         # instead of failing a recoverable run. (The pods' /events long-poll is
-        # served by Tornado and is NOT rate-limited; only the boot-burst REST
+        # served by Tornado and is not rate-limited; only the boot-burst REST
         # calls and these posts are.)
         for _ in range(POST_RETRY_ATTEMPTS):
             response = await self._client.post(

@@ -160,7 +160,7 @@ describe('createFileCursorStore', () => {
 })
 
 /**
- * `cursorDirConfig` reads `XDG_STATE_HOME` via Effect `Config` (comms-nrv);
+ * `cursorDirConfig` reads `XDG_STATE_HOME` via Effect `Config`;
  * the tests resolve it against a fixture `ConfigProvider.fromMap` rather
  * than mutating `process.env`, mirroring how the boot edge feeds the
  * ambient provider.

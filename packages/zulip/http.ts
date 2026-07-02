@@ -142,10 +142,10 @@ export const decodeUserUploadPath = (
   Schema.decodeUnknown(UserUploadPathSchema)(raw)
 
 /**
- * Synchronous decoder for TEST FIXTURES (comms-spj3.35) — sibling of
+ * Synchronous decoder for test fixtures — sibling of
  * `decodeUserUploadPath`. A malformed literal in test setup is a
  * programmer error, so `decodeSync`'s throw is the legitimate fatal
- * case. PRODUCTION code must use `decodeUserUploadPath`, never this.
+ * case. Production code uses `decodeUserUploadPath`, never this.
  */
 export const decodeUserUploadPathSync = (raw: string): UserUploadPath =>
   Schema.decodeSync(UserUploadPathSchema)(raw)
@@ -180,10 +180,10 @@ const decodeUploadResponse = Schema.decodeUnknown(Schema.parseJson(uploadRespons
  * up in a fraction of a second while the contention window lasts seconds.
  * Budgeting the cumulative wait instead means a small `retry-after` earns
  * many cheap attempts, a large one clamps to what's left, and the worst-
- * case caller-visible hang stays bounded either way (comms-nbz).
+ * case caller-visible hang stays bounded either way.
  *
  * `retry-after` is consumed here and never crosses the port. Mirrors the
- * long-poll iterator's 429 recovery in events.ts (comms-9wi).
+ * long-poll iterator's 429 recovery in events.ts.
  */
 const RATE_LIMIT_RETRY_BUDGET_MS = 15_000
 const DEFAULT_RATE_LIMIT_WAIT_MS = 1_000
@@ -284,7 +284,7 @@ const transportError = (url: string, cause: unknown): ZulipApiError =>
 
 /**
  * The Zulip HTTP request surface. A closure-based record of Effect-returning
- * verbs (comms-0m8) — not a class. Construction goes through
+ * verbs — not a class. Construction goes through
  * {@link makeZulipHttp}, which reads `HttpClient` from context, so the
  * dependency lands in the requirements channel rather than as a held field.
  */
@@ -320,7 +320,7 @@ export interface ZulipHttp {
  * Construct a `ZulipHttp` for one credential set. `HttpClient` is read from
  * context (`yield* HttpClient.HttpClient`) so it lands in the requirements
  * channel and is provided once at the application edge — no per-call platform
- * layer, no injected client field (comms-0m8). The realm base URL and Basic-
+ * layer, no injected client field. The realm base URL and Basic-
  * auth header are derived once and captured in the returned closure.
  */
 export const makeZulipHttp = (

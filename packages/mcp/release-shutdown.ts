@@ -4,7 +4,7 @@ const DEFAULT_TIMEOUT_MS = 5000
 
 /**
  * Release the substrate identity within a fixed budget — the body of
- * the program's release-on-shutdown finalizer (comms-spj3.39). Three
+ * the program's release-on-shutdown finalizer. Three
  * outcomes are interesting and each gets its own stderr line:
  *
  *   - resolved within budget → no log
@@ -30,7 +30,7 @@ const DEFAULT_TIMEOUT_MS = 5000
  * regenerates the api key, invalidating the prior session's stash
  * anyway — so a missed release is annoying, not catastrophic.
  *
- * Whether release fires at all (the acquisition gate, ass-220u) and the
+ * Whether release fires at all (the acquisition gate) and the
  * pump-cancel-then-release-then-close ordering are owned by the program
  * scope's finalizer registration order (server.ts `makeProgram`), not
  * this helper.

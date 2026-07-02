@@ -9,7 +9,7 @@ import { Array as Arr, Data, HashSet, Match, Option } from 'effect'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 
 /**
- * Plugin-layer narrow filter for inbound events (ass-220u).
+ * Plugin-layer narrow filter for inbound events.
  *
  * The commy Zulip adapter ships the minter's full event stream
  * — every public stream the minter is subscribed to. The pump tees
@@ -19,7 +19,7 @@ import type { SubscribeIntent } from './subscribe-parser.ts'
  *
  * Adding / removing intents is local-only; nothing here touches the
  * realm. Substrate-side minter-to-stream subscription is owned by the
- * boot-time reconciler (ass-6a77) plus the per-session substrate POST
+ * boot-time reconciler plus the per-session substrate POST
  * inside `inbox.subscribe()` for streams created after the plugin
  * booted.
  *
@@ -35,14 +35,14 @@ export interface NarrowSet {
   size(): number
   /**
    * Snapshot the current subscription intents (the membership set, not the
-   * `seenTopics` first-message ledger). The persistence layer (comms-4pgy)
+   * `seenTopics` first-message ledger). The persistence layer
    * captures this on every mutation so a resumed session restores the exact
    * set it had.
    */
   intents(): ReadonlyArray<SubscribeIntent>
   /**
    * Replace the entire membership set with `intents`, dropping whatever was
-   * there before. Used once on resume (comms-4pgy) to restore the persisted
+   * there before. Used once on resume to restore the persisted
    * set — including prior unsubscribes — over whatever boot-time seeding ran.
    */
   replace(intents: ReadonlyArray<SubscribeIntent>): void
@@ -132,8 +132,8 @@ export const createNarrowSet = (): NarrowSet => {
   let seenTopics = HashSet.empty<IntentKey>()
 
   /**
-   * First-message-per-topic match for a `new-topics:<ch>` intent
-   * (comms-bb7.2). A `new-topics` narrow delivers the first message of each
+   * First-message-per-topic match for a `new-topics:<ch>` intent. A
+   * `new-topics` narrow delivers the first message of each
    * topic in a channel exactly once, consistent with the catch-up layer's
    * `firstMessagePerTopic` (channels-catch-up.ts) and the port contract
    * (ports.ts `NewTopicsInChannelSubscription`) — not channel-wide like a

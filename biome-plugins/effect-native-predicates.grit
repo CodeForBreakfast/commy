@@ -9,7 +9,7 @@
 // branches of one top-level `or` — each is tried independently against every node.
 //
 // Severity is `warn` during rollout: the remaining `instanceof Error` sites
-// (the comms-ubo remediation epic) still trip it, and a `warn` surfaces them in
+// still trip it, and a `warn` surfaces them in
 // `bun run check` output without failing the gate for in-flight work. Bump to
 // `error` once those sites are gone so new occurrences are blocked.
 

@@ -36,9 +36,7 @@ const phantomChannel: ChannelRef = {
   name: decodeChannelNameSync('phantom-channel-never-seeded'),
 }
 
-// The bead: history reads against an unknown channel were throwing
-// UnknownChannel inside Effect.sync, landing as a DEFECT on the Cause
-// channel rather than a typed failure on E. The port types these reads as
+// The port types these reads as
 // Effect<…, HistoryError>; the memory adapter must honour that. Zulip's
 // history reads return [] for an unknown channel (the narrow matches
 // nothing), so this typed-failure shape is memory-specific and lives here
@@ -100,12 +98,11 @@ test('publisher.edit on an unknown message fails with a typed PublisherError, no
   }
 })
 
-// The mutable-state Refs (comms-ubo.19 / comms-2y4.8). These pin the
-// concurrency-safety the closure-`let`s could not guarantee: counter
-// allocation and the acquire check-then-set both span `yield*` suspension
-// points, so under `Effect.all` they must still allocate distinct ids and
-// bind exactly once. Sequential semantics are already covered by the
-// contract suite; these assert the interleaved case the Refs make correct.
+// The mutable-state Refs pin concurrency-safety: counter allocation and the
+// acquire check-then-set both span `yield*` suspension points, so under
+// `Effect.all` they must still allocate distinct ids and bind exactly once.
+// Sequential semantics are already covered by the contract suite; these assert
+// the interleaved case the Refs make correct.
 
 // In-memory store, no rate-limited substrate — unbounded concurrency is the
 // point here: it maximises interleaving against the message-id Ref.
@@ -153,7 +150,7 @@ test('counter state persists across operations within one constructed adapter', 
 
 // The timestamp seed is read from Effect's Clock, not Date.now(): under
 // TestClock the first post's ts is the deterministic floor(clockMs / 1000),
-// proving the seed flows through the default Clock service (comms-1jl).
+// proving the seed flows through the default Clock service.
 test("the timestamp seed reads from Effect's Clock (first post ts = floor(clockMs/1000))", () =>
   Effect.runPromise(
     Effect.gen(function* () {
@@ -170,7 +167,7 @@ test("the timestamp seed reads from Effect's Clock (first post ts = floor(clockM
 
 // The memory adapter synthesises stable permalinks so the MCP tools rig
 // (tools.test.ts) can assert the field is plumbed on every surface without a
-// live Zulip realm (comms-e7my). They are deliberately fake — a memory:// URI,
+// live Zulip realm. They are deliberately fake — a memory:// URI,
 // not a Zulip narrow — since the memory substrate has no real web client.
 test('publisher.post synthesises stable message and channel permalinks', async () => {
   const adapter = await acquired()

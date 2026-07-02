@@ -30,19 +30,19 @@
     "COMMY_SUBSCRIBE": {
       "type": "string",
       "title": "Auto-subscribe targets",
-      "description": "Comma-separated subscribe tokens applied at MCP-child boot before tools are announced. Each token is one of: 'channel:<name>', 'thread:<channel>/<thread>', 'new-topics:<channel>', 'mentions'. Example: 'channel:assistant,mentions'. Leave blank to skip auto-subscription — the plugin still boots, and a session can subscribe at runtime via the 'subscribe' MCP tool.",
+      "description": "Comma-separated subscribe tokens applied at MCP-child boot before tools are announced. Each token is one of: 'channel:<name>', 'thread:<channel>/<thread>', 'new-topics:<channel>', 'mentions'. Example: 'channel:myproject,mentions'. Leave blank to skip auto-subscription — the plugin still boots, and a session can subscribe at runtime via the 'subscribe' MCP tool.",
       "required": false
     },
     "COMMY_CATCHUP_WINDOW_SECONDS": {
       "type": "string",
       "title": "Boot-time catch-up window (seconds)",
-      "description": "How far back to fetch recent messages across the boot-time subscribe set on a persistent-bot restart (comms-3wl). Default 14400 (4 hours). Applies to channel: and thread: narrows only; the mentions: narrow uses a separate cursor-bounded mechanism. Set to 0 to disable boot-time channel/thread catch-up.",
+      "description": "How far back to fetch recent messages across the boot-time subscribe set on a persistent-bot restart. Default 14400 (4 hours). Applies to channel: and thread: narrows only; the mentions: narrow uses a separate cursor-bounded mechanism. Set to 0 to disable boot-time channel/thread catch-up.",
       "required": false
     },
     "COMMY_NPM_MIN_RELEASE_AGE": {
       "type": "string",
       "title": "npm release-age soak override for this package",
-      "description": "Operator override for npm's min-release-age supply-chain soak, scoped to commy's own `npx @codeforbreakfast/commy-mcp` launch (threaded as npm_config_min_release_age). min-release-age soaks a freshly-published release so a compromised one can be caught before you auto-pull it — it protects you from the publisher's own not-yet-vetted code, which the soak would otherwise block with ENOVERSIONS until it ages in. Setting this to 0 waives that soak for commy: a deliberate decision to trust the commy publisher and run a new release immediately (the publisher's own posture). Because commy ships as a single zero-dependency bundle, the waiver is scoped to exactly this one publisher — no transitive dependency tree rides along. Leave UNSET to keep your own npm min-release-age fully in force; an unset value never weakens it.",
+      "description": "Operator override for npm's min-release-age supply-chain soak, scoped to commy's own `npx @codeforbreakfast/commy-mcp` launch (threaded as npm_config_min_release_age). min-release-age soaks a freshly-published release so a compromised one can be caught before you auto-pull it — it protects you from the publisher's own not-yet-vetted code, which the soak would otherwise block with ENOVERSIONS until it ages in. Setting this to 0 waives that soak for commy: a deliberate decision to trust the commy publisher and run a new release immediately (the publisher's own posture). Because commy ships as a single zero-dependency bundle, the waiver is scoped to exactly this one publisher — no transitive dependency tree rides along. Leave unset to keep your own npm min-release-age in force; an unset value never weakens it.",
       "required": false
     }
   }

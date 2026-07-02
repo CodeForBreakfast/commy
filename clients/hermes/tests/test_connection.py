@@ -1,6 +1,6 @@
-"""Lifecycle tests for the per-topic connection manager (comms-a7j.5).
+"""Lifecycle tests for the per-topic connection manager.
 
-These drive the REAL manager logic — spawn-on-demand, idle reap, respawn — with
+These drive the real manager logic — spawn-on-demand, idle reap, respawn — with
 a recording fake transport and a fake clock standing in for the subprocess/MCP
 I/O seam. Nothing here asserts a double's canned return value: every assertion is
 on the manager's own decisions (did it spawn with the right spec? did it tear
@@ -91,10 +91,10 @@ def _make_manager(factory, *, clock, sink=None, config=None):
 
 
 def test_build_spec_carries_persistent_mode_identity_and_subscriptions():
-    spec = build_spec(_config(), "epr-backend", "standup")
-    assert spec.bot_name == deterministic_bot_name("epr-backend", "standup")
+    spec = build_spec(_config(), "myproject", "standup")
+    assert spec.bot_name == deterministic_bot_name("myproject", "standup")
     assert spec.env["COMMY_BOT_NAME"] == spec.bot_name
-    assert spec.env["COMMY_SUBSCRIBE"] == "thread:epr-backend/standup,mentions"
+    assert spec.env["COMMY_SUBSCRIBE"] == "thread:myproject/standup,mentions"
     assert spec.env["ZULIP_SITE"] == "https://zulip.example"
     assert spec.env["ZULIP_MINTER_EMAIL"] == "minter-bot@example.com"
     assert spec.env["ZULIP_MINTER_API_KEY"] == "secret-key"
@@ -104,17 +104,17 @@ def test_build_spec_carries_persistent_mode_identity_and_subscriptions():
 
 
 def test_build_spec_ignores_attach_identity_keeping_per_topic_minted():
-    # HYBRID scope (comms-to1c): only the boot listener attaches the persona.
+    # Hybrid scope: only the boot listener attaches the persona.
     # Per-topic connections keep their own deterministic `t-*` identity even
     # when an attach key is configured, preserving per-thread recent-window
     # catch-up. The attach key must never leak into a per-topic spec's env.
     spec = build_spec(
         _config(bot_name="hermes", bot_api_key="persona-key"),
-        "epr-backend",
+        "myproject",
         "standup",
     )
-    assert spec.bot_name == deterministic_bot_name("epr-backend", "standup")
-    assert spec.env["COMMY_BOT_NAME"] == deterministic_bot_name("epr-backend", "standup")
+    assert spec.bot_name == deterministic_bot_name("myproject", "standup")
+    assert spec.env["COMMY_BOT_NAME"] == deterministic_bot_name("myproject", "standup")
     assert "COMMY_BOT_API_KEY" not in spec.env
 
 
@@ -140,13 +140,13 @@ def test_ensure_spawns_one_connection_with_built_spec():
     clock = _FakeClock()
     manager = _make_manager(factory, clock=clock)
 
-    spec = asyncio.run(manager.ensure("epr-backend", "standup"))
+    spec = asyncio.run(manager.ensure("myproject", "standup"))
 
     assert len(factory.created) == 1
     assert factory.created[0].started == 1
     assert factory.created[0].spec is spec
-    assert spec.env["COMMY_SUBSCRIBE"] == "thread:epr-backend/standup,mentions"
-    assert manager.active_keys() == {("epr-backend", "standup")}
+    assert spec.env["COMMY_SUBSCRIBE"] == "thread:myproject/standup,mentions"
+    assert manager.active_keys() == {("myproject", "standup")}
 
 
 def test_ensure_is_idempotent_for_a_live_connection():
@@ -262,21 +262,20 @@ def test_reap_leaves_fresh_connections_alone():
 
 
 def test_respawn_after_reap_reuses_the_same_bot_name():
-    # The substrate minter is idempotent by name -> a respawn under the SAME
-    # COMMY_BOT_NAME re-acquires the SAME Zulip user_id and replays the
+    # The substrate minter is idempotent by name -> a respawn under the same
+    # COMMY_BOT_NAME re-acquires the same Zulip user_id and replays the
     # thread's recent window (persistent-mode catch-up). What this layer owns
     # and asserts is that a respawn computes the identical name; the user_id
-    # reuse + window replay are the substrate's guarantee (live-verified in
-    # comms-uuy), exercised end-to-end in the a7j.6 E2E lane, not here.
+    # reuse + window replay are the substrate's guarantee, not exercised here.
     factory = _RecordingFactory()
     clock = _FakeClock()
     manager = _make_manager(factory, clock=clock, config=_config(idle_timeout_seconds=300))
 
     async def scenario():
-        spec1 = await manager.ensure("epr-backend", "standup")
+        spec1 = await manager.ensure("myproject", "standup")
         clock.advance(301)
         await manager.reap_idle()
-        spec2 = await manager.ensure("epr-backend", "standup")
+        spec2 = await manager.ensure("myproject", "standup")
         return spec1, spec2
 
     spec1, spec2 = asyncio.run(scenario())

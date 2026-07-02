@@ -27,13 +27,13 @@ import type { SubscribeIntent } from './subscribe-parser.ts'
 
 const botIdentity: Identity = {
   id: decodeIdentityIdSync('bot-1'),
-  name: decodeDisplayNameSync('assistant-concierge'),
+  name: decodeDisplayNameSync('myproject-concierge'),
   kind: 'agent',
 }
 
 const human: Identity = {
   id: decodeIdentityIdSync('user-42'),
-  name: decodeDisplayNameSync('mhairi'),
+  name: decodeDisplayNameSync('carol'),
   kind: 'human',
 }
 
@@ -180,7 +180,7 @@ describe('catchUpChannels', () => {
     expect(notifier.payloads[0]?.content).toBe('in-thread')
   })
 
-  test('mentions intent → skipped (deferred to comms-rxo), no calls or dispatches', async () => {
+  test('mentions intent → skipped (deferred to the mentions catch-up), no calls or dispatches', async () => {
     const history = buildHistorySpy()
     const notifier = buildNotifierSpy()
     await runCatchUp({

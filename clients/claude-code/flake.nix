@@ -1,5 +1,5 @@
 {
-  description = "commy plugin runtime — provides bun pinned via nixpkgs (comms-94r)";
+  description = "commy plugin runtime — provides bun pinned via nixpkgs";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";

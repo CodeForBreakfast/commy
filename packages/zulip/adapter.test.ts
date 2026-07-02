@@ -30,10 +30,10 @@ import { ApiKey, BotEmail, decodeUserUploadPathSync, RealmUrl, ZulipApiError } f
 // unit tests: they inspect the captured `HttpClientRequest`s (params, narrow
 // JSON, auth headers, call counts, paths) and the typed-error wrapping that
 // the substrate-agnostic live contract (`contract.ts`) deliberately never
-// asserts. The behavioural round-trips the contract DOES prove are not
+// asserts. The behavioural round-trips the contract does prove are not
 // duplicated here. The long-poll / reconnect logic lives in
 // `adapter-events.test.ts`; the genuine real-socket teardown is the Tier-3
-// residue (comms-4lz5).
+// residue.
 
 const HERMES = {
   user_id: 9,
@@ -44,10 +44,10 @@ const HERMES = {
   role: 400,
 } as const
 
-const GRAEME = {
+const MAINTAINER = {
   user_id: 5,
-  email: 'graeme@example.com',
-  full_name: 'Graeme Foster',
+  email: 'user@example.com',
+  full_name: 'Robin Reyes',
   is_bot: false,
   is_active: true,
   role: 100,
@@ -64,7 +64,7 @@ const RIQ = {
 
 // Raw directory member behind the `bobHuman` Identity (id '2'). User-scoped
 // calls resolve the ZulipUserRef through the directory, so the target must be
-// a seeded member (comms-7ee).
+// a seeded member.
 const BOB = {
   user_id: 2,
   email: 'bob@example.com',
@@ -76,7 +76,7 @@ const BOB = {
 
 const REALM_URL = 'https://zulip.example.com'
 
-// makeZulipHttp reads HttpClient from context (comms-0m8), so the adapter
+// makeZulipHttp reads HttpClient from context, so the adapter
 // Effect carries `HttpClient` in R. Provide the owned-fake stub client here so
 // every call site keeps a `never` requirements channel.
 const zulipAdapter = (
@@ -112,7 +112,7 @@ const seedMint = (
   apiKey = 'minted-key',
 ): Effect.Effect<void> =>
   // Match real Zulip's response shape — POST /bots returns
-  // user_id + api_key but NOT email. The adapter reconstructs the
+  // user_id + api_key but not email. The adapter reconstructs the
   // bot's delivery email from <short_name>-bot@<realm_host>.
   stub.respond('POST', '/api/v1/bots', {
     body: { result: 'success', api_key: apiKey, user_id: userId },
@@ -176,7 +176,7 @@ effectTest('identity.acquire on an existing bot regenerates its API key and bind
 effectTest('identity.acquire on a name with no existing bot mints fresh via POST /bots', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
-    yield* seedUsers(stub, [GRAEME])
+    yield* seedUsers(stub, [MAINTAINER])
     yield* seedMint(stub, 42, 'fresh-mint-key')
     const config = yield* makeConfig()
     const adapter = yield* zulipAdapter(stub, config)
@@ -244,11 +244,11 @@ effectTest(
     }),
 )
 
-// --- Attach mode (comms-9usb): bind a pre-provisioned persona via a supplied
-// stable api key WITHOUT regenerating it, so many sessions/processes can share
+// --- Attach mode: bind a pre-provisioned persona via a supplied
+// stable api key without regenerating it, so many sessions/processes can share
 // one identity (the Discord-style single-identity model) with no acquire
 // collision. Gated on config.attachIdentity matching the acquired name; every
-// other acquire keeps today's mint/regenerate behaviour untouched.
+// other acquire keeps the normal mint/regenerate behaviour.
 
 const attachConfig = (name: string, apiKey: string): Effect.Effect<ZulipAdapterConfig> =>
   Effect.gen(function* () {
@@ -267,7 +267,7 @@ effectTest(
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
       yield* seedUsers(stub, [HERMES])
-      // Deliberately seed NEITHER regenerate NOR mint: the attach path must
+      // Seed neither regenerate nor mint: the attach path must
       // not call them, and an accidental call surfaces as an unstubbed-request
       // failure rather than passing silently.
       const config = yield* attachConfig('hermes-agent', 'stable-provided-key')
@@ -282,7 +282,7 @@ effectTest(
         substrate: 'zulip',
         realmUrl: config.realmUrl,
         email: yield* BotEmail(HERMES.email).pipe(Effect.orDie),
-        // The SUPPLIED key, verbatim — not a rotated one.
+        // The supplied key, verbatim — not a rotated one.
         apiKey: yield* ApiKey('stable-provided-key').pipe(Effect.orDie),
       })
       const reqs = yield* stub.captured
@@ -304,15 +304,14 @@ effectTest(
   () =>
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
-      yield* seedUsers(stub, [GRAEME])
+      yield* seedUsers(stub, [MAINTAINER])
       const adapter = yield* zulipAdapter(stub, yield* attachConfig('hermes-agent', 'k'))
       const err = yield* Effect.flip(adapter.identity.acquire(decodeBotNameSync('hermes-agent')))
       expect(err).toBeInstanceOf(IdentityError)
     }),
 )
 
-// CC/concierge REGRESSION GUARD (Graeme explicitly required): with no stable
-// key provided, acquire takes today's mint/regenerate path unchanged.
+// With no stable key supplied, acquire takes the normal mint/regenerate path.
 effectTest(
   'identity.acquire with NO attachIdentity regenerates as before — non-attach consumers untouched',
   () =>
@@ -330,7 +329,7 @@ effectTest(
 )
 
 // The attach config must only fire for the persona it names — acquiring any
-// OTHER name regenerates as usual, so a per-persona key can never leak into an
+// other name regenerates as usual, so a per-persona key can never leak into an
 // unrelated consumer's binding.
 effectTest(
   'identity.acquire of a name other than attachIdentity.name keeps the mint/regenerate path',
@@ -565,7 +564,7 @@ effectTest('directory.listAgents returns only is_bot=true users', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* stub.respond('GET', '/api/v1/users', {
-      body: { result: 'success', members: [HERMES, GRAEME, RIQ] },
+      body: { result: 'success', members: [HERMES, MAINTAINER, RIQ] },
     })
     yield* seedRegenerate(stub, HERMES.user_id)
     const adapter = yield* zulipAdapter(stub, yield* makeConfig())
@@ -586,7 +585,7 @@ effectTest('directory.listHumans returns only is_bot=false users', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* stub.respond('GET', '/api/v1/users', {
-      body: { result: 'success', members: [HERMES, GRAEME, RIQ] },
+      body: { result: 'success', members: [HERMES, MAINTAINER, RIQ] },
     })
     yield* seedRegenerate(stub, HERMES.user_id)
     const adapter = yield* zulipAdapter(stub, yield* makeConfig())
@@ -595,7 +594,7 @@ effectTest('directory.listHumans returns only is_bot=false users', () =>
     expect(humans).toEqual([
       {
         id: decodeIdentityIdSync('5'),
-        name: decodeDisplayNameSync('Graeme Foster'),
+        name: decodeDisplayNameSync('Robin Reyes'),
         kind: 'human',
       },
     ])
@@ -738,11 +737,11 @@ effectTest('publisher.post with thread sends topic and threads the returned Mess
     yield* seedSendMessage(stub, 100)
     const adapter = yield* buildAdapter(stub)
     const ref = yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hi'), {
-      thread: { name: decodeThreadNameSync('ass-zsd9') },
+      thread: { name: decodeThreadNameSync('planning') },
     })
     const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
-    expect(params.get('topic')).toBe('ass-zsd9')
-    expect(ref.thread).toMatchObject({ name: decodeThreadNameSync('ass-zsd9') })
+    expect(params.get('topic')).toBe('planning')
+    expect(ref.thread).toMatchObject({ name: decodeThreadNameSync('planning') })
   }),
 )
 
@@ -763,13 +762,13 @@ effectTest('publisher.post threads the permalink through the topic when a thread
     yield* seedSendMessage(stub, 100)
     const adapter = yield* buildAdapter(stub)
     const ref = yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hi'), {
-      thread: { name: decodeThreadNameSync('ass-zsd9') },
+      thread: { name: decodeThreadNameSync('planning') },
     })
     expect(ref.permalink).toBe(
-      'https://zulip.example.com/#narrow/channel/1234-general/topic/ass-zsd9/near/100',
+      'https://zulip.example.com/#narrow/channel/1234-general/topic/planning/near/100',
     )
     expect(ref.thread?.permalink).toBe(
-      'https://zulip.example.com/#narrow/channel/1234-general/topic/ass-zsd9',
+      'https://zulip.example.com/#narrow/channel/1234-general/topic/planning',
     )
   }),
 )
@@ -812,10 +811,9 @@ effectTest('publisher.post with body-only mention markup posts body verbatim', (
   }),
 )
 
-// Regression for comms-izp: body containing `@**Name**` + mentions[] for the
-// same identity used to double-render the mention. Under the metadata-only
-// contract the adapter never folds mentions[] into body, so this case posts
-// body verbatim with exactly one rendered @-mention.
+// A body containing `@**Name**` + mentions[] for the same identity: under the
+// metadata-only contract the adapter never folds mentions[] into body, so this
+// case posts body verbatim with exactly one rendered @-mention.
 effectTest('publisher.post with both body markup AND opts.mentions does not double-render', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
@@ -839,7 +837,7 @@ effectTest(
       const parent: MessageRef = {
         id: decodeMessageIdSync('1'),
         channel: generalChannel,
-        thread: { name: decodeThreadNameSync('ass-zsd9') },
+        thread: { name: decodeThreadNameSync('planning') },
       }
       yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('still here'), {
         replyTo: parent,
@@ -912,7 +910,7 @@ effectTest('publisher.post does not issue POST /messages when pre-flight rejects
   }),
 )
 
-// Typed failure channel for publisher.post (comms-oalxg). A substrate failure
+// Typed failure channel for publisher.post. A substrate failure
 // on either the pre-flight `/streams` fetch or the `POST /messages` call is
 // wrapped in a typed PublisherError carrying the cause (core stays
 // substrate-agnostic — it never names ZulipApiError); an unknown channel is a
@@ -1038,12 +1036,12 @@ effectTest('history.readChannel narrows by channel and maps each message to the 
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [
       {
         id: 555,
         sender_id: 5,
-        sender_full_name: 'Graeme Foster',
+        sender_full_name: 'Robin Reyes',
         stream_id: 1234,
         display_recipient: 'general',
         subject: 'lobby',
@@ -1068,7 +1066,7 @@ effectTest('history.readChannel narrows by channel and maps each message to the 
       },
       sender: {
         id: decodeIdentityIdSync('5'),
-        name: decodeDisplayNameSync('Graeme Foster'),
+        name: decodeDisplayNameSync('Robin Reyes'),
         kind: 'human',
       },
       body: decodeMessageBodySync('hi all'),
@@ -1085,12 +1083,12 @@ effectTest(
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
       const adapter = yield* buildAdapter(stub)
-      yield* seedUsers(stub, [HERMES, GRAEME])
+      yield* seedUsers(stub, [HERMES, MAINTAINER])
       yield* seedMessages(stub, [
         {
           id: 555,
           sender_id: 5,
-          sender_full_name: 'Graeme Foster',
+          sender_full_name: 'Robin Reyes',
           stream_id: 1234,
           display_recipient: 'general',
           subject: 'lobby',
@@ -1104,9 +1102,9 @@ effectTest(
         },
       ])
       const messages = yield* adapter.history.readChannel(generalChannel, { limit: 50 })
-      const graeme: Identity = {
+      const maintainer: Identity = {
         id: decodeIdentityIdSync('5'),
-        name: decodeDisplayNameSync('Graeme Foster'),
+        name: decodeDisplayNameSync('Robin Reyes'),
         kind: 'human',
       }
       const unknownReactor: Identity = {
@@ -1115,8 +1113,8 @@ effectTest(
         kind: 'human',
       }
       expect(messages[0]?.reactions).toEqual([
-        { emoji: decodeEmojiSync('thumbs_up'), by: [graeme, unknownReactor] },
-        { emoji: decodeEmojiSync('tada'), by: [graeme] },
+        { emoji: decodeEmojiSync('thumbs_up'), by: [maintainer, unknownReactor] },
+        { emoji: decodeEmojiSync('tada'), by: [maintainer] },
       ])
     }),
 )
@@ -1142,12 +1140,12 @@ effectTest('history.messagePermalink fetches the message by id when no hint is g
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [
       {
         id: 77,
         sender_id: 5,
-        sender_full_name: 'Graeme Foster',
+        sender_full_name: 'Robin Reyes',
         stream_id: 1234,
         display_recipient: 'general',
         subject: 'lobby',
@@ -1168,7 +1166,7 @@ effectTest(
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
       const adapter = yield* buildAdapter(stub)
-      yield* seedUsers(stub, [HERMES, GRAEME])
+      yield* seedUsers(stub, [HERMES, MAINTAINER])
       yield* seedMessages(stub, [])
       yield* adapter.history.readChannel(generalChannel, { limit: 25 })
       const req = yield* findRequest(stub, 'GET', '/api/v1/messages')
@@ -1184,7 +1182,7 @@ effectTest('history.readChannel resolves bot senders to kind=agent via the user 
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [
       {
         id: 600,
@@ -1207,7 +1205,7 @@ effectTest('history.readChannel resolves deactivated bot senders to kind=agent',
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
     const deactivatedBot = { ...RIQ, is_active: false }
-    yield* seedUsers(stub, [HERMES, GRAEME, deactivatedBot])
+    yield* seedUsers(stub, [HERMES, MAINTAINER, deactivatedBot])
     yield* seedMessages(stub, [
       {
         id: 700,
@@ -1230,12 +1228,12 @@ effectTest('history.readChannel filters by range.since (epoch seconds, inclusive
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [
       {
         id: 1,
         sender_id: 5,
-        sender_full_name: 'Graeme Foster',
+        sender_full_name: 'Robin Reyes',
         stream_id: 1234,
         display_recipient: 'general',
         subject: 'a',
@@ -1245,7 +1243,7 @@ effectTest('history.readChannel filters by range.since (epoch seconds, inclusive
       {
         id: 2,
         sender_id: 5,
-        sender_full_name: 'Graeme Foster',
+        sender_full_name: 'Robin Reyes',
         stream_id: 1234,
         display_recipient: 'general',
         subject: 'a',
@@ -1255,7 +1253,7 @@ effectTest('history.readChannel filters by range.since (epoch seconds, inclusive
       {
         id: 3,
         sender_id: 5,
-        sender_full_name: 'Graeme Foster',
+        sender_full_name: 'Robin Reyes',
         stream_id: 1234,
         display_recipient: 'general',
         subject: 'a',
@@ -1278,12 +1276,12 @@ effectTest('history.readChannel filters by range.until (epoch seconds, inclusive
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [
       {
         id: 1,
         sender_id: 5,
-        sender_full_name: 'Graeme Foster',
+        sender_full_name: 'Robin Reyes',
         stream_id: 1234,
         display_recipient: 'general',
         subject: 'a',
@@ -1293,7 +1291,7 @@ effectTest('history.readChannel filters by range.until (epoch seconds, inclusive
       {
         id: 2,
         sender_id: 5,
-        sender_full_name: 'Graeme Foster',
+        sender_full_name: 'Robin Reyes',
         stream_id: 1234,
         display_recipient: 'general',
         subject: 'a',
@@ -1303,7 +1301,7 @@ effectTest('history.readChannel filters by range.until (epoch seconds, inclusive
       {
         id: 3,
         sender_id: 5,
-        sender_full_name: 'Graeme Foster',
+        sender_full_name: 'Robin Reyes',
         stream_id: 1234,
         display_recipient: 'general',
         subject: 'a',
@@ -1326,16 +1324,16 @@ effectTest('history.readThread narrows by both channel and topic', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [])
-    yield* adapter.history.readThread(generalChannel, decodeThreadNameSync('ass-zsd9'), {
+    yield* adapter.history.readThread(generalChannel, decodeThreadNameSync('planning'), {
       limit: 10,
     })
     const req = yield* findRequest(stub, 'GET', '/api/v1/messages')
     const narrow = JSON.parse(req.url.searchParams.get('narrow') ?? 'null') as unknown
     expect(narrow).toEqual([
       { operator: 'channel', operand: 'general' },
-      { operator: 'topic', operand: 'ass-zsd9' },
+      { operator: 'topic', operand: 'planning' },
     ])
   }),
 )
@@ -1344,7 +1342,7 @@ effectTest('history.readChannel with no limit defaults num_before to 100', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [])
     yield* adapter.history.readChannel(generalChannel, {})
     const req = yield* findRequest(stub, 'GET', '/api/v1/messages')
@@ -1352,11 +1350,11 @@ effectTest('history.readChannel with no limit defaults num_before to 100', () =>
   }),
 )
 
-effectTest('history.recentThreads queries by sender and deduplicates per thread (comms-esu)', () =>
+effectTest('history.recentThreads queries by sender and deduplicates per thread', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [
       {
         id: 101,
@@ -1410,15 +1408,15 @@ effectTest('history.recentThreads queries by sender and deduplicates per thread 
       operator: string
       operand: unknown
     }>
-    // Zulip's `sender` narrow operand must be the INTEGER user id. A numeric
-    // string ("9") is rejected as BAD_NARROW "unknown user 9" (comms-wpp).
+    // Zulip's `sender` narrow operand must be the integer user id. A numeric
+    // string ("9") is rejected as BAD_NARROW "unknown user 9".
     expect(narrow).toEqual([{ operator: 'sender', operand: HERMES.user_id }])
     expect(typeof narrow[0]?.operand).toBe('number')
   }),
 )
 
 effectTest(
-  'history.recentThreads short-circuits to [] when the sender is not a known directory member (comms-7ee)',
+  'history.recentThreads short-circuits to [] when the sender is not a known directory member',
   () =>
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
@@ -1522,7 +1520,7 @@ effectTest(
       const stub = yield* makeStubHttpClient
       // A non-BAD_REQUEST error must propagate (only the benign "no presence
       // data" 400 is swallowed to offline). Use a 500 rather than a 429 — the
-      // adapter now rides out 429s internally (comms-nbz), so a 429 is no
+      // adapter now rides out 429s internally, so a 429 is no
       // longer an error the presence path surfaces.
       yield* stub.respond('GET', `/api/v1/users/${bobHuman.id}/presence`, {
         body: { result: 'error', msg: 'internal server error', code: 'INTERNAL_ERROR' },
@@ -1537,7 +1535,7 @@ effectTest(
 )
 
 effectTest(
-  'directory.presence short-circuits to offline for an identity that is not a known directory member (comms-7ee)',
+  'directory.presence short-circuits to offline for an identity that is not a known directory member',
   () =>
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
@@ -1557,7 +1555,7 @@ effectTest(
 )
 
 effectTest(
-  "directory.presence returns 'unknown' for an agent identity without reading Zulip presence (comms-1mnb)",
+  "directory.presence returns 'unknown' for an agent identity without reading Zulip presence",
   () =>
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
@@ -1581,15 +1579,15 @@ effectTest(
     }),
 )
 
-// ─── comms-fpa: bots never write their own presence ─────────────────────────
+// ─── bots never write their own presence ─────────────────────────
 // Zulip's POST /users/me/presence is @human_users_only, so a bot self-presence
 // write is structurally impossible (it 400s with "does not accept bot
 // requests"). The adapter therefore exposes no presence-write path. This guards
-// against the bot self-presence heartbeat (the deleted comms-6li feature) being
-// wired back in. The presence READ — directory.presence, above — stays: a bot
+// against the bot self-presence heartbeat being wired back in. The presence
+// read — directory.presence, above — stays: a bot
 // reading a human's presence is supported.
 
-effectTest('a bound adapter never writes its own presence (comms-fpa)', () =>
+effectTest('a bound adapter never writes its own presence', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
@@ -1703,29 +1701,26 @@ effectTest('inbox.subscribe(mentions) twice registers the events queue only once
   }),
 )
 
-// comms-tfar.16: ensureQueueRegistered is a read-decide-effectful-write on the
+// ensureQueueRegistered is a read-decide-effectful-write on the
 // minter-scoped inboxRef. Two subscribe() calls can interleave — both read
 // registration=None, both POST /register — double-registering the events queue
 // (one leaks, GC'd by Zulip's TTL). Reachable in production: a single
 // process-singleton adapter, no MCP-side serialization, parallel subscribe tool
 // calls in one agent turn. The SynchronizedRef.modifyEffect holds the lock
 // across registerQueue so the second call observes the first's write and skips.
-effectTest(
-  'concurrent inbox.subscribe(mentions) calls register the events queue only once (comms-tfar.16)',
-  () =>
-    Effect.gen(function* () {
-      const stub = yield* makeStubHttpClient
-      yield* seedRegisterOk(stub)
-      const adapter = yield* buildAdapter(stub)
-      yield* Effect.all(
-        [adapter.inbox.subscribe('mentions'), adapter.inbox.subscribe('mentions')],
-        { concurrency: 2 },
-      )
-      const registers = (yield* stub.captured).filter(
-        (r) => r.method === 'POST' && r.url.pathname === '/api/v1/register',
-      )
-      expect(registers).toHaveLength(1)
-    }),
+effectTest('concurrent inbox.subscribe(mentions) calls register the events queue only once', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedRegisterOk(stub)
+    const adapter = yield* buildAdapter(stub)
+    yield* Effect.all([adapter.inbox.subscribe('mentions'), adapter.inbox.subscribe('mentions')], {
+      concurrency: 2,
+    })
+    const registers = (yield* stub.captured).filter(
+      (r) => r.method === 'POST' && r.url.pathname === '/api/v1/register',
+    )
+    expect(registers).toHaveLength(1)
+  }),
 )
 
 effectTest('inbox.subscribe flipping mentions -> all re-registers the events queue', () =>
@@ -1773,7 +1768,7 @@ effectTest('inbox.replay(since) returns message-posted events for messages with 
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* stub.respond('GET', '/api/v1/messages', {
       body: {
         result: 'success',
@@ -1781,7 +1776,7 @@ effectTest('inbox.replay(since) returns message-posted events for messages with 
           {
             id: 1,
             sender_id: 5,
-            sender_full_name: 'Graeme Foster',
+            sender_full_name: 'Robin Reyes',
             stream_id: 100,
             display_recipient: 'general',
             subject: 'lobby',
@@ -1791,7 +1786,7 @@ effectTest('inbox.replay(since) returns message-posted events for messages with 
           {
             id: 2,
             sender_id: 5,
-            sender_full_name: 'Graeme Foster',
+            sender_full_name: 'Robin Reyes',
             stream_id: 100,
             display_recipient: 'general',
             subject: 'lobby',
@@ -1933,7 +1928,7 @@ effectTest(
     }),
 )
 
-// ─── ass-220u: pre-acquire surfaces run on minter creds ────────────────────
+// ─── pre-acquire surfaces run on minter creds ────────────────────
 
 const decodeBasicAuth = (header: string | null): { email: string; apiKey: string } => {
   if (header === null || !header.startsWith('Basic ')) {
@@ -1950,7 +1945,7 @@ const minterAuth = { email: 'minter@example.com', apiKey: 'minter-key' }
 effectTest('history.readChannel runs pre-acquire and routes via minter creds', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* stub.respond('GET', '/api/v1/messages', {
       body: { result: 'success', messages: [] },
     })
@@ -1964,7 +1959,7 @@ effectTest('history.readChannel runs pre-acquire and routes via minter creds', (
 effectTest('directory.listAgents runs pre-acquire and routes via minter creds', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     const adapter = yield* zulipAdapter(stub, yield* makeConfig())
     const agents = yield* adapter.directory.listAgents()
     expect(agents.map((a) => a.name)).toEqual([decodeDisplayNameSync('hermes-agent')])
@@ -1978,22 +1973,22 @@ effectTest('directory.listAgents runs pre-acquire and routes via minter creds', 
 )
 
 // The presence read path runs for humans only (agents short-circuit to
-// 'unknown', comms-1mnb), so the minter-cred routing assertion uses a human.
+// 'unknown'), so the minter-cred routing assertion uses a human.
 effectTest('directory.presence runs pre-acquire and routes via minter creds', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
-    yield* seedUsers(stub, [GRAEME])
-    yield* stub.respond('GET', `/api/v1/users/${GRAEME.user_id}/presence`, {
+    yield* seedUsers(stub, [MAINTAINER])
+    yield* stub.respond('GET', `/api/v1/users/${MAINTAINER.user_id}/presence`, {
       body: { result: 'success', presence: { aggregated: { status: 'active' } } },
     })
     const adapter = yield* zulipAdapter(stub, yield* makeConfig())
     const presence = yield* adapter.directory.presence({
-      id: decodeIdentityIdSync(String(GRAEME.user_id)),
-      name: decodeDisplayNameSync(GRAEME.full_name),
+      id: decodeIdentityIdSync(String(MAINTAINER.user_id)),
+      name: decodeDisplayNameSync(MAINTAINER.full_name),
       kind: 'human',
     })
     expect(presence).toBe('online')
-    const req = yield* findRequest(stub, 'GET', `/api/v1/users/${GRAEME.user_id}/presence`)
+    const req = yield* findRequest(stub, 'GET', `/api/v1/users/${MAINTAINER.user_id}/presence`)
     expect(decodeBasicAuth(req.headers.get('Authorization'))).toEqual(minterAuth)
   }),
 )
@@ -2054,7 +2049,7 @@ effectTest('publisher.post after acquire uses BOUND bot creds, not minter creds'
     const auth = decodeBasicAuth(req.headers.get('Authorization'))
     expect(auth.email).toBe(HERMES.email)
     expect(auth.apiKey).toBe('fresh-key')
-    // And it must NOT be minter creds.
+    // And it must not be minter creds.
     expect(auth).not.toEqual(minterAuth)
   }),
 )
@@ -2104,13 +2099,13 @@ effectTest(
       const stub = yield* makeStubHttpClient
       yield* seedStreamsList(stub, [
         { stream_id: 11, name: 'commy' },
-        { stream_id: 12, name: 'assistant' },
-        { stream_id: 13, name: 'homelab' },
+        { stream_id: 12, name: 'myproject-a' },
+        { stream_id: 13, name: 'myproject-b' },
       ])
       yield* stub.respond('POST', '/api/v1/users/me/subscriptions', {
         body: {
           result: 'success',
-          subscribed: { 'minter@example.com': ['commy', 'assistant', 'homelab'] },
+          subscribed: { 'minter@example.com': ['commy', 'myproject-a', 'myproject-b'] },
           already_subscribed: {},
           unauthorized: [],
         },
@@ -2120,15 +2115,15 @@ effectTest(
       const report = yield* adapter.reconcileMinterSubscriptions()
       expect(report.added).toEqual([
         decodeChannelNameSync('commy'),
-        decodeChannelNameSync('assistant'),
-        decodeChannelNameSync('homelab'),
+        decodeChannelNameSync('myproject-a'),
+        decodeChannelNameSync('myproject-b'),
       ])
       expect(report.error).toBeUndefined()
       const post = yield* findRequest(stub, 'POST', '/api/v1/users/me/subscriptions')
       const subs = JSON.parse(
         new URLSearchParams(post.body).get('subscriptions') ?? '[]',
       ) as unknown
-      expect(subs).toEqual([{ name: 'commy' }, { name: 'assistant' }, { name: 'homelab' }])
+      expect(subs).toEqual([{ name: 'commy' }, { name: 'myproject-a' }, { name: 'myproject-b' }])
       yield* Effect.promise(() => adapter.close())
     }),
 )
@@ -2140,16 +2135,16 @@ effectTest(
       const stub = yield* makeStubHttpClient
       yield* seedStreamsList(stub, [
         { stream_id: 11, name: 'commy' },
-        { stream_id: 12, name: 'homelab' },
+        { stream_id: 12, name: 'myproject-b' },
       ])
-      // Race: another reconciler already subscribed `homelab` between
+      // Race: another reconciler already subscribed `myproject-b` between
       // our list and post. Zulip puts it under already_subscribed and the
       // reconciler's report mirrors that.
       yield* stub.respond('POST', '/api/v1/users/me/subscriptions', {
         body: {
           result: 'success',
           subscribed: { 'minter@example.com': ['commy'] },
-          already_subscribed: { 'minter@example.com': ['homelab'] },
+          already_subscribed: { 'minter@example.com': ['myproject-b'] },
           unauthorized: [],
         },
       })
@@ -2205,7 +2200,7 @@ effectTest('reconcileMinterSubscriptions routes via minter creds', () =>
   }),
 )
 
-// --- attachmentReference (comms-nsa) ---
+// --- attachmentReference ---
 
 test('attachmentReference renders a Zulip markdown link, filename as text and url as target', () => {
   expect(
@@ -2216,14 +2211,13 @@ test('attachmentReference renders a Zulip markdown link, filename as text and ur
   ).toBe('[chart.png](/user_uploads/1/ab/chart.png)')
 })
 
-test('downloadFile rejects an unbranded urlPath at the type level (comms-m1y)', () => {
-  // comms-39q dropped this proof believing method-param bivariance let a bare
-  // string through `downloadFile(urlPath: UserUploadPath)`. It does not:
-  // bivariance only loosens function-type assignability, never a direct
-  // call-site argument check — so the UserUploadPath brand bites here even
-  // though downloadFile is declared with method shorthand on the
-  // intersection-typed ZulipAdapter. If this @ts-expect-error stops firing,
-  // the brand has genuinely been weakened.
+test('downloadFile rejects an unbranded urlPath at the type level', () => {
+  // Method-param bivariance does not let a bare string through
+  // `downloadFile(urlPath: UserUploadPath)`: bivariance only loosens
+  // function-type assignability, never a direct call-site argument check — so
+  // the UserUploadPath brand bites here even though downloadFile is declared
+  // with method shorthand on the intersection-typed ZulipAdapter. If the
+  // suppression below stops firing, the brand has genuinely been weakened.
   const proof = (adapter: ZulipAdapter): void => {
     // @ts-expect-error — urlPath must be UserUploadPath, not string
     void adapter.downloadFile('raw-unbranded-path')
@@ -2232,9 +2226,9 @@ test('downloadFile rejects an unbranded urlPath at the type level (comms-m1y)', 
   expect(proof).toBeTypeOf('function')
 })
 
-// --- UserUploadPath brand (comms-39q) ---
+// --- UserUploadPath brand ---
 
-test('attachmentReference refuses an unbranded url at the type level (comms-39q)', () => {
+test('attachmentReference refuses an unbranded url at the type level', () => {
   // UploadResult.url is a UserUploadPath brand: a bare string from any
   // source must not reach a consumer that expects a checked upload path.
   // If this @ts-expect-error stops erroring, the brand has been weakened

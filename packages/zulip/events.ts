@@ -3,9 +3,8 @@
  *
  * Zulip exposes a long-polling events queue: register once via
  * `POST /register`, then chain `GET /events?queue_id=…&last_event_id=…`
- * round-trips, advancing `last_event_id` from each response. The
- * homelab-side notes (hl-76sx.6) are binding here — every poll holds
- * for ~50s before Zulip heartbeats, and the next poll must re-issue
+ * round-trips, advancing `last_event_id` from each response. Every poll
+ * holds for ~50s before Zulip heartbeats, and the next poll must re-issue
  * immediately.
  *
  * The returned Stream owns the long-poll loop as a Schedule-driven
@@ -55,7 +54,7 @@ export interface DirectoryLookup {
  * flow through `events()`, so subsequent reaction events on those same
  * messages resolve in O(1) without an extra round-trip. On a miss the
  * iterator falls back to `GET /messages?anchor=<id>&num_before=0&num_after=0`
- * (ass-ps6h) and write-throughs the result, so reactions on messages
+ * and write-throughs the result, so reactions on messages
  * the iterator never observed still resolve at the cost of one extra
  * GET per first-time miss.
  */
@@ -90,9 +89,9 @@ export const createMessageRefCache = (maxSize = 10_000): MessageRefCache => {
  * Monotonic watermark of the latest live message timestamp the producer
  * has dispatched. Lifted out of the producer's closure so a fresh
  * Stream subscription created by an upstream retry inherits the
- * previous run's anchor — without it, the very first
- * BAD_EVENT_QUEUE_ID after reconnect skipped the gap-replay (comms-jnn),
- * which is exactly when the replay matters most (comms-4au). Owned by
+ * previous run's anchor — without it, the first
+ * BAD_EVENT_QUEUE_ID after reconnect would skip the gap-replay,
+ * which is exactly when the replay matters most. Owned by
  * the adapter alongside `MessageRefCache` so its state survives across
  * `events()` calls; `advance` is monotonic so out-of-order timestamps
  * don't roll the watermark backwards.
@@ -120,7 +119,7 @@ export const createWatermarkStore = (): Effect.Effect<WatermarkStore> =>
 export interface EventsConfig {
   readonly http: ZulipHttp
   /**
-   * Human-facing realm origin for narrow permalinks (comms-e7my). The adapter
+   * Human-facing realm origin for narrow permalinks. The adapter
    * resolves it once from its config (public host when a Host-header override
    * is set) and hands it down so every inbound ref carries a clickable URL.
    */
@@ -167,13 +166,13 @@ export interface EventsConfig {
    */
   readonly messageRefCache?: MessageRefCache
   /**
-   * Shared monotonic watermark for the gap-replay anchor (comms-4au).
+   * Shared monotonic watermark for the gap-replay anchor.
    * When supplied, the producer reads its initial value on the first
    * BAD_EVENT_QUEUE_ID and advances it as live messages dispatch.
    * Wiring this at the adapter lets a fresh Stream subscription
-   * created by upstream auto-reconnect (comms-ynb) pick up the
+   * created by upstream auto-reconnect pick up the
    * previous run's watermark — the BAD_EVENT_QUEUE_ID gap-replay
-   * (comms-jnn) then fires on the new subscription's first poll
+   * then fires on the new subscription's first poll
    * instead of skipping it. Omit to fall back to per-run watermark
    * semantics: each Stream subscription builds its own anchor, and a
    * fresh subscription's first BAD_EVENT_QUEUE_ID can't replay
@@ -182,11 +181,11 @@ export interface EventsConfig {
   readonly watermarkStore?: WatermarkStore
   /**
    * Gap-replay callback invoked on BAD_EVENT_QUEUE_ID recovery
-   * (comms-jnn). When set, the producer calls `replay(lastSeenTs)`
+   * When set, the producer calls `replay(lastSeenTs)`
    * before re-registering the events queue, flags each returned
    * event with `replayed: true`, and emits them into the live stream
    * so the consumer sees messages posted during the dead window.
-   * Omit to fall back to pre-jnn silent-reconnect behaviour (messages
+   * Omit to fall back to silent-reconnect behaviour (messages
    * during the gap are lost). The callback is also skipped on the
    * first BAD_EVENT_QUEUE_ID before any live message has surfaced —
    * there is no watermark to anchor the replay window in that case.
@@ -200,9 +199,9 @@ const registerResponseSchema = Schema.Struct({
   last_event_id: Schema.Int,
 })
 
-// The envelope intentionally validates the events array loosely so a
+// The envelope validates the events array loosely so a
 // single shape-violating event cannot fail the whole-batch parse and
-// crash the pump (comms-aod). Per-event envelope validation
+// crash the pump. Per-event envelope validation
 // (`eventEnvelopeSchema` below) runs inside the for-loop where a bad
 // event can be logged and skipped individually.
 const eventsResponseSchema = Schema.Struct({
@@ -477,8 +476,8 @@ const markReplayed = (events: ReadonlyArray<InboundEvent>): ReadonlyArray<Inboun
  * Substrate-reconnect backoff: exponential from 1s, capped at 30s — the
  * delay sequence is 1s, 2s, 4s, 8s, 16s, 30s, 30s, ... `Schedule.either`
  * (a.k.a. `union`) merges the two schedules' intervals by selecting the
- * SHORTER delay (min), so `exponential(1s) ∪ spaced(30s)` yields the cap.
- * `intersect` would select the LONGER delay (max) — a 30s FLOOR — which is
+ * shorter delay (min), so `exponential(1s) ∪ spaced(30s)` yields the cap.
+ * `intersect` would select the longer delay (max) — a 30s floor — which is
  * the wrong policy for reconnect: it would stall every early retry behind a
  * full 30s wait. The cap keeps the bot responsive on transient blips while
  * bounding the poll rate during a prolonged outage.
@@ -506,8 +505,7 @@ const processSingleEvent = (
     // The per-event brand decode (sender / ref / body / ts) now flows
     // through mapMessageEvent's ParseError channel. A malformed channel
     // message is logged+skipped here so a single shape-violating event
-    // can't crash the pump (comms-aod) — the same contract the Either-left
-    // path enforced before the Schema-decode migration.
+    // can't crash the pump.
     return mapMessageEvent(evt, directory, config.boundIdentity, config.permalinkBase).pipe(
       Effect.tap((events) =>
         Effect.sync(() => {
@@ -558,9 +556,8 @@ const processSingleEvent = (
     )
     return resolveTarget.pipe(
       // Only Schema parse errors on the cache-miss /messages response and
-      // the reaction's own brand decode get logged+skipped — that mirrors
-      // the pre-Stream iterator (comms-aod). A ZulipApiError on /messages
-      // bubbles to the outer retry so the substrate's 429/BAD_QUEUE
+      // the reaction's own brand decode get logged+skipped. A ZulipApiError
+      // on /messages bubbles to the outer retry so the substrate's 429/BAD_QUEUE
       // recovery still drives.
       Effect.catchTag('ParseError', (err) =>
         skipWithLog(
@@ -584,12 +581,11 @@ type StepResult = readonly [ReadonlyArray<InboundEvent>, QueueState | undefined]
  *   - `BAD_EVENT_QUEUE_ID` resets the queue to `undefined` so the next
  *     step re-registers. If a watermark and a `replay` callback are
  *     wired, the gap window (since the last live message) is
- *     backfilled with `replayed: true` events before the next register
- *     (comms-jnn).
+ *     backfilled with `replayed: true` events before the next register.
  *   - HTTP 429 sleeps for `retry_after` seconds via `Effect.sleep`
  *     (interruptible by fiber cancellation) and returns an empty chunk
  *     with the queue state unchanged. The next step retries the
- *     long-poll (comms-9wi).
+ *     long-poll.
  *
  * Any other failure — non-recoverable `ZulipApiError`, response-shape
  * `ParseError`, network error from `@effect/platform`'s HttpClient —
@@ -684,7 +680,7 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
           for (const rawEvt of res.events) {
             const envelope = decodeEventEnvelope(rawEvt)
             if (Either.isLeft(envelope)) {
-              // Per-event envelope decode (comms-aod). The events array
+              // Per-event envelope decode. The events array
               // is unwrapped loosely above so a single bad item can't fail
               // the batch — but we still need {id, type} to log+skip and
               // to advance the queue cursor. Without id we can't advance,

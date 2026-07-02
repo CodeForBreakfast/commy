@@ -5,7 +5,7 @@ A per-topic connection runs in persistent mode under
 properties matter:
 
 * **Stable & pure** — the same ``(channel, topic)`` always yields the same
-  name, so a teardown/respawn re-acquires the SAME Zulip user_id (the substrate
+  name, so a teardown/respawn re-acquires the same Zulip user_id (the substrate
   minter is idempotent by name). This is what gives a respawned per-topic
   identity continuity of authorship (e.g. ``edit_message`` on a prior anchor)
   and the persistent-mode recent-window catch-up.
@@ -50,7 +50,7 @@ def deterministic_bot_name(channel: str, topic: str) -> str:
 
 
 def deterministic_listener_name(channel: str) -> str:
-    """The persistent boot-listener identity for ``channel`` (comms-a7j.4).
+    """The persistent boot-listener identity for ``channel``.
 
     Same stability + brand-safety guarantees as ``deterministic_bot_name``, but a
     distinct ``listen-`` prefix and hash domain so the channel-level boot

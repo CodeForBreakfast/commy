@@ -32,7 +32,7 @@ import {
  * Test helper. Constructs a `SessionId` from an 8-char hex prefix so the
  * minted bot name is `cc-<prefix>` (the leading 8 of a UUID are what
  * `composeBotName` slices). All session ids in this suite are UUIDs since
- * the brand demands UUID shape (comms-uqf).
+ * the brand demands UUID shape.
  */
 const sid = (hex8: string): SessionId => {
   const parsed = parseSessionId(`${hex8}-0000-0000-0000-000000000000`)
@@ -113,7 +113,7 @@ const buildAdapterSpy = (): AdapterSpy => {
  * Run an Effect with the deterministic `TestClock` provided. `ensureBoundFor`
  * stamps `lastUsedMs` from `Clock.currentTimeMillis`; under `TestClock` that
  * starts at 0 and only advances on `TestClock.adjust`, so the idle-sweep
- * assertions are reproducible without an injected `now` lambda (comms-1jl).
+ * assertions are reproducible without an injected `now` lambda.
  */
 const runTest = <A, E>(self: Effect.Effect<A, E>): Promise<A> =>
   Effect.runPromise(self.pipe(Effect.provide(TestContext.TestContext)))
@@ -125,7 +125,7 @@ describe('createSingleIdentityCache (persistent mode)', () => {
         const spy = buildAdapterSpy()
         const ensureBound = yield* createEnsureBound({
           acquire: spy.acquire,
-          name: decodeBotNameSync('assistant-concierge'),
+          name: decodeBotNameSync('myproject-concierge'),
         })
         const cache = createSingleIdentityCache({ ensureBound })
         const a = yield* cache.ensureBoundFor(sid('11111111'))
@@ -134,7 +134,7 @@ describe('createSingleIdentityCache (persistent mode)', () => {
         expect(b).toBe(ensureBound)
         const ra = yield* a()
         const rb = yield* b()
-        expect(spy.acquireCalls).toEqual(['assistant-concierge'])
+        expect(spy.acquireCalls).toEqual(['myproject-concierge'])
         expect(rb).toBe(ra)
       }),
     ))
@@ -145,7 +145,7 @@ describe('createSingleIdentityCache (persistent mode)', () => {
         const spy = buildAdapterSpy()
         const ensureBound = yield* createEnsureBound({
           acquire: spy.acquire,
-          name: decodeBotNameSync('assistant-concierge'),
+          name: decodeBotNameSync('myproject-concierge'),
         })
         const cache = createSingleIdentityCache({ ensureBound })
         expect(yield* cache.ensureBoundFor(undefined)).toBe(ensureBound)
@@ -385,7 +385,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('ensureBoundFor(undefined) returns the unbound stub even when a slot is active (comms-67j: no leak across /clear)', () =>
+  test('ensureBoundFor(undefined) returns the unbound stub even when a slot is active (no leak across /clear)', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -439,7 +439,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('unbound stub rejects with an UnboundEphemeralSession tagged error (comms-spj3.17)', () =>
+  test('unbound stub rejects with an UnboundEphemeralSession tagged error', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -487,7 +487,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('mints cc-<project>-<8> when project is supplied per call (ass-v7b4)', () =>
+  test('mints cc-<project>-<8> when project is supplied per call', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -496,13 +496,13 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
           release: spy.release,
           idleReleaseMs: 60_000,
         })
-        const eb = yield* cache.ensureBoundFor(sid('abcdef12'), slug('assistant'))
+        const eb = yield* cache.ensureBoundFor(sid('abcdef12'), slug('myproject'))
         yield* eb()
-        expect(spy.acquireCalls).toEqual(['cc-assistant-abcdef12'])
+        expect(spy.acquireCalls).toEqual(['cc-myproject-abcdef12'])
       }),
     ))
 
-  test('two sessions in different projects mint two project-prefixed names (ass-v7b4)', () =>
+  test('two sessions in different projects mint two project-prefixed names', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -511,15 +511,15 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
           release: spy.release,
           idleReleaseMs: 60_000,
         })
-        const eb1 = yield* cache.ensureBoundFor(sid('a3a3a3a3'), slug('brewlife'))
+        const eb1 = yield* cache.ensureBoundFor(sid('a3a3a3a3'), slug('myproject-a'))
         yield* eb1()
-        const eb2 = yield* cache.ensureBoundFor(sid('b3b3b3b3'), slug('homelab'))
+        const eb2 = yield* cache.ensureBoundFor(sid('b3b3b3b3'), slug('myproject-b'))
         yield* eb2()
-        expect(spy.acquireCalls).toEqual(['cc-brewlife-a3a3a3a3', 'cc-homelab-b3b3b3b3'])
+        expect(spy.acquireCalls).toEqual(['cc-myproject-a-a3a3a3a3', 'cc-myproject-b-b3b3b3b3'])
       }),
     ))
 
-  test('project on a returning sid is ignored — the slot is named once (ass-v7b4)', () =>
+  test('project on a returning sid is ignored — the slot is named once', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -536,7 +536,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('boundIdentityIds reflects project-prefixed name (ass-v7b4)', () =>
+  test('boundIdentityIds reflects project-prefixed name', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -568,7 +568,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('onAcquire fires after the first successful acquire with the acquired identity (comms-ae4)', () =>
+  test('onAcquire fires after the first successful acquire with the acquired identity', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -590,7 +590,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('onAcquire does not fire when ensureBoundFor returns a cached entry (comms-ae4)', () =>
+  test('onAcquire does not fire when ensureBoundFor returns a cached entry', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -613,7 +613,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('onAcquire fires again on session_id transition after release-then-acquire (comms-ae4)', () =>
+  test('onAcquire fires again on session_id transition after release-then-acquire', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -635,7 +635,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('onAcquire fires after sweepIdle release on re-acquire (comms-ae4)', () =>
+  test('onAcquire fires after sweepIdle release on re-acquire', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -661,7 +661,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('onAcquire does not fire when acquire rejects (comms-ae4)', () =>
+  test('onAcquire does not fire when acquire rejects', () =>
     runTest(
       Effect.gen(function* () {
         let fired = 0
@@ -684,7 +684,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('onAcquire is awaited inline — the acquire result does not return until onAcquire resolves (comms-ae4)', () =>
+  test('onAcquire is awaited inline — the acquire result does not return until onAcquire resolves', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -709,7 +709,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('onAcquire rejection surfaces to the caller and reverts the ensureBound to idle (comms-ae4)', () =>
+  test('onAcquire rejection surfaces to the caller and reverts the ensureBound to idle', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -756,7 +756,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  // ─── onAcquire hook (comms-iyf) ────────────────────────────────────────
+  // ─── onAcquire hook ────────────────────────────────────────────────────
 
   test('onAcquire fires once per fresh slot, receives identity + project', () =>
     runTest(
@@ -794,13 +794,13 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
               calls.push({ name: id.identity.name, project })
             }),
         })
-        const eb1 = yield* cache.ensureBoundFor(sid('a1f1a1f1'), slug('brewlife'))
+        const eb1 = yield* cache.ensureBoundFor(sid('a1f1a1f1'), slug('myproject-a'))
         yield* eb1()
-        const eb2 = yield* cache.ensureBoundFor(sid('21121121'), slug('homelab'))
+        const eb2 = yield* cache.ensureBoundFor(sid('21121121'), slug('myproject-b'))
         yield* eb2()
         expect(calls).toEqual([
-          { name: 'cc-brewlife-a1f1a1f1', project: 'brewlife' },
-          { name: 'cc-homelab-21121121', project: 'homelab' },
+          { name: 'cc-myproject-a-a1f1a1f1', project: 'myproject-a' },
+          { name: 'cc-myproject-b-21121121', project: 'myproject-b' },
         ])
       }),
     ))

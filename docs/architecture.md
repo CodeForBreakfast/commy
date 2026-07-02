@@ -47,9 +47,9 @@ The ports are the seam, so tests sit on one side of them or the other:
 
 - **Above-the-port unit tests** (in `@commy/mcp` — `server.test.ts`,
   `server.integration.test.ts`, tools tests) exercise the driving adapter:
-  bootstrap, identity lifecycle, the event pump, tool dispatch. **They use the
+  bootstrap, identity lifecycle, the event pump, tool dispatch. They use the
   in-memory adapter (or a hand-rolled port fake) only — never the real Zulip
-  adapter.** A boot or tool-dispatch test that needs the real Zulip adapter to
+  adapter. A boot or tool-dispatch test that needs the real Zulip adapter to
   pass is testing the wrong thing: the contract suite already owns Zulip's
   behaviour, so above the port we depend on the *contract*, served by the fast
   in-memory double. This keeps these tests realm-free, fast, and immune to

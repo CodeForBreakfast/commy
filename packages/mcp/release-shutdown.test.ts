@@ -3,10 +3,10 @@ import { captureLogger } from '@commy/core/logging'
 import { Effect } from 'effect'
 import { raceReleaseAgainstTimeout } from './release-shutdown.ts'
 
-// `raceReleaseAgainstTimeout` is the release-on-shutdown finalizer body
-// (comms-spj3.39). The surrounding orchestration it used to carry — the
+// `raceReleaseAgainstTimeout` is the release-on-shutdown finalizer body.
+// The surrounding orchestration — the
 // acquisition gate, cancel-pump-then-release-then-close ordering, exit
-// code, and the no-unsubscribe negative requirement — now lives in the
+// code, and the no-unsubscribe negative requirement — lives in the
 // program scope's finalizer wiring and is covered end-to-end by the
 // Type-4 cron-shape integration tests. These tests pin the three release
 // outcomes the helper itself owns.

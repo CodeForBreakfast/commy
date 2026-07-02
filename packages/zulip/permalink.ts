@@ -1,7 +1,7 @@
 /**
  * Zulip narrow-URL construction. Substrate-specific URL formatting lives in
- * the adapter (the bead's principle: callers should never hand-assemble a
- * narrow URL), so every ref the Zulip adapter hands back can carry a
+ * the adapter (callers don't hand-assemble a narrow URL), so every
+ * ref the Zulip adapter hands back can carry a
  * ready-to-click permalink.
  *
  * The `#narrow/...` fragment is parsed client-side by Zulip's web app, which

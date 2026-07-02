@@ -15,20 +15,20 @@ import { CatchUpError, catchUpAt } from './mentions-catch-up.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 
 /**
- * Boot-time window-bounded catch-up of channel + thread narrows
- * (comms-3wl). Companion to `catchUpMentions` (comms-rxo) which
- * handles the mentions narrow with cursor-bounded semantics.
+ * Boot-time window-bounded catch-up of channel + thread narrows.
+ * Companion to `catchUpMentions` which handles the mentions narrow
+ * with cursor-bounded semantics.
  *
  * Mental model: what would a human do when they returned to the app?
- * Check mentions first (comms-rxo), then skim the channels they care
- * about (this bead). This catch-up reads `windowSeconds` of recent
+ * Check mentions first, then skim the channels they care
+ * about. This catch-up reads `windowSeconds` of recent
  * traffic from each subscribed channel / thread and surfaces it as
  * channel-source events ahead of the live pump, so a persistent bot
  * resuming after downtime sees recent context in its first turn.
  *
- * Implementation choice (the bead left this open): in-process plugin
+ * Implementation choice: in-process plugin
  * boot helper, NOT a SessionStart hook and NOT agent-driven prompt
- * instructions. The mentions catch-up (comms-rxo) chose the same shape
+ * instructions. The mentions catch-up chose the same shape
  * — keeping both halves of the boot-time catch-up in one layer means
  * the dispatch path is uniform (`formatMessage` → `notifier`), the
  * substrate's history API is the only thing each helper needs, and
@@ -36,10 +36,10 @@ import type { SubscribeIntent } from './subscribe-parser.ts'
  * rejected because injecting messages as a system reminder would
  * diverge from the live pump's wire shape; the agent-driven variant
  * was rejected because it would push policy ("which channels to skim,
- * how far back, in what order") into every concierge's prompt.
+ * how far back, in what order") into every bot's prompt.
  *
- * `mentions` intents are intentionally skipped here — comms-rxo's
- * cursor-bounded fetch handles them with the correct semantics
+ * `mentions` intents are intentionally skipped here — the mentions
+ * helper's cursor-bounded fetch handles them with the correct semantics
  * (since-last-seen, not last-N-hours). When both catch-ups run on
  * the same boot, mentions are deduped by route: this helper doesn't
  * fetch them, the mentions helper does.
@@ -53,7 +53,7 @@ import type { SubscribeIntent } from './subscribe-parser.ts'
  * (queue-register-ts, ∞]; those overlap if subscribe registered
  * before catch-up ran). V1 accepts this — narrowing is a follow-up
  * if it shows up as a problem in practice. Same boundary trade-off
- * as comms-rxo.
+ * as the mentions catch-up.
  */
 export interface ChannelsCatchUpDeps {
   readonly intents: ReadonlyArray<SubscribeIntent>

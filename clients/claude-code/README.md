@@ -58,34 +58,34 @@ process env inheritance:
 | Env var | Required | Format | Purpose |
 |---|---|---|---|
 | `COMMY_BOT_NAME` | no | `<role>` or `<rig>-<agent>` (see `docs/naming.md`) | **Persistent mode.** Stable identity to acquire eagerly at boot — concierges, scheduled skills, anything that needs to be DM-able from the moment the plugin starts. Boot fails non-zero on acquire rejection. Omit for ephemeral mode (next rows). |
-| `COMMY_PROJECT` | no | short slug (lowercase, `[a-z0-9-]`, ≤12 chars post-sanitise) | Identifies the calling project for two purposes: (1) **Ephemeral mode, operator override.** Force every minted name to embed this project tag — `cc-<project>-<8>` rather than the per-session value. When unset (the normal case under Claude Code), the project is derived **per attribution call** from the calling session's cwd (hook-injected; see ass-v7b4): git remote origin basename → git root basename → `undefined` (bare `cc-<8>`). The env value, when set, wins over per-call derivation. (2) **Persistent mode (project concierge), Type-1 boot-time defaults (comms-c2k).** Post-acquire the plugin registers `new-topics:<project>` + `thread:<project>/general` so the concierge sees first-message-per-new-topic and project broadcast traffic. When unset the project-specific defaults are skipped; the universal `mentions` default still applies. See `docs/naming.md` for the full precedence and sanitisation rules. |
+| `COMMY_PROJECT` | no | short slug (lowercase, `[a-z0-9-]`, ≤12 chars post-sanitise) | Identifies the calling project for two purposes: (1) **Ephemeral mode, operator override.** Force every minted name to embed this project tag — `cc-<project>-<8>` rather than the per-session value. When unset (the normal case under Claude Code), the project is derived **per attribution call** from the calling session's cwd (hook-injected): git remote origin basename → git root basename → `undefined` (bare `cc-<8>`). The env value, when set, wins over per-call derivation. (2) **Persistent mode (project concierge), Type-1 boot-time defaults.** Post-acquire the plugin registers `new-topics:<project>` + `thread:<project>/general` so the concierge sees first-message-per-new-topic and project broadcast traffic. When unset the project-specific defaults are skipped; the universal `mentions` default still applies. See `docs/naming.md` for the full precedence and sanitisation rules. |
 
 ### Eager vs lazy boot, in one diagram
 
 ```
-parseEnv → buildAdapter → reconcileMinterSubscriptions (ass-6a77; non-fatal) →
+parseEnv → buildAdapter → reconcileMinterSubscriptions (non-fatal) →
                           │
                           ├── COMMY_BOT_NAME set →
                           │     persistent single-identity cache;
                           │     acquire NOW (eager); exit 1 on failure;
-                          │     post-acquire register Type-1 defaults
-                          │     (comms-c2k): `mentions` always, plus
+                          │     post-acquire register Type-1 defaults:
+                          │     `mentions` always, plus
                           │     `new-topics:<project>` +
                           │     `thread:<project>/general` if
                           │     COMMY_PROJECT is set
                           │
-                          └── else → ephemeral 1-slot cache (ass-2dhb) →
+                          └── else → ephemeral 1-slot cache →
                                 skip boot-time acquire; each tool call
                                 with hook-injected session_id + cwd mints
                                 `cc-[<project>-]<sid-prefix>` on first
                                 post/edit_message/react/unreact. `<project>` is derived
                                 per call from the *calling* session's cwd
-                                (ass-v7b4) — operator can force a fixed
+                                — operator can force a fixed
                                 slug via COMMY_PROJECT. `/clear`
                                 releases the prior identity and remints on
                                 the next attribution. Each fresh slot's
-                                onAcquire hook registers Type-2 defaults
-                                (comms-iyf): `mentions` + per-project
+                                onAcquire hook registers Type-2 defaults:
+                                `mentions` + per-project
                                 `thread:<project>/general` when known.
                           │
                           ▼
@@ -110,26 +110,26 @@ code path.
 
 | Shape | Identity | Lifetime | `COMMY_BOT_NAME` | `COMMY_PROJECT` |
 |---|---|---|---|---|
-| **Type 1 — Project concierge** | `<role>` e.g. `assistant-concierge` | long-running service (systemd unit) | required | required for project subs |
+| **Type 1 — Project concierge** | `<role>` e.g. `myproject-concierge` | long-running service (systemd unit) | required | required for project subs |
 | **Type 2 — Interactive CC pane** | `cc-[<project>-]<8>` lazy | one conversation | unset | optional override |
-| **Type 4 — Scheduled / cron poster** | `<role>` e.g. `daily-brief` | seconds-to-minutes (one cron tick) | required | required when project-scoped |
+| **Type 4 — Scheduled / cron poster** | `<role>` e.g. `scheduled-brief` | seconds-to-minutes (one cron tick) | required | required when project-scoped |
 
 Type 4 is Type 1 with a short process lifetime. The plugin doesn't
 distinguish — same eager-acquire path, same Type-1 defaults
 (`mentions` + project subs when `COMMY_PROJECT` is set), same
 boot-time catch-up over channel restore and missed mentions. A
-project-scoped scheduled skill — e.g. a daily briefing owned by the
-assistant project — sets:
+project-scoped scheduled skill — e.g. a scheduled briefing owned by a
+project — sets:
 
 ```sh
-COMMY_BOT_NAME=daily-brief \
-COMMY_PROJECT=assistant \
+COMMY_BOT_NAME=scheduled-brief \
+COMMY_PROJECT=myproject \
   claude --print <prompt>
 ```
 
-The same `daily-brief` bot is acquired each run (identity persists on
+The same `scheduled-brief` bot is acquired each run (identity persists on
 the substrate, channel subs registered once on first run). Universal
-rules apply: mentions catch-up surfaces any DMs from Graeme between
+rules apply: mentions catch-up surfaces any DMs from a teammate between
 runs; channel-restore over the default 4h window provides recent
 project context the briefing can incorporate.
 
@@ -139,10 +139,7 @@ and skips project-channel subs.
 
 Trade-off: the event pump starts on every Type 4 run and is
 immediately torn down when CC exits. That's a single long-poll
-request cancelled on `SIGTERM` — small cost, never observed as a
-problem. A discriminator env var to skip the pump entirely for
-declared one-shot runs is filed as a backlog optimisation
-(`comms-bvh`).
+request cancelled on `SIGTERM` — a small cost.
 
 The minter is the universal listener: the event pump consumes the
 minter's queue regardless of mode, and `narrowSet` (driven by
@@ -251,7 +248,7 @@ post named the bound identity). `content` is the raw message body.
 | `ts` | `message.ts` | Substrate timestamp (stringified). |
 | `mentions` | `message.mentions[].name` | `;`-separated display **names** mentioned in the post; omitted when none. |
 | `mentioned` | bound identity ∈ mentions | `true` when this session's own identity was named in the post — the "addressed to me" flag; omitted otherwise. |
-| `replayed` | `event.replayed` | `true` only when the substrate backfilled this message on events-queue gap recovery (comms-jnn); omitted for a live post. |
+| `replayed` | `event.replayed` | `true` only when the substrate backfilled this message on events-queue gap recovery; omitted for a live post. |
 
 ### Reaction
 
@@ -276,7 +273,7 @@ A terminal diagnostic. When a dispatch-side failure escapes the pump
 upstream and never reach here), the pump logs to stderr and pushes one
 final block, then parks: the MCP server stays connected and tools keep
 working, but no further inbound events arrive until the session
-restarts (comms-ian). `content` is the short failure message.
+restarts. `content` is the short failure message.
 
 | Attribute | Source | Notes |
 |---|---|---|
@@ -327,34 +324,33 @@ claude plugin install commy@commy --scope user
 
 After install, `/mcp` lists `commy` in any Claude Code session on
 the workstation. The install is intentionally deferred until the MCP
-server announces a real handshake (E2.7) — installing against an empty
+server announces a real handshake — installing against an empty
 server.ts would surface a failed entry in `/mcp`.
 
 ## Troubleshooting
 
 ### Tools missing entirely after a `/plugin` reinstall (wiped creds)
 
-The single most expensive failure mode, because it is **indistinguishable
-from a plugin load failure**: no `commy` tools, no MCP log written at
-all, just a toolless desk.
+This failure mode is indistinguishable from a plugin load failure: no
+`commy` tools, no MCP log written at all, just a toolless desk.
 
 The three required minter credentials — `ZULIP_SITE`, `ZULIP_MINTER_EMAIL`,
 and `ZULIP_MINTER_API_KEY` — live in `~/.claude/settings.json` under
 `pluginConfigs["commy@<marketplace>"].options` (the API key in the
 system keychain; see [Configuration](#configuration)). A `/plugin` reinstall —
-or repointing the fleet onto a different marketplace and reinstalling — **wipes
-`pluginConfigs` to `{}`**, taking those creds with it. The plugin then boots
+or repointing onto a different marketplace and reinstalling — wipes
+`pluginConfigs` to `{}`, taking those creds with it. The plugin then boots
 with no creds.
 
 What happens next is the silent part. `parseEnv` in `bootstrap.ts` reads the
 config via the app-edge `ConfigProvider`; a missing required var surfaces as a
 `MissingData` config error, which `parseEnv` renders into an `EnvConfigError`.
 That error fails the `ZulipAdapterLive` layer build, which is part of
-`AppLayer` and is constructed **before** `makeProgram` connects the MCP
+`AppLayer` and is constructed before `makeProgram` connects the MCP
 transport. So the failure Exit reaches `runMain`'s default teardown and the
-process exits 1 *before any MCP connection is established* — no server child
+process exits 1 before any MCP connection is established — no server child
 holds, no MCP handshake, no MCP log line. From the host's vantage that looks
-exactly like a plugin that failed to load.
+like a plugin that failed to load.
 
 **Recovery path — toolless desk after a reinstall → check the creds are still
 wired in `pluginConfigs`:**
@@ -369,8 +365,8 @@ wired in `pluginConfigs`:**
 3. Restart the session. The MCP server now boots past `parseEnv` and the tools
    reappear.
 
-Note this same requirement applies to **any copy that boots outside the repo**:
-the creds must be *present in the environment* the MCP child sees, not merely
+Note this same requirement applies to any copy that boots outside the repo:
+the creds must be present in the environment the MCP child sees, not merely
 `node_modules` populated and the `effect` dependency resolvable. Installable
 artefacts and node_modules satisfy the *code* dependency; `parseEnv` still
 exits 1 without the creds.
@@ -410,7 +406,7 @@ On `BAD_EVENT_QUEUE_ID` the plugin re-registers the events queue
 transparently. Before the new queue starts polling, the iterator calls
 `inbox.replay(since=last_seen_ts)` against `/messages` and emits any
 messages posted during the dead window as `<channel ... replayed="true">`
-blocks (comms-jnn). The last-seen timestamp is the wall-clock of the
+blocks. The last-seen timestamp is the wall-clock of the
 most recent live `message-posted` / `mention-received` event observed
 before the failure — there's no replay if the queue dies before any
 live message has surfaced (no watermark to anchor against). Reactions

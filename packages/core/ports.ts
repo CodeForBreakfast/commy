@@ -1,7 +1,7 @@
 /**
  * Hexagonal port definitions for agent communications.
  *
- * Spec: ass-148i. The core holds these interfaces; substrate-specific work
+ * The core holds these interfaces; substrate-specific work
  * lives in driven adapters that implement them, and Claude-Code-specific
  * work lives in driving adapters that expose them as MCP tools.
  *
@@ -46,8 +46,7 @@ export const decodeTimestamp = Schema.decodeUnknown(TimestampSchema)
 
 /**
  * Message body text. Non-empty. Adapters mint via `decodeMessageBody` at the
- * parse boundary; driving adapters mint at the MCP args boundary. See
- * comms-uqf for the worked example of parse-don't-validate via brands.
+ * parse boundary; driving adapters mint at the MCP args boundary.
  */
 export const MessageBodySchema = Schema.NonEmptyString.pipe(Schema.brand('MessageBody'))
 export type MessageBody = typeof MessageBodySchema.Type
@@ -56,7 +55,6 @@ export const decodeMessageBody = Schema.decodeUnknown(MessageBodySchema)
 /**
  * User-surface display name for an identity (bot or human). Non-empty.
  * Adapters mint at the parse boundary (e.g. from Zulip's `full_name`).
- * See comms-uqf for the worked example of parse-don't-validate via brands.
  */
 export const DisplayNameSchema = Schema.NonEmptyString.pipe(Schema.brand('DisplayName'))
 export type DisplayName = typeof DisplayNameSchema.Type
@@ -67,7 +65,7 @@ export const decodeDisplayName = Schema.decodeUnknown(DisplayNameSchema)
  * "this value came through a known mint point" — either `composeBotName`
  * (ephemeral path) or `parseBotName` (env-var path). Without the brand,
  * a bare string from any source could flow into `IdentityPort.acquire`
- * unchecked. See comms-0zo for the full pipeline audit.
+ * unchecked.
  *
  * The type lives in core (not bootstrap) because `IdentityPort.acquire`
  * needs it in its signature and core cannot import from the plugin layer.
@@ -80,8 +78,7 @@ export const decodeBotName = Schema.decodeUnknown(BotNameSchema)
 /**
  * Emoji shortcode as the substrate accepts it (no surrounding colons —
  * `smile`, not `:smile:`). The brand carries the local invariant "we ran
- * our validator"; the substrate may still reject downstream. See comms-uqf
- * for the worked example of parse-don't-validate via brands.
+ * our validator"; the substrate may still reject downstream.
  *
  * Bare shortcode invariant: a non-empty string with neither a leading nor a
  * trailing colon (`smile`, not `:smile:`). Single-character shortcodes and
@@ -97,12 +94,12 @@ export type Emoji = typeof EmojiSchema.Type
 export const decodeEmoji = Schema.decodeUnknown(EmojiSchema)
 
 /**
- * Synchronous brand decoders for TEST FIXTURES (comms-spj3.35).
+ * Synchronous brand decoders for test fixtures.
  *
  * In test setup a fixed literal that fails to decode is a programmer
  * error, so `Schema.decodeSync`'s throw is the legitimate fatal case —
- * fixtures need not thread a ParseError through Effect. PRODUCTION code
- * must use the Effect-returning `decode*` decoders above, never these.
+ * fixtures need not thread a ParseError through Effect. Production code
+ * uses the Effect-returning `decode*` decoders above, not these.
  */
 export const decodeIdentityIdSync = Schema.decodeSync(IdentityIdSchema)
 export const decodeChannelIdSync = Schema.decodeSync(ChannelIdSchema)
@@ -127,7 +124,7 @@ export interface Identity {
 
 /**
  * `permalink` carries a ready-to-click substrate URL for a ref the substrate
- * returns, so a caller never hand-assembles one (comms-e7my). The principle is
+ * returns, so a caller never hand-assembles one. The principle is
  * maximal: every ref the substrate hands back that has a permalink exposes it —
  * message, channel, and topic alike. Optional because not every substrate (or
  * every code path) has a URL to offer; the in-memory adapter synthesises stable
@@ -184,7 +181,7 @@ export interface Range {
 
 export interface PostOpts {
   /**
-   * Identities to notify. Metadata-only: adapters MUST NOT mutate
+   * Identities to notify. Metadata-only: adapters do not mutate
    * `body` based on this list. Where a substrate needs literal mention
    * markup inside the message text to trigger a notification (Zulip's
    * `@**name**`, Discord's `<@id>`), the caller writes that markup
@@ -247,7 +244,7 @@ export type InboundEvent =
       readonly message: Message
       /**
        * Set when the event was synthesised by the substrate's gap-replay path
-       * (e.g. Zulip events-queue expiry recovery in comms-jnn) rather than
+       * (e.g. Zulip events-queue expiry recovery) rather than
        * observed live. Downstream renderers surface this as a `replayed`
        * attribute on the channel block so consumers can tell a backfilled
        * message from a fresh one. Absent means live.
@@ -290,9 +287,9 @@ export interface AcquiredIdentity {
  * Caller-supplied intent for `IdentityPort.release`. `persistent` flags an
  * identity meant to outlive the session — pinned via `COMMY_BOT_NAME`
  * rather than minted as an ephemeral `cc-*` seat. Substrates that deactivate
- * on release (Zulip) MUST skip deactivation for a persistent identity, so a
+ * on release (Zulip) skip deactivation for a persistent identity, so a
  * later re-acquire is an owner-permitted regenerate rather than an admin-only
- * reactivate of a bot the minter deactivated itself (comms-ch7). Omitted /
+ * reactivate of a bot the minter deactivated itself. Omitted /
  * `false` is the ephemeral default: deactivate as usual.
  */
 export interface ReleaseOpts {
@@ -342,11 +339,11 @@ export interface IdentityPort {
    * a no-op, never fails.
    *
    * Pass `{ persistent: true }` for an `COMMY_BOT_NAME`-pinned
-   * identity so the substrate skips deactivation (comms-ch7): a
+   * identity so the substrate skips deactivation: a
    * deactivated bot's only path back is an admin-only reactivate, which
    * wedges a Member-rights minter. Leaving a persistent bot active keeps
    * re-acquire on the owner-permitted regenerate path. Omitted / `false`
-   * is the ephemeral default and deactivates as before.
+   * is the ephemeral default and deactivates as usual.
    */
   release(opts?: ReleaseOpts): Effect.Effect<void, never>
   resolve(name: string): Effect.Effect<Option.Option<Identity>, IdentityError>
@@ -380,7 +377,7 @@ export interface MessagePublisher {
 export interface MessageInbox {
   /**
    * Declare interest in a subscription target. When the returned
-   * Effect resolves, a subsequent `events()` subscription MUST observe
+   * Effect resolves, a subsequent `events()` subscription observes
    * matching events posted from that moment onward — adapters are
    * responsible for completing whatever substrate-level priming is
    * needed before resolving (e.g. Zulip's `POST /register` to open
@@ -433,7 +430,7 @@ export interface HistoryReader {
     opts?: { limit?: number },
   ): Effect.Effect<ReadonlyArray<RecentThread>, HistoryError>
   /**
-   * Resolve a clickable substrate permalink for a message id (comms-e7my) —
+   * Resolve a clickable substrate permalink for a message id —
    * the id-only case where the caller doesn't hold a ref. URL construction
    * stays in the adapter. With a `hint` the adapter resolves the channel and
    * builds the link from channel + topic + id without locating the message;
@@ -450,9 +447,7 @@ export interface HistoryReader {
  * Failure surface for the Effect-returning `Directory` reads. The Zulip
  * adapter mints this when the backing substrate call fails, carrying the
  * underlying error as `cause`; the in-memory adapter never produces it.
- * `operation` names the port method that failed — every `Directory`
- * method now returns Effect, `presence` having crossed over first
- * (comms-4n1).
+ * `operation` names the port method that failed.
  */
 export class DirectoryError extends Data.TaggedError('DirectoryError')<{
   readonly operation: 'presence' | 'listAgents' | 'listHumans' | 'listChannels'
@@ -470,8 +465,7 @@ export interface Directory {
   /**
    * The presence read recovers the "user has no presence record → offline"
    * case declaratively at the adapter and surfaces any other substrate
-   * failure as a typed `DirectoryError`; it was the first Directory method
-   * to cross from `Promise` to `Effect` (comms-4n1).
+   * failure as a typed `DirectoryError`.
    */
   presence(identity: Identity): Effect.Effect<Presence, DirectoryError>
 }
@@ -480,7 +474,7 @@ export interface Directory {
  * Static, substrate-derived properties of an adapter's message-ordering
  * model that a consumer must adapt to. Not behaviour — these are facts about
  * the substrate the ports can't make uniform, surfaced so the same code
- * (tests AND production) reads them rather than branching on a substrate name.
+ * (tests and production) reads them rather than branching on a substrate name.
  * Deliberately minimal: one field per real consumer, never a junk drawer of
  * substrate flags.
  */

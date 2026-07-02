@@ -1,4 +1,4 @@
-"""Receive-path tests for the commy Hermes adapter (comms-a7j.2).
+"""Receive-path tests for the commy Hermes adapter.
 
 Drives the real routing/dedup path with no mocks of that logic: a
 ``claude/channel`` notification frame goes through
@@ -62,7 +62,7 @@ def _frame(content: str = "hello from the topic", **overrides) -> dict:
     """
     meta = {
         "channel_id": "7",
-        "channel_name": "epr-backend",
+        "channel_name": "myproject",
         "thread": "standup",
         "message_id": "100",
         "sender_id": "u-alice",
@@ -89,11 +89,11 @@ def test_notification_yields_single_handle_message_with_content_and_meta():
     assert event.message_type == MessageType.TEXT
     assert event.message_id == "100"
     # meta survives as accessible provenance
-    assert event.raw_message["channel_name"] == "epr-backend"
+    assert event.raw_message["channel_name"] == "myproject"
     assert event.raw_message["sender_id"] == "u-alice"
     # source is routed from meta
     assert event.source.platform == Platform(PLATFORM_NAME)
-    assert event.source.chat_id == "epr-backend"
+    assert event.source.chat_id == "myproject"
     assert event.source.thread_id == "standup"
     assert event.source.user_id == "u-alice"
 
@@ -116,7 +116,7 @@ def test_distinct_message_ids_both_delivered():
 
 
 def test_thread_less_frame_is_ignored():
-    # Policy (comms-a7j.3): a top-level post (no `thread`) carries no natural
+    # Policy: a top-level post (no `thread`) carries no natural
     # session key — Hermes keys on (channel, topic). By the substrate convention
     # "top-level = terse pings only; substantive work goes in a topic", such a
     # frame is not agent-actionable, so it is dropped before handle_message
@@ -141,13 +141,13 @@ def _key(event: MessageEvent) -> str:
 
 def test_channel_thread_maps_to_expected_session_key():
     adapter = _make_adapter()
-    _deliver(adapter, _frame(channel_name="epr-backend", thread="standup"))
+    _deliver(adapter, _frame(channel_name="myproject", thread="standup"))
 
-    assert _key(adapter.handled[0]) == "agent:main:commy:thread:epr-backend:standup"
+    assert _key(adapter.handled[0]) == "agent:main:commy:thread:myproject:standup"
 
 
 def test_same_channel_thread_different_senders_share_session_key():
-    # The routing key is (channel, thread), NOT the sender: two agents posting
+    # The routing key is (channel, thread), not the sender: two agents posting
     # in one topic share one Hermes session.
     adapter = _make_adapter()
     _deliver(adapter, _frame(message_id="m1", sender_id="u-alice"))
@@ -155,7 +155,7 @@ def test_same_channel_thread_different_senders_share_session_key():
 
     keys = {_key(e) for e in adapter.handled}
     assert len(adapter.handled) == 2
-    assert keys == {"agent:main:commy:thread:epr-backend:standup"}
+    assert keys == {"agent:main:commy:thread:myproject:standup"}
 
 
 def test_catchup_live_window_overlap_deduped():

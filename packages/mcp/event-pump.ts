@@ -64,15 +64,15 @@ export interface EventPumpDeps {
    * returned by `registerTools` so `presence` / `post` / `react` can
    * resolve ids that were only ever seen via a notification —
    * without this, those tools throw `UnknownIdentity` for ids that
-   * never came through `current_identity` / `resolve` / `list_*`
-   * (comms-lox). Invoked after the narrow filter and self-echo
+   * never came through `current_identity` / `resolve` / `list_*`.
+   * Invoked after the narrow filter and self-echo
    * guard, so cached identities mirror what the consumer actually
    * sees in notifications.
    */
   readonly rememberIdentity?: (identity: Identity) => void
   /**
    * Optional sink invoked with the timestamp of each delivered
-   * `mention-received` event (comms-rxo). Production wires this to
+   * `mention-received` event. Production wires this to
    * the cursor store so the per-identity "have-seen-up-to" mark
    * advances forward, letting the next resume narrow its replay to
    * only-actually-missed mentions. Invoked after the narrow filter
@@ -80,7 +80,7 @@ export interface EventPumpDeps {
    *
    * Returns an Effect the pump sequences inside its dispatch loop, so the
    * cursor advance composes into the pump rather than being run at an
-   * internal seam (comms-2y4.6). The error channel is `void`: a cursor
+   * internal seam. The error channel is `void`: a cursor
    * write is a best-effort monotonic advance, so the provider swallows its
    * own failures rather than failing the pump.
    */
@@ -92,7 +92,7 @@ export interface EventPumpHandle {
    * Effect that completes when the underlying stream ends naturally or
    * the fiber is interrupted. Run via `Effect.runPromise` at the
    * application edge (production: server.ts main; tests: at the test
-   * boundary until comms-30i lifts the test suite).
+   * boundary).
    */
   readonly done: Effect.Effect<void>
   /**
@@ -130,7 +130,7 @@ const identitiesIn = (event: InboundEvent): ReadonlyArray<Identity> =>
   )
 
 /**
- * Self-echo guard (comms-vkx). The substrate's events queue replays
+ * Self-echo guard. The substrate's events queue replays
  * the bot's own posts and reactions back to it — useful to no
  * subscriber and forces every consumer to reimplement the same
  * filter. Drop here so the inbound stream contains only events the
@@ -175,7 +175,7 @@ const renderReaction = (
   )
 
 /**
- * Bounded retention for the message-delivery dedup log (comms-oyy). A
+ * Bounded retention for the message-delivery dedup log. A
  * single Zulip mention surfaces as both `message-posted` and
  * `mention-received` from the adapter (`messageToInboundEvents` in
  * `adapters/zulip/events.ts`) — the consumer should still see one
@@ -211,7 +211,7 @@ const recordMessageDelivery = (
  * Dispatch-side failure (notifier throw, formatter throw,
  * `rememberIdentity` throw). Escapes `Stream.runForEach`
  * and is caught at the outer `Effect.catchTag` to drive the
- * fatal-park flow (comms-ian) — log + sticky error block + wait for
+ * fatal-park flow — log + sticky error block + wait for
  * cancel before resolving `done`.
  */
 class DispatchFailure extends Data.TaggedError('DispatchFailure')<{
@@ -238,7 +238,7 @@ class DispatchFailure extends Data.TaggedError('DispatchFailure')<{
  * by construction, so the pump only has to handle dispatch-side
  * failures: notifier throw, formatter throw, `rememberIdentity`
  * throw. Those escape `Stream.runForEach` as a
- * `DispatchFailure` and drive the fatal-park flow (comms-ian).
+ * `DispatchFailure` and drive the fatal-park flow.
  * `onMention` returns an `Effect<void>` the pump sequences — its own
  * error channel is `void`, so a cursor-write failure the provider
  * already swallowed cannot fail the pump:
@@ -323,27 +323,27 @@ export const startEventPump = (deps: EventPumpDeps): Effect.Effect<EventPumpHand
  * dual-emitting each payload as two notifications carrying the same
  * `{ content, meta }` frame:
  *
- * The two carriers DIVERGE by design (comms-dtcm): each host renders exactly
+ * The two carriers diverge by design: each host renders exactly
  * one of them, so the agent-display carrier can drop fields the machine carrier
  * keeps without starving any consumer.
  *
  * - `notifications/claude/channel` — the Claude-Code-host convention. The CC
  *   host (and the Discord plugin, against the same capability) wraps the params
  *   into a `<channel source="commy" {meta}>{content}</channel>` block, so
- *   its ENTIRE meta lands in the agent's turn. The bare numeric identity ids
+ *   its entire meta lands in the agent's turn. The bare numeric identity ids
  *   (`sender_id`, reaction `by_id`) are noise there — they collide with the
  *   equally-numeric `message_id` and tempt agents to quote a number instead of
  *   a name — so this carrier omits `IDENTITY_ID_META_KEYS`. Sender/reactor are
  *   surfaced by name only.
  * - `notifications/message` — the MCP-standard `LoggingMessageNotification`,
- *   the host-neutral carrier any standards-compliant MCP client can render
- *   (comms-bb7.1, decision recorded in comms-di3). Its params MUST satisfy the
+ *   the host-neutral carrier any standards-compliant MCP client can render.
+ *   Its params must satisfy the
  *   SDK's `LoggingMessageNotificationParamsSchema` (`level` required, `data`
  *   carries the payload), so the `{ content, meta }` frame is nested under
  *   `data` rather than placed at the params root — a raw frame would fail
  *   validation in the very clients this carrier targets. `logger` names the
  *   emitter, the neutral analogue of the CC host's `source="commy"`.
- *   This carrier keeps the FULL meta, including the identity ids machine
+ *   This carrier keeps the full meta, including the identity ids machine
  *   consumers key on (Hermes `SessionSource.user_id`).
  */
 export const channelNotifier =

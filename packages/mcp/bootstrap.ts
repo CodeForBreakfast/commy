@@ -40,31 +40,27 @@ const envConfigError = (issues: ReadonlyArray<string>): EnvConfigError =>
 
 declare const ProjectSlugBrand: unique symbol
 /**
- * Sanitised project slug (comms-tud). Brand carries the invariant "we ran
+ * Sanitised project slug. Brand carries the invariant "we ran
  * `sanitiseProjectSlug`" — lowercase ASCII letters, digits, and `-`; starts
  * with a letter; capped at 12 chars. The single mint point is
  * `sanitiseProjectSlug`. Without the brand, an unsanitised string from
  * `COMMY_PROJECT` could flow through `composeBotName` and mint a
  * name that exceeds the 24-char budget or contains invalid characters.
- * See comms-uqf for the worked example of parse-don't-validate via brands.
  */
 export type ProjectSlug = string & { readonly [ProjectSlugBrand]: never }
 
 /**
- * Per-conversation session identifier (comms-uqf). Brand fences off the
+ * Per-conversation session identifier. Brand fences off the
  * `string` channel: only `parseSessionId` can mint one, and only from a
  * UUID-shaped raw value. Without the brand, an unvalidated string from
  * `args['session_id']` could flow all the way into `composeBotName` and
- * mint a malformed `cc-<project>-<garbage>` identity — which is exactly
- * what happened when a missing PreToolUse hook left a non-CC client's
- * `session_id` arg in place (see comms-uqf root-cause notes).
+ * mint a malformed `cc-<project>-<garbage>` identity.
  *
  * UUID-shape is the tightening: Claude Code's `CLAUDE_CODE_SESSION_ID`
  * is a UUID, so the hook-injected path always passes; non-CC MCP clients
  * must supply a UUID (e.g. via `crypto.randomUUID()`), which is a small
  * ask in exchange for making malformed identities unrepresentable
- * downstream. `Schema.UUID`'s built-in regex is byte-equivalent to the
- * old hand-rolled `UUID_RE` (both case-insensitive, anchored).
+ * downstream.
  */
 const SessionIdSchema = Schema.UUID.pipe(Schema.brand('SessionId'))
 export type SessionId = typeof SessionIdSchema.Type
@@ -101,7 +97,7 @@ export interface ParsedEnv {
   readonly minterApiKey: Redacted.Redacted<ApiKeyType>
   readonly botName?: BotName
   /**
-   * Attach mode (comms-9usb). Present when both `COMMY_BOT_NAME` and
+   * Attach mode. Present when both `COMMY_BOT_NAME` and
    * `COMMY_BOT_API_KEY` are set: the server binds the named persona using the
    * supplied stable key (no regenerate), letting many sessions share one
    * identity. The key is `Redacted` so it never logs.
@@ -115,7 +111,7 @@ export interface ParsedEnv {
   readonly project?: ProjectSlug
   /**
    * Window (in seconds) for the boot-time channel/thread catch-up
-   * applied on a persistent-bot restart (comms-3wl). When unset the
+   * applied on a persistent-bot restart. When unset the
    * server applies a default; set to 0 to disable the catch-up.
    */
   readonly catchupWindowSeconds?: number
@@ -129,7 +125,7 @@ const placeholderMessage = (key: string, raw?: string): string =>
   `the host did not expand it. ` +
   `Claude Code only substitutes \${user_config.X} (and \${CLAUDE_PLUGIN_ROOT} in args) ` +
   `in .mcp.json; host-env vars like \${CLAUDE_CODE_SESSION_ID} must be inherited from ` +
-  `the parent environment instead. See ass-ukz6 for context.`
+  `the parent environment instead.`
 
 /**
  * A host-env placeholder the host failed to expand is a genuine misconfig:
@@ -160,7 +156,7 @@ const renderConfigError = (error: ConfigError.ConfigError): ReadonlyArray<string
 
 /**
  * Required brand field: read the raw string under `key`, reject an
- * unsubstituted host-env placeholder, then decode through the FOUNDATION brand
+ * unsubstituted host-env placeholder, then decode through the foundation brand
  * schema. A missing key surfaces as `MissingData`; a malformed value as
  * `InvalidData` carrying the schema's formatted message under `key`.
  */
@@ -254,7 +250,7 @@ const optionalNonNegativeInt = (key: string): Config.Config<Option.Option<number
 /**
  * `CLAUDE_CODE_SESSION_ID` is a host-env var (not `userConfig`): empty or
  * unset is `None`, an unsubstituted placeholder is a misconfig, and a present
- * value must be UUID-shaped (the `SessionId` brand invariant, comms-uqf).
+ * value must be UUID-shaped (the `SessionId` brand invariant).
  */
 const optionalSessionId = (key: string): Config.Config<Option.Option<SessionId>> =>
   Config.option(
@@ -276,7 +272,7 @@ const optionalSessionId = (key: string): Config.Config<Option.Option<SessionId>>
 /**
  * `COMMY_BOT_NAME` must be substrate-safe (lowercase ASCII, digits, dashes,
  * underscores; starts with a letter; max 40 chars) — the `BotName` brand
- * invariant (comms-0zo).
+ * invariant.
  */
 const optionalBotName = (key: string): Config.Config<Option.Option<BotName>> =>
   optionalNonEmpty(key).pipe(
@@ -295,7 +291,7 @@ const optionalBotName = (key: string): Config.Config<Option.Option<BotName>> =>
   )
 
 /**
- * Optional, `Redacted`-wrapped api key under `key` (attach mode, comms-9usb).
+ * Optional, `Redacted`-wrapped api key under `key` (attach mode).
  * Missing ⇒ `None`; empty / placeholder / malformed ⇒ `InvalidData`, mirroring
  * `optionalBotName`. The supplied secret is masked the same way the minter key
  * is, so it never lands in a log line.
@@ -388,7 +384,7 @@ export const parseEnv: Effect.Effect<ParsedEnv, EnvConfigError> = envConfig.pipe
 )
 
 /**
- * Per ass-j3i8 / ass-js5u: project slugs are lowercase ASCII letters,
+ * Project slugs are lowercase ASCII letters,
  * digits, and `-`; start with a letter; capped at 12 chars (so that
  * `cc-<project>-<8>` fits the 24-char overall budget). Returns the
  * sanitised slug, or `Option.none()` if the input collapses to something
@@ -414,7 +410,7 @@ export const sanitiseProjectSlug = (raw: string): Option.Option<ProjectSlug> => 
  *   (assumed already sanitised — call `sanitiseProjectSlug` first).
  * - `cc-<first-8-of-sessionId>` when `project` is undefined.
  *
- * `sessionId` is the branded `SessionId` type (comms-uqf): only
+ * `sessionId` is the branded `SessionId` type: only
  * `parseSessionId` can mint one, and only from a UUID-shaped raw
  * value. UUIDs are 36 chars with hex/dashes — the first-8 slice is
  * always 8 hex chars, so the resulting suffix can never carry an
@@ -429,10 +425,6 @@ export const composeBotName = (args: {
   return decodeBotNameSync(`cc-${args.project}-${suffix}`)
 }
 
-/**
- * Git context for a cwd, as needed by `deriveProject`. The default
- * implementation shells out to `git -C <cwd>`; tests inject a fake.
- */
 /**
  * Git context for a cwd, modelled as a tagged union so the
  * gitRoot-present-iff-inRepo invariant is structural rather than
@@ -472,13 +464,13 @@ const basename = (path: string): string => {
 }
 
 /**
- * Hybrid derivation of the project slug (ass-js5u). Precedence:
+ * Hybrid derivation of the project slug. Precedence:
  *   1. `COMMY_PROJECT` env var (most reliable, opted-in per
  *      devshell / `.envrc`).
  *   2. Git remote origin basename (stable across worktree paths,
  *      misses non-repo projects).
  *   3. Git root basename (covers local-only repos; better than cwd
- *      basename, which would mis-identify `~/assistant/scripts/` as
+ *      basename, which would mis-identify `~/myproject/scripts/` as
  *      `scripts`).
  *   4. `undefined` — non-project cwds (`/tmp`, `$HOME`) fall through
  *      to bare `cc-<8>`.
@@ -514,8 +506,7 @@ export const deriveProject = (
  * executor. A non-zero git exit (e.g. not a repo, no origin remote) yields
  * empty stdout — git's diagnostics go to its piped, undrained stderr — and a
  * spawn failure (no `git` on PATH) is caught to the same empty string. So the
- * caller reads "no output" as the single failure signal, matching the old
- * `Bun.spawnSync` exit-code checks.
+ * caller reads "no output" as the single failure signal.
  */
 const gitStdout = (
   cwd: string,
@@ -548,12 +539,12 @@ export const readGitContext = (
   })
 
 /**
- * The full driven surface `main` composes against (comms-spj3.39): the
+ * The full driven surface `main` composes against: the
  * universal `AgentComms` aggregate plus the Zulip-shaped boot extras
  * (reconcile / download / upload / close). Lives in the plugin — core
  * stays substrate-neutral, and `registerTools` keeps its narrower
  * `AgentComms` dependency via structural subtyping. Request-time DI
- * (methods carrying `R = HttpClient`) is deferred to comms-7v3.
+ * (methods carrying `R = HttpClient`) is deferred.
  */
 export class SubstrateAdapter extends Context.Tag('SubstrateAdapter')<
   SubstrateAdapter,
@@ -605,12 +596,12 @@ export const ZulipAdapterLive: Layer.Layer<
  *
  * Two sinks on purpose:
  *   1. `narrowSet` is the consumer-side filter the event pump uses
- *      to tee only matching events to the MCP host (ass-220u).
+ *      to tee only matching events to the MCP host.
  *   2. `inbox.subscribe` keeps the substrate side wired so the
  *      adapter actually receives events. For Zulip this calls
  *      `/users/me/subscriptions` against the minter, ensuring the
  *      stream is in the minter's queue. The boot-time reconciler
- *      (ass-6a77) covers most streams; this per-session call still
+ *      covers most streams; this per-session call still
  *      handles streams created after the plugin booted.
  */
 export const subscribeFromEnv = (

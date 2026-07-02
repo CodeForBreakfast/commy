@@ -33,7 +33,7 @@ import { SubscribeTokenError } from './subscribe-parser.ts'
 import { testConfigProviderLayer } from './test-platform.ts'
 
 /**
- * `parseEnv` reads the ambient ConfigProvider (comms-spj3.39); the tests
+ * `parseEnv` reads the ambient ConfigProvider; the tests
  * set it per-call from a fixture env map via `testConfigProviderLayer`,
  * mirroring how the app edge sets it from `process.env`.
  */
@@ -60,7 +60,7 @@ const fullEnv = {
   ZULIP_SITE: 'https://zulip.example.com',
   ZULIP_MINTER_EMAIL: 'minter-bot@zulip.example.com',
   ZULIP_MINTER_API_KEY: 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk1',
-  COMMY_BOT_NAME: 'assistant-concierge',
+  COMMY_BOT_NAME: 'myproject-concierge',
   COMMY_SUBSCRIBE: 'channel:home,channel:llm-feed',
   CLAUDE_CODE_SESSION_ID: 'abcdef12-3456-4789-89ab-cdef01234567',
 } as const
@@ -187,11 +187,11 @@ test('parseEnv rejects a set-but-invalid CLAUDE_CODE_SESSION_ID with a UUID mess
     Effect.gen(function* () {
       const err = yield* expectParseEnvError({
         ...fullEnv,
-        CLAUDE_CODE_SESSION_ID: 'homelab-iphone-vpn-debug',
+        CLAUDE_CODE_SESSION_ID: 'my-debug-session',
       })
       expect(err.message).toContain('CLAUDE_CODE_SESSION_ID')
       expect(err.message).toContain('must be a UUID')
-      expect(err.message).toContain('homelab-iphone-vpn-debug')
+      expect(err.message).toContain('my-debug-session')
     }),
   ))
 
@@ -300,7 +300,7 @@ test('parseEnv returns all fields when every var is present', () =>
     }),
   ))
 
-// Attach mode (comms-9usb): COMMY_BOT_API_KEY supplies the stable key for the
+// Attach mode: COMMY_BOT_API_KEY supplies the stable key for the
 // COMMY_BOT_NAME persona, so the server binds it without regenerating.
 const BOT_API_KEY = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2'
 
@@ -366,20 +366,21 @@ test('parseEnv ignores unrelated env vars', () =>
         ZULIP_MINTER_EMAIL: fullEnv.ZULIP_MINTER_EMAIL,
         ZULIP_MINTER_API_KEY: fullEnv.ZULIP_MINTER_API_KEY,
         PATH: '/usr/bin',
-        HOME: '/home/graeme',
+        HOME: '/home/user',
       })
       expect('botName' in parsed).toBe(false)
     }),
   ))
 
-// ─── parseSessionId (comms-uqf) ───────────────────────────────────────
+// ─── parseSessionId ───────────────────────────────────────
 //
 // SessionId is a branded type — only `parseSessionId` can mint one. The
 // validating constructor demands UUID format so a model-guessed string
-// (`homelab-...`, `cc-homel...`, or any other garbage that leaked through
-// a missing hook + non-CC client's "any per-conversation string" loophole)
-// cannot reach `composeBotName` and mint a malformed `cc-<project>-<garbage>`
-// identity. See comms-uqf root-cause notes for the full incident.
+// (`my-session-...`, `cc-mysess...`, or any other garbage that leaked
+// through a missing hook + non-CC client's "any per-conversation string"
+// loophole) cannot reach `composeBotName` and mint a malformed
+// `cc-<project>-<garbage>`
+// identity.
 
 const SAMPLE_UUID = '98a364ab-ea1f-4eaa-9a97-bacbe68c581f'
 
@@ -395,13 +396,13 @@ test('parseSessionId accepts uppercase UUIDs', () => {
 })
 
 test('parseSessionId rejects a non-UUID string', () => {
-  expect(Option.isNone(parseSessionId('homelab-iphone-vpn-debug'))).toBe(true)
+  expect(Option.isNone(parseSessionId('my-debug-session'))).toBe(true)
 })
 
 test('parseSessionId rejects a UUID prefix that the model might leak', () => {
-  expect(Option.isNone(parseSessionId('homelab-'))).toBe(true)
-  expect(Option.isNone(parseSessionId('cc-homel'))).toBe(true)
-  expect(Option.isNone(parseSessionId('brewlife'))).toBe(true)
+  expect(Option.isNone(parseSessionId('my-session-'))).toBe(true)
+  expect(Option.isNone(parseSessionId('cc-mysess'))).toBe(true)
+  expect(Option.isNone(parseSessionId('myproject'))).toBe(true)
 })
 
 test('parseSessionId rejects a hex string without UUID dashes', () => {
@@ -439,28 +440,28 @@ test('composeBotName produces cc-<8> when project is undefined', () => {
   expect(composeBotName({ sessionId: sid(SAMPLE_UUID) })).toBe(decodeBotNameSync('cc-98a364ab'))
 })
 
-test('composeBotName refuses an unbranded string at the type level (comms-uqf)', () => {
+test('composeBotName refuses an unbranded string at the type level', () => {
   // The whole point of the SessionId brand: a bare `string` from
   // `args['session_id']` must not reach `composeBotName`. The compiler
   // catches this — if this @ts-expect-error stops erroring, the brand
-  // has been weakened and the comms-uqf class of bug is reintroducible.
+  // has been weakened and this class of bug is reintroducible.
   // @ts-expect-error — sessionId must be SessionId, not string
-  composeBotName({ sessionId: 'homelab-iphone-vpn-debug' })
+  composeBotName({ sessionId: 'my-debug-session' })
   // Sanity: the same call with a parsed SessionId compiles fine.
   composeBotName({ sessionId: sid(SAMPLE_UUID) })
 })
 
-test('composeBotName refuses an unbranded project string at the type level (comms-tud)', () => {
+test('composeBotName refuses an unbranded project string at the type level', () => {
   // The ProjectSlug brand: a bare `string` from COMMY_PROJECT
   // must not reach `composeBotName` without passing through
   // `sanitiseProjectSlug`. The compiler catches this — if the
   // ts-expect-error below stops erroring, the brand has been weakened.
   // @ts-expect-error — project must be ProjectSlug, not string
   composeBotName({ sessionId: sid(SAMPLE_UUID), project: 'raw-unsanitised' })
-  composeBotName({ sessionId: sid(SAMPLE_UUID), project: slug('assistant') })
+  composeBotName({ sessionId: sid(SAMPLE_UUID), project: slug('myproject') })
 })
 
-// ─── parseBotName (comms-0zo) ────────────────────────────────────────
+// ─── parseBotName ────────────────────────────────────────
 //
 // BotName is a branded type — `parseBotName` validates the substrate-safe
 // shape (lowercase ASCII, digits, dashes, underscores; starts with letter;
@@ -468,9 +469,9 @@ test('composeBotName refuses an unbranded project string at the type level (comm
 // they ensure no unvalidated string reaches `IdentityPort.acquire`.
 
 test('parseBotName accepts a valid substrate-safe name', () => {
-  const name = parseBotName('assistant-concierge')
+  const name = parseBotName('myproject-concierge')
   expect(Option.isSome(name)).toBe(true)
-  expect(Option.getOrUndefined(name)).toBe(decodeBotNameSync('assistant-concierge'))
+  expect(Option.getOrUndefined(name)).toBe(decodeBotNameSync('myproject-concierge'))
 })
 
 test('parseBotName accepts names with underscores and digits', () => {
@@ -490,7 +491,7 @@ test('parseBotName rejects names starting with a dash', () => {
 })
 
 test('parseBotName rejects uppercase characters', () => {
-  expect(Option.isNone(parseBotName('Assistant'))).toBe(true)
+  expect(Option.isNone(parseBotName('Myproject'))).toBe(true)
 })
 
 test('parseBotName rejects spaces', () => {
@@ -502,7 +503,7 @@ test('parseBotName rejects names longer than 40 chars', () => {
   expect(Option.isSome(parseBotName('a'.repeat(40)))).toBe(true)
 })
 
-test('IdentityPort.acquire refuses an unbranded string at the type level (comms-0zo)', () => {
+test('IdentityPort.acquire refuses an unbranded string at the type level', () => {
   // The BotName brand: a bare `string` must not reach `acquire` without
   // going through `composeBotName` or `parseBotName`. The compiler catches
   // this — if the @ts-expect-error below stops erroring, the brand has
@@ -515,7 +516,7 @@ test('IdentityPort.acquire refuses an unbranded string at the type level (comms-
   fakePort.acquire(decodeBotNameSync('branded-value'))
 })
 
-test('parseEnv rejects COMMY_BOT_NAME that fails substrate-safe validation (comms-0zo)', () =>
+test('parseEnv rejects COMMY_BOT_NAME that fails substrate-safe validation', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       yield* expectParseEnvError({ ...fullEnv, COMMY_BOT_NAME: 'Has Spaces' })
@@ -523,7 +524,7 @@ test('parseEnv rejects COMMY_BOT_NAME that fails substrate-safe validation (comm
     }),
   ))
 
-test('parseEnv sanitises COMMY_PROJECT at parse time (comms-tud)', () =>
+test('parseEnv sanitises COMMY_PROJECT at parse time', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const parsed = yield* parse({ ...fullEnv, COMMY_PROJECT: 'My_Project' })
@@ -535,9 +536,9 @@ test('composeBotName produces cc-<project>-<8> when both are present', () => {
   expect(
     composeBotName({
       sessionId: sid('abcdef12-3456-4789-89ab-cdef01234567'),
-      project: slug('assistant'),
+      project: slug('myproject'),
     }),
-  ).toBe(decodeBotNameSync('cc-assistant-abcdef12'))
+  ).toBe(decodeBotNameSync('cc-myproject-abcdef12'))
 })
 
 test('composeBotName slices session id to 8 chars', () => {
@@ -550,21 +551,21 @@ test('composeBotName slices session id to 8 chars', () => {
 test('composeBotName stays within the 24-char budget for max project length', () => {
   const name = composeBotName({
     sessionId: sid('abcdef12-3456-4789-89ab-cdef01234567'),
-    project: slug('nixos-config'), // 12 chars (the budget)
+    project: slug('myproject-ab'), // 12 chars (the budget)
   })
   expect(name.length).toBeLessThanOrEqual(24)
-  expect(name).toBe(decodeBotNameSync('cc-nixos-config-abcdef12'))
+  expect(name).toBe(decodeBotNameSync('cc-myproject-ab-abcdef12'))
 })
 
 // sanitiseProjectSlug assertions cast to `string | undefined` because
-// `ProjectSlug` is a branded type (comms-tud) — the `.toBe()` overload
+// `ProjectSlug` is a branded type — the `.toBe()` overload
 // rejects a bare `string` as the expected value. The cast is safe: the
 // brand is phantom; at runtime it IS a string.
 const slugStr = (raw: string): string | undefined =>
   Option.getOrUndefined(sanitiseProjectSlug(raw)) as string | undefined
 
 test('sanitiseProjectSlug lowercases the input', () => {
-  expect(slugStr('Assistant')).toBe('assistant')
+  expect(slugStr('MyProject')).toBe('myproject')
 })
 
 test('sanitiseProjectSlug replaces underscores and slashes with dashes', () => {
@@ -602,11 +603,11 @@ test('sanitiseProjectSlug returns undefined when the result starts with a digit'
 })
 
 test('sanitiseProjectSlug preserves digits and dashes inside the slug', () => {
-  expect(slugStr('epr-backend-3')).toBe('epr-backend')
+  expect(slugStr('myproject-b-3')).toBe('myproject-b')
   expect(slugStr('a1b2c3')).toBe('a1b2c3')
 })
 
-// deriveProject returns ProjectSlug | undefined (comms-tud); cast to
+// deriveProject returns ProjectSlug | undefined; cast to
 // string | undefined for assertion readability (same as slugStr above).
 const deriveStr = (deps: Parameters<typeof deriveProject>[0]): string | undefined =>
   Option.getOrUndefined(Effect.runSync(deriveProject(deps))) as string | undefined
@@ -623,7 +624,7 @@ test('deriveProject prefers explicit COMMY_PROJECT env value', () => {
   expect(result).toBe('override')
 })
 
-test('deriveProject returns a pre-sanitised ProjectSlug verbatim (comms-tud)', () => {
+test('deriveProject returns a pre-sanitised ProjectSlug verbatim', () => {
   const result = deriveStr({
     project: slug('My_Project'),
     cwd: '/home/x',
@@ -634,13 +635,13 @@ test('deriveProject returns a pre-sanitised ProjectSlug verbatim (comms-tud)', (
 
 test('deriveProject falls back to git remote basename when env value absent', () => {
   const result = deriveStr({
-    cwd: '/home/x/assistant',
+    cwd: '/home/x/myproject',
     readGitContext: () =>
       Effect.succeed(
-        InRepo({ gitRoot: '/home/x/assistant', remoteBasename: Option.some('assistant') }),
+        InRepo({ gitRoot: '/home/x/myproject', remoteBasename: Option.some('myproject') }),
       ),
   })
-  expect(result).toBe('assistant')
+  expect(result).toBe('myproject')
 })
 
 test('deriveProject sanitises the git remote basename (mid-word truncation acceptable)', () => {
@@ -656,11 +657,11 @@ test('deriveProject sanitises the git remote basename (mid-word truncation accep
 
 test('deriveProject falls back to git-root basename when no remote', () => {
   const result = deriveStr({
-    cwd: '/home/x/assistant/scripts',
+    cwd: '/home/x/myproject/scripts',
     readGitContext: () =>
-      Effect.succeed(InRepo({ gitRoot: '/home/x/assistant', remoteBasename: Option.none() })),
+      Effect.succeed(InRepo({ gitRoot: '/home/x/myproject', remoteBasename: Option.none() })),
   })
-  expect(result).toBe('assistant')
+  expect(result).toBe('myproject')
 })
 
 test('deriveProject returns undefined when cwd is not in a git repo', () => {
@@ -671,7 +672,7 @@ test('deriveProject returns undefined when cwd is not in a git repo', () => {
   expect(result).toBeUndefined()
 })
 
-test('parseEnv treats COMMY_PROJECT that sanitises to nothing as unset (comms-tud)', () =>
+test('parseEnv treats COMMY_PROJECT that sanitises to nothing as unset', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const parsed = yield* parse({ ...fullEnv, COMMY_PROJECT: '---' })
@@ -682,8 +683,8 @@ test('parseEnv treats COMMY_PROJECT that sanitises to nothing as unset (comms-tu
 test('parseEnv reads COMMY_PROJECT into parsed.project', () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const parsed = yield* parse({ ...fullEnv, COMMY_PROJECT: 'assistant' })
-      expect(parsed.project as string | undefined).toBe('assistant')
+      const parsed = yield* parse({ ...fullEnv, COMMY_PROJECT: 'myproject' })
+      expect(parsed.project as string | undefined).toBe('myproject')
     }),
   ))
 
@@ -936,7 +937,7 @@ test('subscribeFromEnv returns an empty array when COMMY_SUBSCRIBE is unset', ()
     }),
   ))
 
-// Deliberate node-runtime pass (comms-iw8w.1): the default `readGitContext`
+// Deliberate node-runtime pass: the default `readGitContext`
 // now shells out via the `@effect/platform` command executor instead of
 // `Bun.spawnSync`. CI runs the suite under bun, so exercise the real probe
 // against a temp git repo while providing the node `CommandExecutor`

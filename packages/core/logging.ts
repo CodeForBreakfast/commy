@@ -8,7 +8,7 @@
  * {@link stderrLoggerLayer}, which routes `Effect.logInfo` / `logError`
  * to STDERR via `console.error`.
  *
- * `Logger.prettyLogger({ stderr: true })` is deliberately NOT used: its
+ * `Logger.prettyLogger({ stderr: true })` is deliberately not used: its
  * TTY renderer calls `console.group` / `console.groupEnd`, both of which
  * write to STDOUT regardless of the `stderr` flag — that would leak onto
  * the protocol channel. `Logger.withConsoleError` wraps a single-string
@@ -30,10 +30,9 @@ export const stderrLoggerLayer: Layer.Layer<never> = Logger.replace(
 )
 
 /**
- * Test seam replacing the old `log` lambda override: captures the
- * message text of every `Effect.log*` call into `lines`, so a test can
- * provide this layer and assert on the diagnostics an Effect emitted
- * without touching the runner's STDERR.
+ * Test seam that captures the message text of every `Effect.log*` call into
+ * `lines`, so a test can provide this layer and assert on the diagnostics an
+ * Effect emitted without touching the runner's STDERR.
  */
 export const captureLogger = (lines: Array<string>): Layer.Layer<never> =>
   Logger.replace(

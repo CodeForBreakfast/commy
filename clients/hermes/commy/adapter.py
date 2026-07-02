@@ -7,23 +7,22 @@ This plugin owns the **inbound axis** — delivering incoming messages into the
 agent's turn is the one axis MCP cannot push, so the host owns it. It also
 delivers the agent's **same-topic prose reply**: ``send`` posts the turn's
 composed prose back into the originating ``(channel, topic)`` over the live
-per-topic connection (comms-a9q4), fixing the silent drop a prose reply used to
-suffer. Replying to a *different* channel/topic stays the agent's own commy
+per-topic connection. Replying to a *different* channel/topic stays the agent's
+own commy
 ``post`` MCP tool — the two paths are complementary, so a reply-capable Hermes
 bot wires *both* this inbound plugin *and* a commy ``post`` MCP server in its
 ``mcp_servers`` config — see the "Reply path (outbound)" section of this
 package's ``README.md``.
 
-The receive path (inbound frame -> routing/dedup -> Hermes session) landed in
-comms-a7j.2 via ``receive_channel_notification`` (self-echo is dropped at the
-substrate emitter, comms-dtcm, so it is not a consumer concern). The connection
-lifecycle that *delivers* a frame to that handler — per-topic commy server
-subprocesses in persistent mode, holding the MCP connection, idle-reaped and
-respawned with stable identity — landed in comms-a7j.5 and lives in
-``connection.py`` (lifecycle) + ``transport.py`` (the real MCP transport). This
-adapter owns a ``TopicConnectionManager`` and exposes ``ensure_topic_connection``
-as the spawn entry point; the boot-time listener that *detects* an unowned
-``(channel, topic)`` and calls it is comms-a7j.4 (not built here).
+The receive path (inbound frame -> routing/dedup -> Hermes session) is
+``receive_channel_notification`` (self-echo is dropped at the substrate emitter,
+so it is not a consumer concern). The connection lifecycle that *delivers* a
+frame to that handler — per-topic commy server subprocesses in persistent mode,
+holding the MCP connection, idle-reaped and respawned with stable identity —
+lives in ``connection.py`` (lifecycle) + ``transport.py`` (the real MCP
+transport). This adapter owns a ``TopicConnectionManager`` and exposes
+``ensure_topic_connection`` as the spawn entry point; the boot-time listener that
+*detects* an unowned ``(channel, topic)`` and calls it lives in ``listener.py``.
 
 ``BasePlatformAdapter`` and ``Platform`` come from the host Hermes runtime,
 which is present in the pod (``~/.hermes/plugins/`` install) and provided to
@@ -60,9 +59,9 @@ class CommyAdapter(BasePlatformAdapter):
     ``connect`` starts the boot listener + idle reaper, ``ensure_topic_connection``
     is the spawn entry point, and ``disconnect`` tears every connection down. The
     gateway's framework-send (``send``) delivers the turn's composed prose reply
-    into the originating topic via that topic's live connection (comms-a9q4);
-    cross-topic replies stay the agent's own commy ``post`` MCP tool (comms-uuy,
-    comms-dgy8). ``check_requirements`` activates the platform for live use once
+    into the originating topic via that topic's live connection; cross-topic
+    replies stay the agent's own commy ``post`` MCP tool. ``check_requirements``
+    activates the platform for live use once
     the pod's commy config is present (the environment ``SpawnConfig.from_env``
     requires).
 
@@ -101,10 +100,10 @@ class CommyAdapter(BasePlatformAdapter):
         duplicate frame returns without reaching the pipeline.
 
         Self-echo needs no filter here: the substrate emitter drops the bot's
-        own posts before they reach this carrier (comms-dtcm), so every frame
+        own posts before they reach this carrier, so every frame
         that arrives was authored by someone else.
 
-        Thread-less frames are dropped (comms-a7j.3): a top-level post carries no
+        Thread-less frames are dropped: a top-level post carries no
         topic, but Hermes keys sessions on ``(channel, topic)``. By the substrate
         convention "top-level = terse pings only; substantive work goes in a
         topic", such a frame is not agent-actionable, so it is ignored rather
@@ -157,7 +156,7 @@ class CommyAdapter(BasePlatformAdapter):
         With nothing injected, the manager and the boot listener are built from
         the environment (``SpawnConfig.from_env``) wired to the real MCP
         transport, sinking inbound frames into ``receive_channel_notification``.
-        The boot listener is the ONE connection started here — subscribed
+        The boot listener is the one connection started here — subscribed
         ``channel:<name>`` + ``mentions`` under a persistent identity — and it
         cold-starts per-topic connections by calling ``ensure_topic_connection``
         for any ``(channel, topic)`` the manager doesn't already own. No per-topic
@@ -185,7 +184,7 @@ class CommyAdapter(BasePlatformAdapter):
     async def ensure_topic_connection(self, channel: str, topic: str) -> ConnectionSpec:
         """Spawn (or no-op if already live) the per-topic connection for ``(channel, topic)``.
 
-        The clean spawn entry point the listener (comms-a7j.4) drives. Brings up
+        The clean spawn entry point the listener drives. Brings up
         a persistent-mode commy server subprocess under a deterministic
         per-topic identity, subscribed ``thread:<channel>/<topic>`` + ``mentions``.
         """
@@ -220,12 +219,11 @@ class CommyAdapter(BasePlatformAdapter):
         replied in prose, and we deliver that prose to the inbound frame's channel
         (``chat_id``) and topic (``metadata['thread_id']``, set by the gateway's
         ``_thread_metadata_for_source``) over the live per-topic connection's
-        ``post`` tool. That fixes the silent drop a prose reply used to suffer and
-        routes the reply to the right topic (comms-a9q4, resolves comms-xc7y).
+        ``post`` tool.
 
         The agent's *own* ``post`` MCP tool stays available and complementary: it
         is the deliberate path for replying to a *different* channel/topic, while
-        this same-topic prose delivery needs no tool call (comms-uuy). A pure
+        this same-topic prose delivery needs no tool call. A pure
         ``post``-tool turn emits no prose, so the gateway never calls ``send`` for
         it — the two paths don't double up (a model emitting both prose *and* a
         same-topic ``post`` in one turn is the one residual double, steered by

@@ -1,8 +1,8 @@
 """A minimal real MCP server exposing a ``post`` tool, for the transport's
-outbound-delivery test (comms-a9q4).
+outbound-delivery test.
 
-Stands in for the commy server so the transport test exercises a REAL subprocess
-+ REAL MCP ``tools/call`` round-trip with no Zulip realm. It is faithful to the
+Stands in for the commy server so the transport test exercises a real subprocess
++ real MCP ``tools/call`` round-trip with no Zulip realm. It is faithful to the
 one behaviour under test: a ``post(channel_name, body, thread)`` tool that
 records the arguments it received to ``STUB_POST_RECORD`` (so the test can assert
 the transport sent the right channel/topic/body) and returns a result carrying a

@@ -19,8 +19,8 @@ export interface EnsureBoundDeps<E> {
 }
 
 /**
- * Lazy-acquire wrapper for ephemeral Claude Code sessions
- * (ass-220u). Production callers wrap `post`/`react`/`unreact` with
+ * Lazy-acquire wrapper for ephemeral Claude Code sessions.
+ * Production callers wrap `post`/`react`/`unreact` with
  * this so the first attribution-producing tool call triggers
  * `adapter.identity.acquire(name)` once; subsequent calls await the
  * cached result.

@@ -1,4 +1,4 @@
-"""Per-topic connection lifecycle for the commy Hermes adapter (comms-a7j.5).
+"""Per-topic connection lifecycle for the commy Hermes adapter.
 
 On-demand connections decoupled from process lifecycle. Given a
 ``(channel, topic)``, the manager brings up a fresh commy server
@@ -12,7 +12,6 @@ the thread's recent window — the connection self-catches-up its trigger).
 
 Persistent mode (not ephemeral) is required: it gives eager bind, stable
 identity across teardown/respawn, and channel/thread catch-up on (re)acquire.
-See the bead + ``comms-uuy`` notes for the full rationale.
 
 This module is the lifecycle (pure of any MCP dependency, so it imports without
 ``mcp`` present). The subprocess + MCP transport that implements
@@ -41,10 +40,10 @@ Clock = Callable[[], float]
 class SpawnConfig:
     """Static inputs shared by every per-topic spawn, plus the pod's channel.
 
-    The minter creds + realm are the same the post-only pod already uses
-    (``comms-uuy``); ``command``/``args``/``repo_dir`` locate the commy
+    The minter creds + realm are the same the post-only pod already uses;
+    ``command``/``args``/``repo_dir`` locate the commy
     server entrypoint (``bun packages/mcp/server.ts`` from the checkout root).
-    ``channel`` is the project channel the boot listener (comms-a7j.4) subscribes
+    ``channel`` is the project channel the boot listener subscribes
     to; per-topic spawns receive their channel per-call, so it carries an empty
     default for the connection-lifecycle paths that don't use it.
     """
@@ -176,7 +175,7 @@ class _Connection:
 class TopicConnectionManager:
     """Owns the set of live per-topic connections.
 
-    ``ensure`` is the spawn entry point the boot-time listener (comms-a7j.4)
+    ``ensure`` is the spawn entry point the boot-time listener
     calls when it sees an unowned ``(channel, topic)``; it is idempotent so a
     redundant trigger on an already-owned topic is a no-op (and refreshes the
     idle timer). ``reap_idle`` tears down connections silent past the idle

@@ -1,5 +1,5 @@
 /**
- * Optional live test against `zulip.example.com` (comms-i9n).
+ * Optional live test against `zulip.example.com`.
  *
  * Exercises the commy plugin end-to-end against a real Zulip
  * realm — booting the program (`makeProgram`) with the real
@@ -20,7 +20,7 @@
  * - `ZULIP_MINTER_API_KEY`    minter user API key
  * - `ZULIP_LIVE_CHANNEL_NAME` stream the plugin subscribes to
  *
- * Realm-side churn is kept low (per the bead) by reusing the same bot
+ * Realm-side churn is kept low by reusing the same bot
  * names across runs — first run mints, subsequent runs reactivate then
  * deactivate the existing account.
  */
@@ -81,24 +81,22 @@ const liveEnv = (): LiveEnv => {
   return env
 }
 
-// Same minter-call spacing as the substrate live suite (comms-jfd) —
+// Same minter-call spacing as the substrate live suite —
 // boot's reconcile + acquire + subscribe sequence plus per-test
 // release all hit the shared minter, so the plugin live suite trips
 // the same per-user limit if we don't pace.
 const MINTER_PACE = Duration.millis(900)
 
-// Pre-provisioned bot names (bead: avoid per-run realm-side churn).
+// Pre-provisioned bot names (avoid per-run realm-side churn).
 // First run mints; the persistent bot stays active across runs
-// (comms-ch7: COMMY_BOT_NAME releases skip deactivation), so
+// (COMMY_BOT_NAME releases skip deactivation), so
 // subsequent runs re-acquire the still-active account.
 const PERSISTENT_BOT_NAME = 'cc-live-pl-test'
-// UUID-shaped session ids — comms-uqf rejects anything else at the
-// session_id parser. Deterministic prefixes give predictable bot
+// UUID-shaped session ids — the session_id parser rejects anything else.
+// Deterministic prefixes give predictable bot
 // names (`cc-<first-8-hex>`) so the teardown assertions can fetch by
-// name; the trailing UUID body is arbitrary but must satisfy the
-// UUID_RE in bootstrap.ts. The two `cc-livetsta` / `cc-livetstb`
-// accounts from before this change remain on the realm as
-// abandoned-deactivated zombies — Zulip cannot truly delete bots.
+// name; the trailing UUID body is arbitrary but must be UUID-shaped
+// (the session-id validator in bootstrap.ts).
 const EPHEMERAL_SESSION_A = 'aaaaaaaa-0000-0000-0000-000000000001'
 const EPHEMERAL_SESSION_B = 'bbbbbbbb-0000-0000-0000-000000000001'
 const EPHEMERAL_BOT_A = `cc-${EPHEMERAL_SESSION_A.slice(0, 8)}`
@@ -183,13 +181,12 @@ const buildHarness = (
       ...envOverrides,
     }
 
-    // The boot program (comms-spj3.39): the real adapter (parse-gated like
+    // The boot program: the real adapter (parse-gated like
     // production's `ZulipAdapterLive`, so `close()` is a layer-scope
     // finalizer) and the file-backed cursor store arrive through the app
     // Layer; the env through an outermost ConfigProvider. Forked under the
     // scope; `killSwitch` interrupts the pump's events stream on cleanup so
-    // the scope unwinds (pump-cancel → release → close) — the substrate
-    // teardown the test used to issue by hand.
+    // the scope unwinds (pump-cancel → release → close).
     const program = makeProgram({ transport: serverTransport }).pipe(
       Effect.provide(
         Layer.provideMerge(
@@ -293,7 +290,7 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
             // only settled once the scope above has closed.
           ).pipe(Effect.zipRight(fetchActiveStatus(PERSISTENT_BOT_NAME)))
 
-          // comms-ch7: a persistent COMMY_BOT_NAME release skips
+          // A persistent COMMY_BOT_NAME release skips
           // deactivation so the next acquire stays on the owner-permitted
           // regenerate path. The bot therefore survives teardown active.
           expect(status.exists).toBe(true)
@@ -304,7 +301,7 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
   )
 
   test(
-    'ephemeral-mode: two distinct session_ids mint two cc-<8> bots; both deactivated on teardown (ass-2dhb)',
+    'ephemeral-mode: two distinct session_ids mint two cc-<8> bots; both deactivated on teardown',
     () =>
       Effect.runPromise(
         Effect.gen(function* () {

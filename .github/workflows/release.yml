@@ -1,8 +1,8 @@
 name: Release
 
-# B2 release automation. Graeme's merge of a release-bump commit to `main` is
-# the SINGLE trigger; CI does everything outward-facing from there. No agent
-# ever pushes a tag or publishes anything — see docs/releasing.md for the
+# B2 release automation. The maintainer's merge of a release-bump commit to
+# `main` is the single trigger; CI does everything outward-facing from there. No
+# agent ever pushes a tag or publishes anything — see docs/releasing.md for the
 # worker flow that produces the bump PR this workflow consumes.
 #
 # In one run, when a release commit lands on `main`:
@@ -19,18 +19,17 @@ name: Release
 #      OIDC trusted publishing (no NPM_TOKEN).
 #   5. release     — cut the GitHub Release from the checked-in notes file.
 #
-# TWO LOAD-BEARING CONSTRAINTS:
-#   * npm's Trusted Publisher (OIDC) is pinned to THIS workflow's filename
+# Two load-bearing constraints:
+#   * npm's Trusted Publisher (OIDC) is pinned to this workflow's filename
 #     (`release.yml`). The publish step must stay in this file — renaming or
 #     moving it makes npm reject the OIDC publish (filename mismatch), which
-#     needs a Graeme-side npm-config change to fix.
-#   * A tag pushed by the default GITHUB_TOKEN does NOT trigger another
-#     `on: push: tags` workflow. So this workflow triggers DIRECTLY on the
+#     needs a maintainer-side npm-config change to fix.
+#   * A tag pushed by the default GITHUB_TOKEN does not trigger another
+#     `on: push: tags` workflow. So this workflow triggers directly on the
 #     release-commit-to-main (guarded by `detect`); it never relies on the tag
-#     it pushes to fire a second run. `workflow_dispatch` is the manual fallback
-#     (the live auto-trigger is first exercised on the next real release).
+#     it pushes to fire a second run. `workflow_dispatch` is the manual fallback.
 #
-# Trusted publishing means npm trusts THIS workflow (org/repo/filename), not a
+# Trusted publishing means npm trusts this workflow (org/repo/filename), not a
 # stored token: each run mints a short-lived signed OIDC token the registry
 # verifies against the package's trusted-publisher config. Because the repo and
 # package are public, npm attaches a provenance attestation automatically — no

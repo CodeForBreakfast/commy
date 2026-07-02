@@ -1,5 +1,5 @@
 /**
- * Subprocess fixture for `disconnect-exit.test.ts` (comms-hfhm). A
+ * Subprocess fixture for `disconnect-exit.test.ts`. A
  * realm-free mirror of {@link main}: it boots the real `makeProgram` with
  * the real {@link clientDisconnect} over the real `process.stdin`, but on a
  * network-free in-memory substrate so the test never touches the Zulip

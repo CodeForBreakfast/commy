@@ -1,5 +1,5 @@
 {
-  description = "commy plugin — substrate-agnostic agent communications (ass-15qi, ass-x09b)";
+  description = "commy plugin — substrate-agnostic agent communications";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -103,8 +103,8 @@
           };
           # Lean gate shell for CI: exactly gateTools, no interactive extras
           # (no language server). CI runs
-          # `nix develop .#ci --command bun run check`. Mirrors brewlife's
-          # dedicated .#ci shell so CI carries only what the gate needs.
+          # `nix develop .#ci --command bun run check`, so it carries only what
+          # the gate needs.
           ci = pkgs.mkShell {
             packages = gateTools;
           };

@@ -1,4 +1,4 @@
-"""Channel-aware MCP client session for the commy Hermes adapter (comms-b7it).
+"""Channel-aware MCP client session for the commy Hermes adapter.
 
 The substrate dual-emits each inbound event on two carriers (see
 ``docs/claude-channel-inbound-contract.md``): ``notifications/message`` — the
@@ -8,7 +8,7 @@ machine frame (it alone carries ``sender_id``) — and
 the display carrier is **ungated**: every connected client receives it, this
 adapter included, even though the adapter binds the other carrier.
 
-The MCP Python SDK validates EVERY incoming notification against its typed
+The MCP Python SDK validates every incoming notification against its typed
 ``ServerNotification`` union in the receive loop (``mcp/shared/session.py``)
 *before* any handler or callback runs. ``notifications/claude/channel`` has no
 slot in that union, so the SDK raises a ``ValidationError``, catches it, and logs

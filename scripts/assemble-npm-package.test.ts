@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { assembleNpmPackage, NPM_PACKAGE_NAME } from './assemble-npm-package.ts'
 
-// comms-iw8w.4: the publishable npm artifact for `npx @codeforbreakfast/commy-mcp`.
-// These lock the repo-side contract the (fleet-local) release-plugin skill calls
-// before `npm publish`; the publish itself stays Graeme's local, authed step.
+// The publishable npm artifact for `npx @codeforbreakfast/commy-mcp`.
+// These lock the repo-side contract the release flow (docs/releasing.md) relies
+// on before `npm publish`; the publish itself stays the maintainer's authed step.
 
 const REPO_ROOT = join(import.meta.dir, '..')
 
@@ -25,7 +25,7 @@ test('assembles a dependency-free @codeforbreakfast/commy-mcp whose version trac
     const manifest = assembleNpmPackage(REPO_ROOT, out)
 
     // The 'commy' brand is unavailable as an npm scope, so the one published
-    // surface carries @codeforbreakfast (Graeme's naming ruling).
+    // surface carries @codeforbreakfast.
     expect(manifest.name).toBe('@codeforbreakfast/commy-mcp')
     expect(NPM_PACKAGE_NAME).toBe('@codeforbreakfast/commy-mcp')
     // Version is generated from plugin.json — the head of the six-site

@@ -59,7 +59,7 @@ describe('createFileSubscriptionStore', () => {
       const intents = [
         mentions,
         channel('commy'),
-        thread('commy', 'sub-restore-comms-4pgy'),
+        thread('commy', 'sub-restore-topic'),
         newTopics('general'),
       ]
       await Effect.runPromise(store.write(sid(SID_A), intents))

@@ -1,32 +1,32 @@
 /**
- * The AgentComms contract, run against a REAL Zulip realm.
+ * The AgentComms contract, run against a real Zulip realm.
  *
- * This is the Tier-0 "contract-against-real" run (comms-e5vm.5): the same
+ * This is the Tier-0 "contract-against-real" run: the same
  * `runAgentCommsContract` suite that the stateful fake and the memory adapter
  * pass, pointed at a live realm via a ContractFactory built on the real
  * `makeZulipHttp` + minter-driven identity flow (the seam reused from
  * `realm.live.test.ts`).
  *
- * **Realm-friendliness strategy** (the shared realm is also serving live
- * concierges — saturating it knocks them off MCP):
+ * **Realm-friendliness strategy** (the shared realm is also serving other live
+ * clients — saturating it knocks them off MCP):
  *
  * - **Per-suite identity, per-test adapter.** The `self` bot
  *   (`cc-contract-self`) is persistent: acquired via reactivate+regenerate,
  *   released `{ persistent: true }` so it is never deactivated and the next
- *   run re-acquires it without a mint. A FRESH adapter instance is built per
+ *   run re-acquires it without a mint. A fresh adapter instance is built per
  *   test (per `factory()` call) so each test gets a fresh Zulip events queue
  *   (`/register`) — a reused adapter re-polls a stale queue that silently
- *   stops delivering (the realm.live.test.ts lesson, comms-hcw). The bot
- *   account is suite-scoped; only the adapter is per-test.
+ *   stops delivering. The bot account is suite-scoped; only the adapter is
+ *   per-test.
  * - **Per-test channel namespace.** `seedChannel(name)` creates a real stream
  *   named `cc-ct-<run>-<seq>-<name>` so each test reads/writes an isolated
  *   channel. The contract reuses fixed logical names (`lobby`, `alpha`) across
  *   ~50 tests; on a realm that persists channel state that is cross-test
- *   contamination WITHIN a run (the channel-wide `readChannel` range tests
+ *   contamination within a run (the channel-wide `readChannel` range tests
  *   assert `not.toContain` / exact-equality). The fake sidesteps it by
  *   building a fresh realm per `beforeEach`; the live factory namespaces
  *   instead. Streams accumulate (the non-admin minter cannot delete them) —
- *   acceptable on a test realm (orchestrator ruling).
+ *   acceptable on a test realm.
  * - **Shared peer agents.** `seedAgent(name)` find-or-creates a persistent
  *   peer bot (`cc-contract-peer-<name>`) once and reuses it — peers carry no
  *   per-test state, so suite-level reuse costs no per-test mint.
@@ -34,7 +34,7 @@
  *   substrates "whose acquire-acceptable names are pinned by external
  *   configuration (transitional Zulip)". It skips the rebind/no-op lifecycle
  *   tests, which on a non-admin minter would hit the admin-only
- *   reactivate path (comms-ch7) and fail.
+ *   reactivate path and fail.
  * - **Retry-After** is honoured automatically: the request layer's
  *   `rateLimitSchedule` absorbs 429s under a cumulative-wait budget.
  *
@@ -83,7 +83,7 @@ const httpClient = Effect.runSync(HttpClient.HttpClient.pipe(Effect.provide(Fetc
 // Spacing between minter-authenticated calls (acquire/release/regenerate),
 // mirroring realm.live.test.ts. The contract regenerates the self key once per
 // test (~50×) through the shared minter; bursting trips Zulip's per-user rate
-// limit and knocks live concierges off MCP for the cool-off (comms-jfd).
+// limit and knocks other live clients off MCP for the cool-off.
 const MINTER_PACE = Duration.millis(900)
 
 const SELF_NAME = decodeBotNameSync('cc-contract-self')

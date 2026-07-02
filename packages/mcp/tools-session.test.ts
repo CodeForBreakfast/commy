@@ -64,7 +64,7 @@ const buildSessionRig = (
     return { client, adapter }
   })
 
-// UUID-shaped test session ids. The brand demands UUID format (comms-uqf);
+// UUID-shaped test session ids. The brand demands UUID format;
 // these are valid UUIDs whose leading 8 hex chars give readable bot-name
 // suffixes (`cc-aaaaaaaa`, `cc-bbbbbbbb`, etc.).
 const SID_A = 'aaaaaaaa-0000-4000-8000-000000000001'
@@ -148,20 +148,20 @@ test('current_identity for an unknown session_id returns unbound without minting
     ),
   ))
 
-test('current_identity with a non-UUID session_id returns unbound (comms-uqf)', () =>
+test('current_identity with a non-UUID session_id returns unbound', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        // Regression for the comms-uqf class of bug: a model-guessed session_id
-        // string (or a non-CC client supplying a non-UUID like `homelab-iphone-...`)
-        // must NOT mint a malformed `cc-<garbage>` identity. `readSessionId` now
-        // validates UUID shape via the SessionId brand; non-UUID inputs route to
-        // the unbound stub exactly as if session_id were missing.
+        // A model-guessed session_id string (or a non-CC client supplying a
+        // non-UUID like `myproject-iphone-...`) must not mint a malformed
+        // `cc-<garbage>` identity. `readSessionId` validates UUID shape via the
+        // SessionId brand; non-UUID inputs route to the unbound stub exactly as
+        // if session_id were missing.
         const rig = yield* buildSessionRig()
         const result = yield* Effect.promise(() =>
           rig.client.callTool({
             name: 'current_identity',
-            arguments: { session_id: 'homelab-iphone-vpn-debug' },
+            arguments: { session_id: 'myproject-iphone-vpn-debug' },
           }),
         )
         expect(result.structuredContent).toEqual({ state: 'unbound', identity: null })
@@ -171,13 +171,13 @@ test('current_identity with a non-UUID session_id returns unbound (comms-uqf)', 
     ),
   ))
 
-test('post with a non-UUID session_id is rejected — no malformed cc-* identity minted (comms-uqf)', () =>
+test('post with a non-UUID session_id is rejected — no malformed cc-* identity minted', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         // Same defence at the attribution-producing boundary. Without the brand,
-        // `homelab-` would slice to suffix `homelab-` and mint `cc-<project>-homelab-`
-        // — the exact symptom that produced `cc-homelab-homelab-` in the wild.
+        // `myproject-` would slice to suffix `myproject-` and mint
+        // `cc-<project>-myproject-` — the symptom that produced `cc-myproject-myproject-`.
         const rig = yield* buildSessionRig()
         const error = yield* Effect.flip(
           Effect.tryPromise({
@@ -187,17 +187,16 @@ test('post with a non-UUID session_id is rejected — no malformed cc-* identity
                 arguments: {
                   channel_name: 'home',
                   body: 'will not be sent',
-                  session_id: 'homelab-iphone-vpn-debug',
+                  session_id: 'myproject-iphone-vpn-debug',
                 },
               }),
             catch: (e) => e as { message: string },
           }),
         )
         expect(error.message).toMatch(/session_id|ephemeral/i)
-        // The unbound refusal now carries a discriminator (comms-spj3.17): the
+        // The unbound refusal carries a discriminator: the
         // tagged error's name reaches the MCP edge reshape, so the client sees
-        // `UnboundEphemeralSession: …` rather than the bare message the old
-        // `name === 'Error'` skip produced.
+        // `UnboundEphemeralSession: …`.
         expect(error.message).toContain('UnboundEphemeralSession')
         const exit = yield* Effect.exit(rig.adapter.identity.currentIdentity())
         expect(exit._tag).toBe('Failure')
@@ -241,15 +240,14 @@ test('post with a new session_id after one already bound releases the prior iden
     ),
   ))
 
-test('post without session_id rejects even when a prior session bound an identity (comms-67j)', () =>
+test('post without session_id rejects even when a prior session bound an identity', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        // Tightened contract: an undefined session_id MUST NOT reuse the active
-        // slot. Pre-tightening, a missing/dropped session_id post-/clear leaked
-        // the previous conversation's identity into the new conversation. The
-        // active slot stays put for legitimate continuation calls that DO pass
-        // the original session_id.
+        // An undefined session_id must not reuse the active slot: a missing or
+        // dropped session_id (e.g. post-/clear) would otherwise leak the previous
+        // conversation's identity into the new conversation. The active slot stays
+        // put for legitimate continuation calls that pass the original session_id.
         const rig = yield* buildSessionRig()
         yield* Effect.promise(() =>
           rig.client.callTool({
@@ -294,15 +292,14 @@ test('post without session_id rejects even when a prior session bound an identit
     ),
   ))
 
-test('current_identity without session_id returns unbound, even when a prior session bound an identity (comms-67j)', () =>
+test('current_identity without session_id returns unbound, even when a prior session bound an identity', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        // Regression for the /clear leak: after a session has bound an
-        // identity, a current_identity call from a *different* conversation
-        // whose hook fails to inject session_id must NOT surface the prior
-        // session's seat. Reads unbound — the fresh conversation will mint
-        // its own seat on its first attribution call.
+        // After a session has bound an identity, a current_identity call from a
+        // *different* conversation whose hook fails to inject session_id must not
+        // surface the prior session's seat. Reads unbound — the fresh conversation
+        // will mint its own seat on its first attribution call.
         const rig = yield* buildSessionRig()
         yield* Effect.promise(() =>
           rig.client.callTool({
@@ -348,15 +345,15 @@ test('post without session_id and no prior binding rejects with an instructive e
     ),
   ))
 
-test('post with session_id + cwd mints cc-<project>-<sid-prefix> derived from cwd (ass-v7b4)', () =>
+test('post with session_id + cwd mints cc-<project>-<sid-prefix> derived from cwd', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const rig = yield* buildSessionRig({
           projectForCwd: (cwd) =>
             Effect.succeed(
-              cwd === '/home/x/assistant'
-                ? Option.getOrUndefined(sanitiseProjectSlug('assistant'))
+              cwd === '/home/x/myproject'
+                ? Option.getOrUndefined(sanitiseProjectSlug('myproject'))
                 : undefined,
             ),
         })
@@ -367,28 +364,27 @@ test('post with session_id + cwd mints cc-<project>-<sid-prefix> derived from cw
               channel_name: 'home',
               body: 'first attribution from session with project',
               session_id: SID_A,
-              cwd: '/home/x/assistant',
+              cwd: '/home/x/myproject',
             },
           }),
         )
         expect(result.isError).toBeFalsy()
         const current = yield* rig.adapter.identity.currentIdentity()
-        expect(current.name).toBe(decodeDisplayNameSync('cc-assistant-aaaaaaaa'))
+        expect(current.name).toBe(decodeDisplayNameSync('cc-myproject-aaaaaaaa'))
       }),
     ),
   ))
 
-test('two sessions in different cwds mint two different project prefixes (ass-v7b4)', () =>
+test('two sessions in different cwds mint two different project prefixes', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        // This is the bug reproducer: today, every minted name carries the
-        // plugin's own location regardless of where the calling session is.
-        // The fix routes the calling session's cwd through projectForCwd so
-        // each session's minted name reflects its own project.
+        // Each session's minted name must reflect its own project: the calling
+        // session's cwd routes through projectForCwd, so two sessions in
+        // different cwds mint different project prefixes.
         const cwdToSlug: Record<string, ProjectSlug> = {
-          '/home/x/brewlife': slug('brewlife'),
-          '/home/x/homelab': slug('homelab'),
+          '/home/x/myproject-a': slug('myproject-a'),
+          '/home/x/myproject-b': slug('myproject-b'),
         }
         const rig = yield* buildSessionRig({
           projectForCwd: (cwd) => Effect.succeed(cwd === undefined ? undefined : cwdToSlug[cwd]),
@@ -398,33 +394,33 @@ test('two sessions in different cwds mint two different project prefixes (ass-v7
             name: 'post',
             arguments: {
               channel_name: 'home',
-              body: 'brewlife session first attribution',
+              body: 'myproject-a session first attribution',
               session_id: 'b7e71ba4-0000-4000-8000-000000000007',
-              cwd: '/home/x/brewlife',
+              cwd: '/home/x/myproject-a',
             },
           }),
         )
-        const brewBound = yield* rig.adapter.identity.currentIdentity()
-        expect(brewBound.name).toBe(decodeDisplayNameSync('cc-brewlife-b7e71ba4'))
+        const boundA = yield* rig.adapter.identity.currentIdentity()
+        expect(boundA.name).toBe(decodeDisplayNameSync('cc-myproject-a-b7e71ba4'))
 
         yield* Effect.promise(() =>
           rig.client.callTool({
             name: 'post',
             arguments: {
               channel_name: 'home',
-              body: 'homelab session first attribution',
+              body: 'myproject-b session first attribution',
               session_id: '40e1aaaa-0000-4000-8000-000000000008',
-              cwd: '/home/x/homelab',
+              cwd: '/home/x/myproject-b',
             },
           }),
         )
-        const homeBound = yield* rig.adapter.identity.currentIdentity()
-        expect(homeBound.name).toBe(decodeDisplayNameSync('cc-homelab-40e1aaaa'))
+        const boundB = yield* rig.adapter.identity.currentIdentity()
+        expect(boundB.name).toBe(decodeDisplayNameSync('cc-myproject-b-40e1aaaa'))
       }),
     ),
   ))
 
-test('post with cwd from a non-project directory falls back to bare cc-<8> (ass-v7b4)', () =>
+test('post with cwd from a non-project directory falls back to bare cc-<8>', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {

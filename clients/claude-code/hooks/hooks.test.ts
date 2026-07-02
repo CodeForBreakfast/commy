@@ -31,9 +31,7 @@ test('matcher uses the doubled-prefix shape Claude Code emits for plugin-shipped
   // Plugin-shipped MCP tool names are mcp__plugin_<plugin>_<plugin>__<tool>
   // (the plugin slug appears twice; the marketplace name does not appear).
   // The un-prefixed mcp__<name>__<tool> shape only matches plain stdio MCP
-  // servers registered via `claude mcp add` — it does NOT match plugin tools.
-  // ass-4umr: shipping the un-prefixed shape meant the hook never fired and
-  // every ephemeral CC session errored on its first attribution call.
+  // servers registered via `claude mcp add` — it does not match plugin tools.
   const matcher = preToolUse[0]?.matcher
   expect(matcher).toBeDefined()
   expect(matcher).toStartWith(EXPECTED_PREFIX)
@@ -50,7 +48,7 @@ test.each(ATTRIBUTION_TOOLS)('matcher matches the actual CC tool name for %s', (
   expect(re.test(`${EXPECTED_PREFIX}${tool}`)).toBe(true)
 })
 
-test('matcher does NOT match arbitrary other MCP tools (no over-broad capture)', () => {
+test('matcher does not match arbitrary other MCP tools (no over-broad capture)', () => {
   const matcher = preToolUse[0]?.matcher ?? ''
   const re = new RegExp(`^${matcher}$`)
   expect(re.test('mcp__plugin_discord_discord__reply')).toBe(false)
@@ -59,9 +57,8 @@ test('matcher does NOT match arbitrary other MCP tools (no over-broad capture)',
   expect(re.test(`${EXPECTED_PREFIX}list_channels`)).toBe(false)
 })
 
-test('command invokes node on PATH against the hook entrypoint — no bun, no Nix wrapper (comms-iw8w.2)', () => {
-  // The plugin's prereq is `node` on PATH (the npx-migration shed the bun
-  // consumer dependency — comms-iw8w). The hook entrypoint imports no workspace
+test('command invokes node on PATH against the hook entrypoint — no bun, no Nix wrapper', () => {
+  // The plugin's prereq is `node` on PATH. The hook entrypoint imports no workspace
   // packages and uses only erasable TS syntax, so node runs the .ts directly
   // via native type-stripping (node ≥23.6) — nothing staged, no build artifact.
   const hook = preToolUse[0]?.hooks[0]

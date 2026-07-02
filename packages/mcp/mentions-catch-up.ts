@@ -6,7 +6,7 @@ import type { Notifier } from './event-pump.ts'
 import { formatMessage } from './events.ts'
 
 /**
- * Replay missed @-mentions on session resume (comms-rxo).
+ * Replay missed @-mentions on session resume.
  *
  * Mental model: "what would a human do when they returned to the app?"
  * Check mentions first. The plugin equivalent is — on resume, fetch the
