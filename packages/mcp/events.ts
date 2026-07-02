@@ -5,9 +5,8 @@ import { Array as Arr, Option, Record as Rec, String as Str } from 'effect'
  * Wire shape of a single inbound event after rendering. Drives the
  * `notifications/claude/channel` notification's `params` directly: the
  * Claude Code host wraps as `<channel source="commy" {meta}>{content}</channel>`,
- * mirroring the precedent established by the Discord plugin in
- * `~/assistant/plugins/discord/server.ts`. The plugin owns sanitisation
- * of meta values; the host owns the wrapping tag.
+ * mirroring the precedent established by the Discord plugin. The plugin
+ * owns sanitisation of meta values; the host owns the wrapping tag.
  */
 export interface ChannelEventPayload {
   readonly content: string

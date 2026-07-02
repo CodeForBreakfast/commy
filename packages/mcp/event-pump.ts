@@ -330,20 +330,20 @@ export const startEventPump = (deps: EventPumpDeps): Effect.Effect<EventPumpHand
  * - `notifications/claude/channel` — the Claude-Code-host convention. The CC
  *   host (and the Discord plugin, against the same capability) wraps the params
  *   into a `<channel source="commy" {meta}>{content}</channel>` block, so
- *   its ENTIRE meta lands in the agent's turn. The bare numeric identity ids
+ *   its entire meta lands in the agent's turn. The bare numeric identity ids
  *   (`sender_id`, reaction `by_id`) are noise there — they collide with the
  *   equally-numeric `message_id` and tempt agents to quote a number instead of
  *   a name — so this carrier omits `IDENTITY_ID_META_KEYS`. Sender/reactor are
  *   surfaced by name only.
  * - `notifications/message` — the MCP-standard `LoggingMessageNotification`,
  *   the host-neutral carrier any standards-compliant MCP client can render.
- *   Its params MUST satisfy the
+ *   Its params must satisfy the
  *   SDK's `LoggingMessageNotificationParamsSchema` (`level` required, `data`
  *   carries the payload), so the `{ content, meta }` frame is nested under
  *   `data` rather than placed at the params root — a raw frame would fail
  *   validation in the very clients this carrier targets. `logger` names the
  *   emitter, the neutral analogue of the CC host's `source="commy"`.
- *   This carrier keeps the FULL meta, including the identity ids machine
+ *   This carrier keeps the full meta, including the identity ids machine
  *   consumers key on (Hermes `SessionSource.user_id`).
  */
 export const channelNotifier =

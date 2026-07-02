@@ -125,7 +125,7 @@ describe('createSingleIdentityCache (persistent mode)', () => {
         const spy = buildAdapterSpy()
         const ensureBound = yield* createEnsureBound({
           acquire: spy.acquire,
-          name: decodeBotNameSync('assistant-concierge'),
+          name: decodeBotNameSync('myproject-concierge'),
         })
         const cache = createSingleIdentityCache({ ensureBound })
         const a = yield* cache.ensureBoundFor(sid('11111111'))
@@ -134,7 +134,7 @@ describe('createSingleIdentityCache (persistent mode)', () => {
         expect(b).toBe(ensureBound)
         const ra = yield* a()
         const rb = yield* b()
-        expect(spy.acquireCalls).toEqual(['assistant-concierge'])
+        expect(spy.acquireCalls).toEqual(['myproject-concierge'])
         expect(rb).toBe(ra)
       }),
     ))
@@ -145,7 +145,7 @@ describe('createSingleIdentityCache (persistent mode)', () => {
         const spy = buildAdapterSpy()
         const ensureBound = yield* createEnsureBound({
           acquire: spy.acquire,
-          name: decodeBotNameSync('assistant-concierge'),
+          name: decodeBotNameSync('myproject-concierge'),
         })
         const cache = createSingleIdentityCache({ ensureBound })
         expect(yield* cache.ensureBoundFor(undefined)).toBe(ensureBound)
@@ -496,9 +496,9 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
           release: spy.release,
           idleReleaseMs: 60_000,
         })
-        const eb = yield* cache.ensureBoundFor(sid('abcdef12'), slug('assistant'))
+        const eb = yield* cache.ensureBoundFor(sid('abcdef12'), slug('myproject'))
         yield* eb()
-        expect(spy.acquireCalls).toEqual(['cc-assistant-abcdef12'])
+        expect(spy.acquireCalls).toEqual(['cc-myproject-abcdef12'])
       }),
     ))
 
@@ -511,11 +511,11 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
           release: spy.release,
           idleReleaseMs: 60_000,
         })
-        const eb1 = yield* cache.ensureBoundFor(sid('a3a3a3a3'), slug('brewlife'))
+        const eb1 = yield* cache.ensureBoundFor(sid('a3a3a3a3'), slug('myproject-a'))
         yield* eb1()
-        const eb2 = yield* cache.ensureBoundFor(sid('b3b3b3b3'), slug('homelab'))
+        const eb2 = yield* cache.ensureBoundFor(sid('b3b3b3b3'), slug('myproject-b'))
         yield* eb2()
-        expect(spy.acquireCalls).toEqual(['cc-brewlife-a3a3a3a3', 'cc-homelab-b3b3b3b3'])
+        expect(spy.acquireCalls).toEqual(['cc-myproject-a-a3a3a3a3', 'cc-myproject-b-b3b3b3b3'])
       }),
     ))
 
@@ -794,13 +794,13 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
               calls.push({ name: id.identity.name, project })
             }),
         })
-        const eb1 = yield* cache.ensureBoundFor(sid('a1f1a1f1'), slug('brewlife'))
+        const eb1 = yield* cache.ensureBoundFor(sid('a1f1a1f1'), slug('myproject-a'))
         yield* eb1()
-        const eb2 = yield* cache.ensureBoundFor(sid('21121121'), slug('homelab'))
+        const eb2 = yield* cache.ensureBoundFor(sid('21121121'), slug('myproject-b'))
         yield* eb2()
         expect(calls).toEqual([
-          { name: 'cc-brewlife-a1f1a1f1', project: 'brewlife' },
-          { name: 'cc-homelab-21121121', project: 'homelab' },
+          { name: 'cc-myproject-a-a1f1a1f1', project: 'myproject-a' },
+          { name: 'cc-myproject-b-21121121', project: 'myproject-b' },
         ])
       }),
     ))

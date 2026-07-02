@@ -15,7 +15,7 @@ import { expect, test } from 'bun:test'
  * announces `FIXTURE_ARMED` once `clientDisconnect` has attached its
  * listeners; we close stdin only after that, then require the process to
  * exit cleanly within a bounded window. If it hangs, the disconnect signal
- * never fired — the orphan-leak regression.
+ * never fired and the process would leak as an orphan.
  */
 
 const FIXTURE = `${import.meta.dir}/disconnect-exit.fixture.ts`

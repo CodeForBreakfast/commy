@@ -400,12 +400,11 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
   } as const
   // SessionId is a branded type — `parseSessionId` is the single mint point.
   // A non-UUID raw value (model-guessed string, hook misfire) returns
-  // `undefined` and routes through the cache's unbound stub. This is the
-  // structural fix: unvalidated strings cannot reach
-  // `composeBotName` and produce a malformed `cc-<project>-<garbage>`
-  // identity. Note that the hook injects session_id from CC's session UUID
-  // which always passes; non-CC clients that lacked a UUID before now fail
-  // loudly at parse time instead of silently minting garbage downstream.
+  // `undefined` and routes through the cache's unbound stub, so unvalidated
+  // strings cannot reach `composeBotName` and produce a malformed
+  // `cc-<project>-<garbage>` identity. The hook injects session_id from CC's
+  // session UUID, which always passes; non-CC clients without a UUID fail
+  // loudly at parse time rather than silently minting garbage downstream.
   const readSessionId = (args: Readonly<Record<string, unknown>>): SessionId | undefined =>
     Option.getOrUndefined(parseSessionId(args['session_id']))
   const readCwd = (args: Readonly<Record<string, unknown>>): string | undefined => {
@@ -535,7 +534,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     {
       name: 'post',
       description:
-        'Post a message to a channel by name. Optional thread (topic), mentions (identity ids the bot has seen), and reply_to (message id). To ping someone on Zulip, write the @**Name** markup inline in body where you want it rendered — the mentions array is notification metadata only and does NOT modify body. Returns {message_id, channel_id, channel_name, thread, permalink}. When you show a human this message afterwards, link it by the returned permalink — never a bare name or message id.',
+        'Post a message to a channel by name. Optional thread (topic), mentions (identity ids the bot has seen), and reply_to (message id). To ping someone on Zulip, write the @**Name** markup inline in body where you want it rendered — the mentions array is notification metadata only and does not modify body. Returns {message_id, channel_id, channel_name, thread, permalink}. When you show a human this message afterwards, link it by the returned permalink — never a bare name or message id.',
       inputSchema: {
         type: 'object',
         properties: {

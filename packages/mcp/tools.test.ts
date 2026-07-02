@@ -187,7 +187,7 @@ test('current_identity before acquire returns the unbound sentinel (passive, nev
         )
         expect(result.isError).toBeFalsy()
         expect(result.structuredContent).toEqual({ state: 'unbound', identity: null })
-        // The passive accessor MUST NOT have triggered acquire.
+        // The passive accessor must not have triggered acquire.
         expect(rig.ensureBound.current()).toBeUndefined()
       }),
     ),
@@ -395,7 +395,7 @@ test('list_agents returns only agent-kind identities seeded in the directory', (
             yield* ensureBound()
             yield* adapter.seedAgent('peer-a').pipe(Effect.orDie)
             yield* adapter.seedAgent('peer-b').pipe(Effect.orDie)
-            yield* adapter.seedHuman('graeme').pipe(Effect.orDie)
+            yield* adapter.seedHuman('carol').pipe(Effect.orDie)
           }),
         )
         const result = yield* Effect.promise(() =>
@@ -408,7 +408,7 @@ test('list_agents returns only agent-kind identities seeded in the directory', (
         const names = sc.identities.map((i) => i.name).sort()
         expect(names).toContain('peer-a')
         expect(names).toContain('peer-b')
-        expect(names).not.toContain('graeme')
+        expect(names).not.toContain('carol')
         for (const identity of sc.identities) {
           expect(identity.kind).toBe('agent')
         }
@@ -509,8 +509,8 @@ test('list_humans returns only human-kind identities', () =>
           Effect.gen(function* () {
             yield* ensureBound()
             yield* adapter.seedAgent('peer-a').pipe(Effect.orDie)
-            yield* adapter.seedHuman('graeme').pipe(Effect.orDie)
-            yield* adapter.seedHuman('mhairi').pipe(Effect.orDie)
+            yield* adapter.seedHuman('carol').pipe(Effect.orDie)
+            yield* adapter.seedHuman('dave').pipe(Effect.orDie)
           }),
         )
         const result = yield* Effect.promise(() =>
@@ -521,8 +521,8 @@ test('list_humans returns only human-kind identities', () =>
           identities: Array<{ name: string; kind: string }>
         }
         const names = sc.identities.map((i) => i.name).sort()
-        expect(names).toContain('graeme')
-        expect(names).toContain('mhairi')
+        expect(names).toContain('carol')
+        expect(names).toContain('dave')
         expect(names).not.toContain('peer-a')
         for (const identity of sc.identities) {
           expect(identity.kind).toBe('human')

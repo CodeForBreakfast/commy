@@ -30,7 +30,7 @@ const BOT_ID: IdentityIdType = decodeIdentityIdSync('bot-42')
 
 const sender: Identity = {
   id: decodeIdentityIdSync('user-7'),
-  name: decodeDisplayNameSync('Graeme'),
+  name: decodeDisplayNameSync('Carol'),
   kind: 'human',
 }
 
@@ -377,7 +377,7 @@ test('pump dispatches message-posted as a formatMessage payload', () =>
       expect(collector.calls).toHaveLength(1)
       expect(collector.calls[0]?.content).toBe('hello')
       expect(collector.calls[0]?.meta['message_id']).toBe('msg-1')
-      expect(collector.calls[0]?.meta['sender_name']).toBe('Graeme')
+      expect(collector.calls[0]?.meta['sender_name']).toBe('Carol')
     }),
   ))
 

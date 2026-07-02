@@ -28,13 +28,13 @@ const runCatchUp = (deps: MentionsCatchUpDeps): Promise<void> =>
 
 const botIdentity: Identity = {
   id: decodeIdentityIdSync('bot-1'),
-  name: decodeDisplayNameSync('assistant-concierge'),
+  name: decodeDisplayNameSync('myproject-concierge'),
   kind: 'agent',
 }
 
 const otherSender: Identity = {
   id: decodeIdentityIdSync('user-42'),
-  name: decodeDisplayNameSync('mhairi'),
+  name: decodeDisplayNameSync('carol'),
   kind: 'human',
 }
 

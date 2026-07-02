@@ -36,7 +36,7 @@ import type { SubscribeIntent } from './subscribe-parser.ts'
  * rejected because injecting messages as a system reminder would
  * diverge from the live pump's wire shape; the agent-driven variant
  * was rejected because it would push policy ("which channels to skim,
- * how far back, in what order") into every concierge's prompt.
+ * how far back, in what order") into every bot's prompt.
  *
  * `mentions` intents are intentionally skipped here — the mentions
  * helper's cursor-bounded fetch handles them with the correct semantics
