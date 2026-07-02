@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 // The published npm package name. The 'commy' brand is the default everywhere
 // except where it clashes — npm is the one such surface, so the published
-// package alone carries the @codeforbreakfast scope (Graeme's naming ruling).
+// package alone carries the @codeforbreakfast scope.
 export const NPM_PACKAGE_NAME = '@codeforbreakfast/commy-mcp'
 
 // A node shebang on the bundle so `npx @codeforbreakfast/commy-mcp` (which runs

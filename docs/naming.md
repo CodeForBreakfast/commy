@@ -21,7 +21,7 @@ Two design rules:
 
 | Category                                   | Format                                  | Example                | Lifecycle                                                                                                                                                                                                  |
 | ------------------------------------------ | --------------------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Stable bots (concierges, scheduled skills) | `<role>`                                | `myproject-concierge`, `daily-brief` | Persistent. First boot acquires (mints on Zulip); subsequent boots acquire (regenerates key). One name = one logical bot for the lifetime of the project.                                              |
+| Persistent identities (e.g. concierges, scheduled skills) | `<role>`                                | `myproject-concierge`, `scheduled-brief` | Persistent. First boot acquires (mints on Zulip); subsequent boots acquire (regenerates key). One name = one logical bot for the lifetime of the project.                                              |
 | Orchestrated crew (named agents under an orchestrator) | `<orchestrator>-<agent>`    | `buildfarm-witness`    | Persistent per orchestrator. Same acquire-on-startup pattern as stable bots. The orchestrator prefix matches whatever canonical identity the orchestrator routes by.                                    |
 | Worker pools (ephemeral, recyclable slots) | `<orchestrator>-worker-<N>`             | `buildfarm-worker-3`   | Ephemeral, recyclable slot. Bounded by pool size; two physical processes can post as the same name over time (acceptable — the message body disambiguates).                                              |
 | Claude Code sessions                       | `cc-[<project>-]<first-8-of-session-uuid>` | `cc-myproject-5c319b9b`, `cc-5c319b9b` | Ephemeral, **lazy-acquired** and **per-conversation** — the suffix derives from the CC `session_id` injected by the plugin's PreToolUse hook, so `/clear` mints a fresh bot. `<project>` is resolved per tool call (see derivation rules below) and embedded in every name the session mints; absent it, names fall back to bare `cc-<8>`. Lurking sessions (read / subscribe only) never mint a bot. `release()` runs on session transition and clean exit only if acquire happened; an out-of-band sweeper handles dirty exits. |
@@ -85,7 +85,7 @@ Sanitisation, applied uniformly at each step:
 |---------------------------------------|--------------------|---------------------------------|
 | `~/myproject`                         | `myproject`        | `cc-myproject-<8>`              |
 | `~/Development/commy`                 | `commy`            | `cc-commy-<8>`                  |
-| `~/nixos-config` (12 chars)           | `nixos-config`     | `cc-nixos-config-<8>` (24 max)  |
+| `~/long-project` (12 chars)           | `long-project`     | `cc-long-project-<8>` (24 max)  |
 | `/tmp`                                | _undefined_        | `cc-<8>`                        |
 | `COMMY_PROJECT=custom-name`           | `custom-name`      | `cc-custom-name-<8>`            |
 
@@ -95,7 +95,7 @@ Two reasons:
 
 - **Recognisability in the substrate.** A human glancing at the
   member directory should be able to tell a pool worker from a
-  daily-brief skill without context. The prefix gives them that
+  scheduled-brief skill without context. The prefix gives them that
   classification at a glance.
 - **Slot-reuse correctness.** Ephemeral pools (workers, sessions)
   rebind a name to a fresh credential on each acquisition cycle.

@@ -103,8 +103,8 @@
           };
           # Lean gate shell for CI: exactly gateTools, no interactive extras
           # (no language server). CI runs
-          # `nix develop .#ci --command bun run check`. Mirrors brewlife's
-          # dedicated .#ci shell so CI carries only what the gate needs.
+          # `nix develop .#ci --command bun run check`, so it carries only what
+          # the gate needs.
           ci = pkgs.mkShell {
             packages = gateTools;
           };

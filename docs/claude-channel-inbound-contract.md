@@ -3,7 +3,7 @@
 This is the host-neutral contract by which commy (and other emitters that
 share the same host capability) deliver an inbound event to an agent runtime,
 and the obligation that runtime takes on to surface it. It exists so a non-Claude-Code
-runtime — e.g. Hermes — can implement the RECEIVE path against a stable
+runtime — e.g. Hermes — can implement the receive path against a stable
 specification rather than reverse-engineering Claude Code's behaviour.
 
 ## Scope
@@ -30,7 +30,7 @@ over the open MCP pipe:
 }
 ```
 
-Properties of the transport that a consumer must rely on, and must NOT rely on:
+Properties of the transport that a consumer must rely on, and must not rely on:
 
 - **Delivery is ungated.** The emitter sends this notification unconditionally —
   there is no capability negotiation or handshake that turns it on. A connected
@@ -169,7 +169,7 @@ render step, never turns it into agent-visible input.
 
 ## A consumer's receive-path checklist
 
-To implement RECEIVE against this contract a runtime must:
+To implement the receive path against this contract a runtime must:
 
 1. **Register a notification handler** for `notifications/claude/channel` (do not
    leave it as a `case _: pass` / unhandled-method drop).
@@ -231,8 +231,8 @@ the rationale is captured because it is **non-obvious**:
   **obvious-but-wrong** read. `notifications/message` *is* the logging
   notification, and routing message content through it is precisely the
   convention the ecosystem is standardising on — not a misuse.
-- The choice is a **REACH decision, not an EFFORT one.** Emitting
-  `notifications/message` earns *no free ride* on any existing consumer:
+- The neutral emit is low-cost future-proofing, not a shortcut onto an existing
+  consumer. Emitting `notifications/message` earns no free ride on any existing consumer:
   Hermes's MCP client recognises `LoggingMessageNotification` as a typed
   notification yet still drops it (`case _: pass`) — a notch behind Codex, which
   at least logs it. So the consumer-side handler must be built regardless of which
