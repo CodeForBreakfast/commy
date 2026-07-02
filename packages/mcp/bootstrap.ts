@@ -60,8 +60,7 @@ export type ProjectSlug = string & { readonly [ProjectSlugBrand]: never }
  * is a UUID, so the hook-injected path always passes; non-CC MCP clients
  * must supply a UUID (e.g. via `crypto.randomUUID()`), which is a small
  * ask in exchange for making malformed identities unrepresentable
- * downstream. `Schema.UUID`'s built-in regex is byte-equivalent to the
- * old hand-rolled `UUID_RE` (both case-insensitive, anchored).
+ * downstream.
  */
 const SessionIdSchema = Schema.UUID.pipe(Schema.brand('SessionId'))
 export type SessionId = typeof SessionIdSchema.Type
@@ -157,7 +156,7 @@ const renderConfigError = (error: ConfigError.ConfigError): ReadonlyArray<string
 
 /**
  * Required brand field: read the raw string under `key`, reject an
- * unsubstituted host-env placeholder, then decode through the FOUNDATION brand
+ * unsubstituted host-env placeholder, then decode through the foundation brand
  * schema. A missing key surfaces as `MissingData`; a malformed value as
  * `InvalidData` carrying the schema's formatted message under `key`.
  */
@@ -427,10 +426,6 @@ export const composeBotName = (args: {
 }
 
 /**
- * Git context for a cwd, as needed by `deriveProject`. The default
- * implementation shells out to `git -C <cwd>`; tests inject a fake.
- */
-/**
  * Git context for a cwd, modelled as a tagged union so the
  * gitRoot-present-iff-inRepo invariant is structural rather than
  * conventional: `InRepo` always carries a `gitRoot` (and an optional
@@ -475,7 +470,7 @@ const basename = (path: string): string => {
  *   2. Git remote origin basename (stable across worktree paths,
  *      misses non-repo projects).
  *   3. Git root basename (covers local-only repos; better than cwd
- *      basename, which would mis-identify `~/assistant/scripts/` as
+ *      basename, which would mis-identify `~/myproject/scripts/` as
  *      `scripts`).
  *   4. `undefined` — non-project cwds (`/tmp`, `$HOME`) fall through
  *      to bare `cc-<8>`.
@@ -511,8 +506,7 @@ export const deriveProject = (
  * executor. A non-zero git exit (e.g. not a repo, no origin remote) yields
  * empty stdout — git's diagnostics go to its piped, undrained stderr — and a
  * spawn failure (no `git` on PATH) is caught to the same empty string. So the
- * caller reads "no output" as the single failure signal, matching the old
- * `Bun.spawnSync` exit-code checks.
+ * caller reads "no output" as the single failure signal.
  */
 const gitStdout = (
   cwd: string,

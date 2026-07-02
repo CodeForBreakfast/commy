@@ -126,7 +126,7 @@ const validEnv = {
   ZULIP_SITE: 'https://zulip.example.com',
   ZULIP_MINTER_EMAIL: 'minter-bot@zulip.example.com',
   ZULIP_MINTER_API_KEY: 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk1',
-  COMMY_BOT_NAME: 'assistant-concierge',
+  COMMY_BOT_NAME: 'myproject-concierge',
 } as const
 
 interface FakeAdapterCalls {
@@ -152,8 +152,8 @@ const buildFakeAdapter = (
   const reconcileCalls = { count: 0 }
   const events: string[] = []
   const identity: Identity = {
-    id: decodeIdentityIdSync('bot:assistant-concierge'),
-    name: decodeDisplayNameSync('assistant-concierge'),
+    id: decodeIdentityIdSync('bot:myproject-concierge'),
+    name: decodeDisplayNameSync('myproject-concierge'),
     kind: 'agent',
   }
   const acquiredIdentity: AcquiredIdentity = {
@@ -225,7 +225,7 @@ test('main resolves cleanly when given a valid env', async () => {
   const fake = buildFakeAdapter()
   const exit = await runProgram(validEnv, fake.adapter)
   expect(Exit.isSuccess(exit)).toBe(true)
-  expect(fake.calls.acquired).toEqual(['assistant-concierge'])
+  expect(fake.calls.acquired).toEqual(['myproject-concierge'])
   expect(fake.calls.closes.count).toBe(1)
 })
 
@@ -247,10 +247,10 @@ test('main writes acquire failure to stderr in the canonical format, fails boot,
   // re-tested); the boot Effect failing is what the test pins.
   const exit = await runProgram(validEnv, fake.adapter, { loggerLayer: captureLogger(stderr) })
   expect(stderr).toEqual([
-    'commy plugin: acquire("assistant-concierge") failed: substrate rejected acquire',
+    'commy plugin: acquire("myproject-concierge") failed: substrate rejected acquire',
   ])
   expect(Exit.isFailure(exit)).toBe(true)
-  expect(fake.calls.acquired).toEqual(['assistant-concierge'])
+  expect(fake.calls.acquired).toEqual(['myproject-concierge'])
   expect(fake.calls.closes.count).toBe(1)
 })
 
@@ -300,7 +300,7 @@ test('main acquire failure stringifies non-Error rejections', async () => {
   const stderr: string[] = []
   const exit = await runProgram(validEnv, fake.adapter, { loggerLayer: captureLogger(stderr) })
   expect(stderr).toEqual([
-    'commy plugin: acquire("assistant-concierge") failed: plain string rejection',
+    'commy plugin: acquire("myproject-concierge") failed: plain string rejection',
   ])
   expect(Exit.isFailure(exit)).toBe(true)
 })
@@ -396,7 +396,7 @@ test('main applies env-driven subscriptions in order after acquire and Type-1 de
     COMMY_SUBSCRIBE: 'channel:home,thread:home/payments,mentions',
   }
   await runProgram(env, fake.adapter, { readGitContext: () => Effect.succeed(NotInRepo()) })
-  expect(fake.calls.acquired).toEqual(['assistant-concierge'])
+  expect(fake.calls.acquired).toEqual(['myproject-concierge'])
   // Type-1 default `mentions` (no project) comes first; env tokens follow.
   expect(fake.calls.subscribed).toEqual([
     'mentions',
@@ -413,7 +413,7 @@ test('main applies env-driven subscriptions in order after acquire and Type-1 de
 test('main reconciles minter subscriptions during boot before env subscribes', async () => {
   const fake = buildFakeAdapter({
     reconcileReport: {
-      added: [decodeChannelNameSync('commy'), decodeChannelNameSync('homelab')],
+      added: [decodeChannelNameSync('commy'), decodeChannelNameSync('general')],
       error: undefined,
     },
   })
@@ -424,7 +424,7 @@ test('main reconciles minter subscriptions during boot before env subscribes', a
   expect(fake.calls.events.indexOf('reconcile')).toBeLessThan(
     fake.calls.events.indexOf('subscribe'),
   )
-  expect(log.some((line) => line.includes('commy') && line.includes('homelab'))).toBe(true)
+  expect(log.some((line) => line.includes('commy') && line.includes('general'))).toBe(true)
 })
 
 test('main calls reconcile but stays silent when there is nothing to add', async () => {
@@ -442,7 +442,7 @@ test('main keeps booting when reconcile reports an error (log + continue)', asyn
   const log: string[] = []
   const exit = await runProgram(validEnv, fake.adapter, { loggerLayer: captureLogger(log) })
   expect(Exit.isSuccess(exit)).toBe(true)
-  expect(fake.calls.acquired).toEqual(['assistant-concierge'])
+  expect(fake.calls.acquired).toEqual(['myproject-concierge'])
   expect(log.some((line) => line.includes('realm unreachable'))).toBe(true)
 })
 
@@ -452,7 +452,7 @@ test('persistent mode + project registers Type-1 defaults (mentions + new-topics
   const fake = buildFakeAdapter()
   const env = { ...validEnv, COMMY_PROJECT: 'foo' }
   await runProgram(env, fake.adapter)
-  expect(fake.calls.acquired).toEqual(['assistant-concierge'])
+  expect(fake.calls.acquired).toEqual(['myproject-concierge'])
   expect(fake.calls.subscribed).toEqual([
     'mentions',
     {
@@ -482,7 +482,7 @@ test('Type-1 defaults register after acquire and before COMMY_SUBSCRIBE entries'
     COMMY_SUBSCRIBE: 'channel:home',
   }
   await runProgram(env, fake.adapter)
-  expect(fake.calls.events.indexOf('acquire(assistant-concierge)')).toBeLessThan(
+  expect(fake.calls.events.indexOf('acquire(myproject-concierge)')).toBeLessThan(
     fake.calls.events.indexOf('subscribe'),
   )
   expect(fake.calls.subscribed).toEqual([

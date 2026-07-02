@@ -95,10 +95,8 @@ const PERSISTENT_BOT_NAME = 'cc-live-pl-test'
 // UUID-shaped session ids — the session_id parser rejects anything else.
 // Deterministic prefixes give predictable bot
 // names (`cc-<first-8-hex>`) so the teardown assertions can fetch by
-// name; the trailing UUID body is arbitrary but must satisfy the
-// UUID_RE in bootstrap.ts. The two `cc-livetsta` / `cc-livetstb`
-// accounts from before this change remain on the realm as
-// abandoned-deactivated zombies — Zulip cannot truly delete bots.
+// name; the trailing UUID body is arbitrary but must be UUID-shaped
+// (the session-id validator in bootstrap.ts).
 const EPHEMERAL_SESSION_A = 'aaaaaaaa-0000-0000-0000-000000000001'
 const EPHEMERAL_SESSION_B = 'bbbbbbbb-0000-0000-0000-000000000001'
 const EPHEMERAL_BOT_A = `cc-${EPHEMERAL_SESSION_A.slice(0, 8)}`
@@ -188,8 +186,7 @@ const buildHarness = (
     // finalizer) and the file-backed cursor store arrive through the app
     // Layer; the env through an outermost ConfigProvider. Forked under the
     // scope; `killSwitch` interrupts the pump's events stream on cleanup so
-    // the scope unwinds (pump-cancel → release → close) — the substrate
-    // teardown the test used to issue by hand.
+    // the scope unwinds (pump-cancel → release → close).
     const program = makeProgram({ transport: serverTransport }).pipe(
       Effect.provide(
         Layer.provideMerge(

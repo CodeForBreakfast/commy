@@ -51,10 +51,10 @@ import { FileSubscriptionStoreLive, SubscriptionStoreTag } from './subscription-
 import { registerTools } from './tools.ts'
 
 /**
- * Boot failed in a way the operator must fix (today: the persistent-mode
- * eager acquire was rejected by the substrate). `makeProgram` emits the
- * canonical stderr diagnostic and then fails with this; `runMain`'s
- * default teardown maps the failure Exit to process exit code 1.
+ * Boot failed in a way the operator must fix — the persistent-mode eager
+ * acquire was rejected by the substrate. `makeProgram` emits the stderr
+ * diagnostic and then fails with this; `runMain`'s default teardown maps
+ * the failure Exit to process exit code 1.
  */
 export class BootError extends Data.TaggedError('BootError')<{
   readonly message: string
@@ -102,7 +102,7 @@ export interface ProgramParams {
    * stdio pipe — the only disconnect signal a plain parent exit delivers
    * (no SIGINT/SIGTERM). Omitted (tests, and the one-shot integration
    * harness) → shutdown is driven solely by the event stream ending or a
-   * fiber interrupt, as before.
+   * fiber interrupt.
    */
   readonly shutdownSignal?: Effect.Effect<void>
 }
@@ -123,21 +123,18 @@ const EPHEMERAL_IDLE_SWEEP_INTERVAL_MS = 5 * 60 * 1000
  * Fork the ephemeral idle sweep onto a periodic schedule scoped to the
  * enclosing fiber Scope:
  *
- *   - `Schedule.spaced` keeps `intervalMs` between sweeps — matching the
- *     old timer's period. (`Effect.repeat` runs the body once at fork too;
- *     the boot-time sweep is a no-op since no slot is idle yet.)
+ *   - `Schedule.spaced` keeps `intervalMs` between sweeps. (`Effect.repeat`
+ *     runs the body once at fork too; the boot-time sweep is a no-op since
+ *     no slot is idle yet.)
  *   - `Effect.forkScoped` ties the sweep fiber to the caller's Scope, so
  *     when that Scope closes (the pump's scoped region unwinds on natural
- *     end or signal-driven interrupt) the fiber is interrupted — the
- *     `clearInterval`-in-`finally` equivalent, without a manual handle.
+ *     end or signal-driven interrupt) the fiber is interrupted.
  *   - The forked fiber never blocks process exit: it's a child of the
- *     Scope, not the main fiber's join set (the old `.unref()` role).
+ *     Scope, not the main fiber's join set.
  *
  * The sweep reads the current wall-clock from Effect's `Clock` rather
  * than `Date.now()`, so tests can drive it deterministically with
- * `TestClock`. `sweepIdle` is Effect-native (see `identity-cache.ts`), so
- * it sequences straight into the scheduled body with no `Effect.promise`
- * lift.
+ * `TestClock`.
  */
 export const forkIdleSweep = (
   cache: Pick<IdentityCache, 'sweepIdle'>,
@@ -311,7 +308,7 @@ const buildIdentityCache = (
  *   5. buildIdentityCache — single (persistent) or ephemeral (1-slot,
  *                          release-then-acquire across session_id
  *                          transitions).
- *   6. ★ env-driven branch on `parsed.botName`:
+ *   6. env-driven branch on `parsed.botName`:
  *      • Persistent (botName set): eager acquire now. Rejection writes
  *        the canonical diagnostic and FAILS with BootError — runMain's
  *        teardown maps that to exit 1.
@@ -374,7 +371,7 @@ export const makeProgram = (
       // Catch-up is non-fatal: a transient substrate hiccup — or a defect
       // such as the memory adapter's id-strict history throwing
       // UnknownChannel — must not refuse boot. `catchAllCause` so a defect
-      // is logged and swallowed too, matching the try/catch it replaces.
+      // is logged and swallowed too.
       const logCatchUpFailure =
         (label: string) =>
         (cause: Cause.Cause<CatchUpError>): Effect.Effect<void> =>
@@ -418,8 +415,8 @@ export const makeProgram = (
 
       // Subscription restore/persist. Ephemeral mode only: a
       // persistent COMMY_BOT_NAME pane gets a new session_id every launch, so
-      // its store is always absent → the fresh path → COMMY_SUBSCRIBE-only,
-      // exactly as before. `restoredSessions` memoises the once-per-session_id
+      // its store is always absent → the fresh path → COMMY_SUBSCRIBE-only.
+      // `restoredSessions` memoises the once-per-session_id
       // restore decision so the store's presence is a true resume signal and
       // never a file this same process just wrote via `subscribe`.
       const restoredSessions = yield* SynchronizedRef.make(HashSet.empty<SessionId>())
@@ -507,8 +504,8 @@ export const makeProgram = (
         const ensureBound = yield* identityCache.ensureBoundFor(undefined)
         type1Intents = yield* ensureBound().pipe(
           // `ensureBound()` is the acquire Effect (ensure-bound.ts). Squash the
-          // whole Cause — typed acquire failure OR an adapter defect — into the
-          // BootError the operator must fix, the way the old Promise edge did.
+          // whole Cause — typed acquire failure or an adapter defect — into the
+          // BootError the operator must fix.
           Effect.catchAllCause((cause) => {
             const err = Cause.squash(cause)
             return Effect.fail(
@@ -537,7 +534,7 @@ export const makeProgram = (
       // `{ persistent: true }` so the substrate keeps the pinned bot active —
       // deactivating it would force the next session's acquire onto the
       // admin-only reactivate path and wedge a Member-rights minter.
-      // Ephemeral seats deactivate as before.
+      // Ephemeral seats deactivate.
       const releasePersistent = parsed.botName !== undefined
       yield* Effect.addFinalizer(() =>
         identityCache.boundIdentityIds().size > 0
@@ -732,8 +729,7 @@ interface CloseEmitter {
  * SIGINT/SIGTERM, so this pipe-close is the server's only disconnect
  * signal. Raced against the daemon event pump in {@link main}, completing
  * here unwinds the program scope (pump-cancel → release → close) and the
- * ~166MB bun child exits instead of orphaning under systemd and
- * accumulating across sessions.
+ * child exits instead of orphaning and accumulating across sessions.
  */
 export const clientDisconnect = (stdin: CloseEmitter): Effect.Effect<void> =>
   Effect.async<void>((resume) => {
@@ -764,10 +760,10 @@ export const clientDisconnect = (stdin: CloseEmitter): Effect.Effect<void> =>
  * scope finalizers fire (pump-cancel → release → close) and the Exit maps
  * to the process exit code via runMain's default teardown.
  *
- * `disablePrettyLogger` is mandatory: runMain otherwise swaps in the
+ * `disablePrettyLogger` is required: runMain otherwise swaps in the
  * pretty logger, whose `console.group`/`groupEnd` write to STDOUT and
- * corrupt the MCP JSON-RPC channel (the stdio gotcha). The
- * stderr logger layer routes every `Effect.log*` to STDERR regardless.
+ * corrupt the MCP JSON-RPC channel. The stderr logger layer routes every
+ * `Effect.log*` to STDERR regardless.
  */
 export const main = (): void =>
   NodeRuntime.runMain(

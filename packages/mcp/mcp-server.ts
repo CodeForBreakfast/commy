@@ -18,14 +18,13 @@ export const PLUGIN_VERSION = '0.15.0'
  * trackers, internal ids) — those belong in an operator's own context,
  * not in guidance shipped to every adopter. Etiquette — how
  * to communicate *well* on the substrate — ships separately as the
- * `using-commy` skill so it stays opt-in rather than always-on. Kept
- * terse on purpose.
+ * `using-commy` skill so it stays opt-in rather than always-on.
  */
 const COMMY_INSTRUCTIONS = `**Substrate.** commy is the inter-agent channel: agents and humans coordinate here. If you run it alongside other agent-messaging tools, keep one substrate canonical and don't fan the same message across all of them.
 
 **Channels.** Each project has one channel: \`#<project-slug>\` where the slug is resolved per session as \`COMMY_PROJECT\` env > git remote \`origin\` basename > git root basename. Sessions launched outside a git repo (e.g. \`/tmp\`, \`$HOME\`) have no project channel and should post to \`#general\` instead. Don't invent a channel name from a metaphor — never post to a literal \`#home\`, \`#project\`, or \`#<project>\`. Use \`list_channels\` to enumerate what actually exists in the realm; posting to a non-existent channel throws \`UnknownChannel\` rather than silently routing to Notification Bot.
 
-**Topics.** A topic is a logical thread of conversation within a channel; the \`post\` tool's \`thread\` argument names it (Zulip calls these "topics"). Open a new topic when the work shifts — a fresh task, a new question, a different incident — and reply into an existing one when you're continuing the same line of work. Name topics by the work, not the speaker: \`payments-migration\`, \`auth-token-refresh\`, \`events-queue-expiry\` — not \`bot-debugging\` or \`graeme-asked\`. Top-level channel chatter (omit \`thread\`) is for terse status pings only; anything substantive deserves a topic.
+**Topics.** A topic is a logical thread of conversation within a channel; the \`post\` tool's \`thread\` argument names it (Zulip calls these "topics"). Open a new topic when the work shifts — a fresh task, a new question, a different incident — and reply into an existing one when you're continuing the same line of work. Name topics by the work, not the speaker: \`payments-migration\`, \`auth-token-refresh\`, \`events-queue-expiry\` — not \`bot-debugging\` or \`alice-asked\`. Top-level channel chatter (omit \`thread\`) is for terse status pings only; anything substantive deserves a topic.
 
 **Subscriptions.** Be on your project channel and \`#general\` only — not on other projects' channels. Boot-time defaults come from the plugin's \`COMMY_SUBSCRIBE\` userConfig (tokens: \`channel:<name>\`, \`thread:<channel>/<thread>\`, \`new-topics:<channel>\`, \`mentions\`); adjust the live set via \`subscribe\`/\`unsubscribe\` at runtime. Inbound matches arrive as \`<channel source="commy" ...>\` blocks. If one arrives from a channel you aren't subscribed to, treat it as background context and don't reply — only post into your project channel, into \`#general\`, or into threads you've explicitly joined. **Refer to peers by name** — the \`sender_name\` (and reaction \`by_name\`) in those blocks — never by a bare number; reserve numbers for message ids, which otherwise collide with identity in a thread.
 
@@ -44,7 +43,7 @@ const COMMY_INSTRUCTIONS = `**Substrate.** commy is the inter-agent channel: age
  * `tools: {}` is declared up front so per-tool handlers register on the
  * same server instance without a second construction. The
  * `claude/channel` experimental capability opts in to the channel-block
- * notification stream that the event-pump publishes. We do NOT declare
+ * notification stream that the event-pump publishes. It does not declare
  * `claude/channel/permission`: that capability asserts the plugin
  * authenticates the human replying, and commy has no
  * human-counterpart pairing concept on the port surface.
