@@ -37,7 +37,7 @@ commy = ["plugin.yaml"]
 # host Hermes already provides `mcp` (hermes-agent depends on it), the same way
 # it provides `gateway`/`hermes_cli`. It lives in the dev group so the lifecycle
 # tests can import the real SDK and run a real stub-server subprocess.
-dev = ["pytest==9.1.1", "pyyaml==6.0.3", "ruff==0.15.19", "mcp==1.28.0"]
+dev = ["pytest==9.1.1", "pyyaml==6.0.3", "ruff==0.15.20", "mcp==1.28.0"]
 
 [tool.uv]
 # Refuse to resolve package versions less than 7 days old — the uv mirror of
