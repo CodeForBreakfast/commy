@@ -142,10 +142,10 @@ export const decodeUserUploadPath = (
   Schema.decodeUnknown(UserUploadPathSchema)(raw)
 
 /**
- * Synchronous decoder for TEST FIXTURES — sibling of
+ * Synchronous decoder for test fixtures — sibling of
  * `decodeUserUploadPath`. A malformed literal in test setup is a
  * programmer error, so `decodeSync`'s throw is the legitimate fatal
- * case. PRODUCTION code must use `decodeUserUploadPath`, never this.
+ * case. Production code uses `decodeUserUploadPath`, never this.
  */
 export const decodeUserUploadPathSync = (raw: string): UserUploadPath =>
   Schema.decodeSync(UserUploadPathSchema)(raw)

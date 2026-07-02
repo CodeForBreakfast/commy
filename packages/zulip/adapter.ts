@@ -102,10 +102,10 @@ export interface ZulipAdapterConfig {
   readonly hostHeader?: string
   /**
    * Attach mode. When set, acquiring this exact bot name binds the
-   * pre-provisioned persona using the supplied **stable** api key WITHOUT
+   * pre-provisioned persona using the supplied stable api key without
    * regenerating it — so many sessions/processes can share one identity (the
    * Discord-style single-identity model) with no acquire-time key rotation and
-   * therefore no one-holder-per-name collision. Every other name keeps today's
+   * therefore no one-holder-per-name collision. Every other name keeps the
    * self-service mint/regenerate path. The key is `Redacted` for the same
    * secret-masking reason as `minterApiKey`.
    */
@@ -160,8 +160,8 @@ class ReactivateForbidden extends Data.TaggedError('ReactivateForbidden')<{
 
 /**
  * Raised when attach mode is configured for a persona that the
- * realm has no provisioned bot for. Attach binds an EXISTING identity by its
- * supplied stable key — it deliberately never mints — so a missing persona is
+ * realm has no provisioned bot for. Attach binds an existing identity by its
+ * supplied stable key — it never mints — so a missing persona is
  * an operator provisioning gap, not something to paper over by self-minting.
  */
 class AttachIdentityNotFound extends Data.TaggedError('AttachIdentityNotFound')<{
@@ -735,7 +735,7 @@ export const zulipAdapter = (
       )
 
     // Pick the provider for a fresh bind: attach when this exact name is the
-    // configured attach persona, else today's self-service mint/regenerate.
+    // configured attach persona, else the self-service mint/regenerate.
     const provideMintedFor = (
       name: BotName,
     ): Effect.Effect<
@@ -749,9 +749,9 @@ export const zulipAdapter = (
     }
 
     const identity: IdentityPort = {
-      // Pre-acquire callers (the plugin-layer current_identity tool now
+      // Pre-acquire callers (the plugin-layer current_identity tool
       // reads through ensureBound.current() and never invokes this) still
-      // need a coherent error — dying matches the long-standing port
+      // need a coherent error — dying matches the port
       // contract of "throws when unbound".
       currentIdentity: () => requireBound().pipe(Effect.map((b) => b.identity)),
       // check-bound -> mint -> set is one atomic SynchronizedRef transition:
@@ -1055,7 +1055,7 @@ export const zulipAdapter = (
             resolvePublishChannel(channel).pipe(
               Effect.flatMap((effective) =>
                 // Zulip rejects stream messages without a topic on realms with
-                // `mandatory_topics: true` (the homelab default). Default to
+                // `mandatory_topics: true` (a common realm default). Default to
                 // the server-canonical "(no topic)" placeholder when the caller
                 // omits a thread — same string Zulip's UI uses for empty
                 // topics. `opts.mentions` is metadata-only per PostOpts: we
@@ -1150,8 +1150,8 @@ export const zulipAdapter = (
     // /users/me/subscriptions list, `mentions` via the events queue's
     // `is:mentioned` narrow. We therefore only intercept messages
     // belonging to a channel that has the new-topics narrow active, and
-    // pass everything else through unchanged (preserves the legacy
-    // plumbing contract: events queue → InboundEvent, no second-guessing).
+    // pass everything else through unchanged (preserves the plumbing
+    // contract: events queue → InboundEvent).
     //
     // The seen-topics tick mutates inbox state, so the decision is one
     // atomic Ref.modify: it records the observed topic and computes the

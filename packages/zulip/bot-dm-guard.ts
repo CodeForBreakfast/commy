@@ -4,7 +4,7 @@
  * direct-message policies (`direct_message_permission_group`,
  * `direct_message_initiator_group`) cannot express "block bot↔bot only"
  * because `zerver/actions/message_send.py:check_can_send_direct_message`
- * short-circuits both when the sender is a bot AND when every recipient
+ * short-circuits both when the sender is a bot and when every recipient
  * is a bot (or self). So the bot-side of the substrate has to defend
  * itself: a wrapper sitting on every bot-authenticated `ZulipHttp` that
  * intercepts `POST /messages` requests with `type=private` and rejects

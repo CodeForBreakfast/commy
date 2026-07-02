@@ -1,17 +1,17 @@
 /**
- * Tier-3 residue: the **one** assertion in the suite that
- * genuinely cannot leave the socket — proving that interrupting an in-flight
+ * Tier-3 residue: the one assertion in the suite that
+ * cannot leave the socket — proving that interrupting an in-flight
  * `FetchHttpClient` long-poll on scope close actually tears down the underlying
  * TCP connection (`AbortSignal → fetch → socket`).
  *
  * Everything else the event pump does — gap-replay, 429 retry,
- * BAD_EVENT_QUEUE_ID reconnect, the Effect fiber-interrupt LOGIC of scope close
- * — moved onto the owned-fake stub HttpClient + TestClock in `adapter-events.test.ts`:
+ * BAD_EVENT_QUEUE_ID reconnect, the Effect fiber-interrupt logic of scope close
+ * — runs on the owned-fake stub HttpClient + TestClock in `adapter-events.test.ts`:
  * deterministic, no socket. The stub proves the fiber unwinds.
  * It cannot prove the *socket* unwinds, because there is no socket. That gap is
- * this test, and it is the **only surviving `Bun.serve` long-poll** in the suite.
+ * this test, the only `Bun.serve` long-poll in the suite.
  *
- * The honest assertion is **server-side**: a real `Bun.serve` whose long-poll
+ * The assertion is server-side: a real `Bun.serve` whose long-poll
  * handler parks forever but listens on the request's `req.signal`. When the
  * client tears the connection down, Bun fires that abort. Observing it is proof
  * the TCP teardown reached the peer — not merely that the Effect fiber

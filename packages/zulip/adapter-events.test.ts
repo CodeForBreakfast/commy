@@ -65,10 +65,10 @@ const HERMES = {
   role: 400,
 } as const
 
-const GRAEME = {
+const MAINTAINER = {
   user_id: 5,
   email: 'user@example.com',
-  full_name: 'Graeme Foster',
+  full_name: 'Robin Reyes',
   is_bot: false,
   is_active: true,
   role: 100,
@@ -93,7 +93,7 @@ const buildAdapter = (
   stub: StubHttpClient,
 ): Effect.Effect<ZulipAdapter, IdentityError | UnknownIdentity> =>
   Effect.gen(function* () {
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedRegenerate(stub, HERMES.user_id)
     const config = {
       realmUrl: yield* RealmUrl(REALM_URL).pipe(Effect.orDie),
@@ -113,7 +113,7 @@ const buildAttachAdapter = (
   stub: StubHttpClient,
 ): Effect.Effect<ZulipAdapter, IdentityError | UnknownIdentity> =>
   Effect.gen(function* () {
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     const config = {
       realmUrl: yield* RealmUrl(REALM_URL).pipe(Effect.orDie),
       minterEmail: yield* BotEmail('minter@example.com').pipe(Effect.orDie),
@@ -201,8 +201,8 @@ const aZulipMessage = (
   }> = {},
 ): Record<string, unknown> => ({
   id: 100,
-  sender_id: GRAEME.user_id,
-  sender_full_name: GRAEME.full_name,
+  sender_id: MAINTAINER.user_id,
+  sender_full_name: MAINTAINER.full_name,
   stream_id: 1234,
   display_recipient: 'general',
   subject: 'lobby',
@@ -223,8 +223,8 @@ const gapMessagesBody = (content: string): Record<string, unknown> => ({
   messages: [
     {
       id: 150,
-      sender_id: GRAEME.user_id,
-      sender_full_name: GRAEME.full_name,
+      sender_id: MAINTAINER.user_id,
+      sender_full_name: MAINTAINER.full_name,
       stream_id: 1234,
       display_recipient: 'general',
       subject: 'lobby',
@@ -273,8 +273,8 @@ effectTest(
   { layer: TestContext.TestContext },
 )
 
-// concierge-parity capability: a session ATTACHED to a persona via a
-// supplied stable key wakes on `@persona` mentioned in a DIFFERENT channel than
+// Attached-persona capability: a session attached to a persona via a
+// supplied stable key wakes on `@persona` mentioned in a different channel than
 // the one it subscribed — because attach binds the persona as the session's own
 // identity, so the existing content-synthesis mention path fires for `@persona`
 // realm-wide. The home channel subscribe puts the queue in mode-'all'; the

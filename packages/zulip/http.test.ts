@@ -9,7 +9,7 @@
  * envelopes, non-JSON bodies, schema mismatches, the 429 retry policy and the
  * download/upload paths all run deterministically, off any socket.
  *
- * TWO kinds of test deliberately stay OFF the stub:
+ * Two kinds of test deliberately stay off the stub:
  *
  *  - **Pure-unit tests** (the `rateLimitSchedule` replay, the `RealmUrl` /
  *    `BotEmail` / `ApiKey` brand validators, `decodeUserUploadPath`, the
@@ -21,10 +21,9 @@
  *    fidelity. It keeps a real `FetchHttpClient` against a claimed-then-released
  *    port.
  *
- * Happy-path cases that merely re-asserted a success body round-trip
- * (GET-parses-success-envelope, POST-returns-success-body) were deleted: the
- * contract-against-real run (`contract.live.test.ts`) exercises those success
- * round-trips end-to-end against a live realm.
+ * Success-body round-trips (GET success envelope, POST success body) are
+ * exercised end-to-end against a live realm by the contract-against-real run
+ * (`contract.live.test.ts`), so they are not re-asserted here.
  */
 
 import { expect, test } from 'bun:test'

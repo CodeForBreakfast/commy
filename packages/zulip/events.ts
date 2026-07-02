@@ -89,8 +89,8 @@ export const createMessageRefCache = (maxSize = 10_000): MessageRefCache => {
  * Monotonic watermark of the latest live message timestamp the producer
  * has dispatched. Lifted out of the producer's closure so a fresh
  * Stream subscription created by an upstream retry inherits the
- * previous run's anchor — without it, the very first
- * BAD_EVENT_QUEUE_ID after reconnect skipped the gap-replay,
+ * previous run's anchor — without it, the first
+ * BAD_EVENT_QUEUE_ID after reconnect would skip the gap-replay,
  * which is exactly when the replay matters most. Owned by
  * the adapter alongside `MessageRefCache` so its state survives across
  * `events()` calls; `advance` is monotonic so out-of-order timestamps
@@ -199,7 +199,7 @@ const registerResponseSchema = Schema.Struct({
   last_event_id: Schema.Int,
 })
 
-// The envelope intentionally validates the events array loosely so a
+// The envelope validates the events array loosely so a
 // single shape-violating event cannot fail the whole-batch parse and
 // crash the pump. Per-event envelope validation
 // (`eventEnvelopeSchema` below) runs inside the for-loop where a bad
@@ -476,8 +476,8 @@ const markReplayed = (events: ReadonlyArray<InboundEvent>): ReadonlyArray<Inboun
  * Substrate-reconnect backoff: exponential from 1s, capped at 30s — the
  * delay sequence is 1s, 2s, 4s, 8s, 16s, 30s, 30s, ... `Schedule.either`
  * (a.k.a. `union`) merges the two schedules' intervals by selecting the
- * SHORTER delay (min), so `exponential(1s) ∪ spaced(30s)` yields the cap.
- * `intersect` would select the LONGER delay (max) — a 30s FLOOR — which is
+ * shorter delay (min), so `exponential(1s) ∪ spaced(30s)` yields the cap.
+ * `intersect` would select the longer delay (max) — a 30s floor — which is
  * the wrong policy for reconnect: it would stall every early retry behind a
  * full 30s wait. The cap keeps the bot responsive on transient blips while
  * bounding the poll rate during a prolonged outage.

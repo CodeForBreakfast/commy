@@ -1,5 +1,5 @@
 /**
- * bot-dm-guard wrapper LOGIC, exercised through a real `ZulipHttp` whose
+ * bot-dm-guard wrapper logic, exercised through a real `ZulipHttp` whose
  * underlying `HttpClient` is the **owned-fake stub** — no `Bun.serve`, no
  * real socket. The wrapper sits on every bot-authenticated `ZulipHttp` and
  * its job is a decision: intercept `POST /messages` with `type=private` and

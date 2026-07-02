@@ -30,7 +30,7 @@ import { ApiKey, BotEmail, decodeUserUploadPathSync, RealmUrl, ZulipApiError } f
 // unit tests: they inspect the captured `HttpClientRequest`s (params, narrow
 // JSON, auth headers, call counts, paths) and the typed-error wrapping that
 // the substrate-agnostic live contract (`contract.ts`) deliberately never
-// asserts. The behavioural round-trips the contract DOES prove are not
+// asserts. The behavioural round-trips the contract does prove are not
 // duplicated here. The long-poll / reconnect logic lives in
 // `adapter-events.test.ts`; the genuine real-socket teardown is the Tier-3
 // residue.
@@ -44,10 +44,10 @@ const HERMES = {
   role: 400,
 } as const
 
-const GRAEME = {
+const MAINTAINER = {
   user_id: 5,
   email: 'user@example.com',
-  full_name: 'Graeme Foster',
+  full_name: 'Robin Reyes',
   is_bot: false,
   is_active: true,
   role: 100,
@@ -112,7 +112,7 @@ const seedMint = (
   apiKey = 'minted-key',
 ): Effect.Effect<void> =>
   // Match real Zulip's response shape — POST /bots returns
-  // user_id + api_key but NOT email. The adapter reconstructs the
+  // user_id + api_key but not email. The adapter reconstructs the
   // bot's delivery email from <short_name>-bot@<realm_host>.
   stub.respond('POST', '/api/v1/bots', {
     body: { result: 'success', api_key: apiKey, user_id: userId },
@@ -176,7 +176,7 @@ effectTest('identity.acquire on an existing bot regenerates its API key and bind
 effectTest('identity.acquire on a name with no existing bot mints fresh via POST /bots', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
-    yield* seedUsers(stub, [GRAEME])
+    yield* seedUsers(stub, [MAINTAINER])
     yield* seedMint(stub, 42, 'fresh-mint-key')
     const config = yield* makeConfig()
     const adapter = yield* zulipAdapter(stub, config)
@@ -245,10 +245,10 @@ effectTest(
 )
 
 // --- Attach mode: bind a pre-provisioned persona via a supplied
-// stable api key WITHOUT regenerating it, so many sessions/processes can share
+// stable api key without regenerating it, so many sessions/processes can share
 // one identity (the Discord-style single-identity model) with no acquire
 // collision. Gated on config.attachIdentity matching the acquired name; every
-// other acquire keeps today's mint/regenerate behaviour untouched.
+// other acquire keeps the normal mint/regenerate behaviour.
 
 const attachConfig = (name: string, apiKey: string): Effect.Effect<ZulipAdapterConfig> =>
   Effect.gen(function* () {
@@ -267,7 +267,7 @@ effectTest(
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
       yield* seedUsers(stub, [HERMES])
-      // Deliberately seed NEITHER regenerate NOR mint: the attach path must
+      // Seed neither regenerate nor mint: the attach path must
       // not call them, and an accidental call surfaces as an unstubbed-request
       // failure rather than passing silently.
       const config = yield* attachConfig('hermes-agent', 'stable-provided-key')
@@ -282,7 +282,7 @@ effectTest(
         substrate: 'zulip',
         realmUrl: config.realmUrl,
         email: yield* BotEmail(HERMES.email).pipe(Effect.orDie),
-        // The SUPPLIED key, verbatim — not a rotated one.
+        // The supplied key, verbatim — not a rotated one.
         apiKey: yield* ApiKey('stable-provided-key').pipe(Effect.orDie),
       })
       const reqs = yield* stub.captured
@@ -304,15 +304,14 @@ effectTest(
   () =>
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
-      yield* seedUsers(stub, [GRAEME])
+      yield* seedUsers(stub, [MAINTAINER])
       const adapter = yield* zulipAdapter(stub, yield* attachConfig('hermes-agent', 'k'))
       const err = yield* Effect.flip(adapter.identity.acquire(decodeBotNameSync('hermes-agent')))
       expect(err).toBeInstanceOf(IdentityError)
     }),
 )
 
-// CC/concierge REGRESSION GUARD (Graeme explicitly required): with no stable
-// key provided, acquire takes today's mint/regenerate path unchanged.
+// With no stable key supplied, acquire takes the normal mint/regenerate path.
 effectTest(
   'identity.acquire with NO attachIdentity regenerates as before — non-attach consumers untouched',
   () =>
@@ -330,7 +329,7 @@ effectTest(
 )
 
 // The attach config must only fire for the persona it names — acquiring any
-// OTHER name regenerates as usual, so a per-persona key can never leak into an
+// other name regenerates as usual, so a per-persona key can never leak into an
 // unrelated consumer's binding.
 effectTest(
   'identity.acquire of a name other than attachIdentity.name keeps the mint/regenerate path',
@@ -565,7 +564,7 @@ effectTest('directory.listAgents returns only is_bot=true users', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* stub.respond('GET', '/api/v1/users', {
-      body: { result: 'success', members: [HERMES, GRAEME, RIQ] },
+      body: { result: 'success', members: [HERMES, MAINTAINER, RIQ] },
     })
     yield* seedRegenerate(stub, HERMES.user_id)
     const adapter = yield* zulipAdapter(stub, yield* makeConfig())
@@ -586,7 +585,7 @@ effectTest('directory.listHumans returns only is_bot=false users', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* stub.respond('GET', '/api/v1/users', {
-      body: { result: 'success', members: [HERMES, GRAEME, RIQ] },
+      body: { result: 'success', members: [HERMES, MAINTAINER, RIQ] },
     })
     yield* seedRegenerate(stub, HERMES.user_id)
     const adapter = yield* zulipAdapter(stub, yield* makeConfig())
@@ -595,7 +594,7 @@ effectTest('directory.listHumans returns only is_bot=false users', () =>
     expect(humans).toEqual([
       {
         id: decodeIdentityIdSync('5'),
-        name: decodeDisplayNameSync('Graeme Foster'),
+        name: decodeDisplayNameSync('Robin Reyes'),
         kind: 'human',
       },
     ])
@@ -1037,12 +1036,12 @@ effectTest('history.readChannel narrows by channel and maps each message to the 
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [
       {
         id: 555,
         sender_id: 5,
-        sender_full_name: 'Graeme Foster',
+        sender_full_name: 'Robin Reyes',
         stream_id: 1234,
         display_recipient: 'general',
         subject: 'lobby',
@@ -1067,7 +1066,7 @@ effectTest('history.readChannel narrows by channel and maps each message to the 
       },
       sender: {
         id: decodeIdentityIdSync('5'),
-        name: decodeDisplayNameSync('Graeme Foster'),
+        name: decodeDisplayNameSync('Robin Reyes'),
         kind: 'human',
       },
       body: decodeMessageBodySync('hi all'),
@@ -1084,12 +1083,12 @@ effectTest(
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
       const adapter = yield* buildAdapter(stub)
-      yield* seedUsers(stub, [HERMES, GRAEME])
+      yield* seedUsers(stub, [HERMES, MAINTAINER])
       yield* seedMessages(stub, [
         {
           id: 555,
           sender_id: 5,
-          sender_full_name: 'Graeme Foster',
+          sender_full_name: 'Robin Reyes',
           stream_id: 1234,
           display_recipient: 'general',
           subject: 'lobby',
@@ -1103,9 +1102,9 @@ effectTest(
         },
       ])
       const messages = yield* adapter.history.readChannel(generalChannel, { limit: 50 })
-      const graeme: Identity = {
+      const maintainer: Identity = {
         id: decodeIdentityIdSync('5'),
-        name: decodeDisplayNameSync('Graeme Foster'),
+        name: decodeDisplayNameSync('Robin Reyes'),
         kind: 'human',
       }
       const unknownReactor: Identity = {
@@ -1114,8 +1113,8 @@ effectTest(
         kind: 'human',
       }
       expect(messages[0]?.reactions).toEqual([
-        { emoji: decodeEmojiSync('thumbs_up'), by: [graeme, unknownReactor] },
-        { emoji: decodeEmojiSync('tada'), by: [graeme] },
+        { emoji: decodeEmojiSync('thumbs_up'), by: [maintainer, unknownReactor] },
+        { emoji: decodeEmojiSync('tada'), by: [maintainer] },
       ])
     }),
 )
@@ -1141,12 +1140,12 @@ effectTest('history.messagePermalink fetches the message by id when no hint is g
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [
       {
         id: 77,
         sender_id: 5,
-        sender_full_name: 'Graeme Foster',
+        sender_full_name: 'Robin Reyes',
         stream_id: 1234,
         display_recipient: 'general',
         subject: 'lobby',
@@ -1167,7 +1166,7 @@ effectTest(
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
       const adapter = yield* buildAdapter(stub)
-      yield* seedUsers(stub, [HERMES, GRAEME])
+      yield* seedUsers(stub, [HERMES, MAINTAINER])
       yield* seedMessages(stub, [])
       yield* adapter.history.readChannel(generalChannel, { limit: 25 })
       const req = yield* findRequest(stub, 'GET', '/api/v1/messages')
@@ -1183,7 +1182,7 @@ effectTest('history.readChannel resolves bot senders to kind=agent via the user 
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [
       {
         id: 600,
@@ -1206,7 +1205,7 @@ effectTest('history.readChannel resolves deactivated bot senders to kind=agent',
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
     const deactivatedBot = { ...RIQ, is_active: false }
-    yield* seedUsers(stub, [HERMES, GRAEME, deactivatedBot])
+    yield* seedUsers(stub, [HERMES, MAINTAINER, deactivatedBot])
     yield* seedMessages(stub, [
       {
         id: 700,
@@ -1229,12 +1228,12 @@ effectTest('history.readChannel filters by range.since (epoch seconds, inclusive
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [
       {
         id: 1,
         sender_id: 5,
-        sender_full_name: 'Graeme Foster',
+        sender_full_name: 'Robin Reyes',
         stream_id: 1234,
         display_recipient: 'general',
         subject: 'a',
@@ -1244,7 +1243,7 @@ effectTest('history.readChannel filters by range.since (epoch seconds, inclusive
       {
         id: 2,
         sender_id: 5,
-        sender_full_name: 'Graeme Foster',
+        sender_full_name: 'Robin Reyes',
         stream_id: 1234,
         display_recipient: 'general',
         subject: 'a',
@@ -1254,7 +1253,7 @@ effectTest('history.readChannel filters by range.since (epoch seconds, inclusive
       {
         id: 3,
         sender_id: 5,
-        sender_full_name: 'Graeme Foster',
+        sender_full_name: 'Robin Reyes',
         stream_id: 1234,
         display_recipient: 'general',
         subject: 'a',
@@ -1277,12 +1276,12 @@ effectTest('history.readChannel filters by range.until (epoch seconds, inclusive
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [
       {
         id: 1,
         sender_id: 5,
-        sender_full_name: 'Graeme Foster',
+        sender_full_name: 'Robin Reyes',
         stream_id: 1234,
         display_recipient: 'general',
         subject: 'a',
@@ -1292,7 +1291,7 @@ effectTest('history.readChannel filters by range.until (epoch seconds, inclusive
       {
         id: 2,
         sender_id: 5,
-        sender_full_name: 'Graeme Foster',
+        sender_full_name: 'Robin Reyes',
         stream_id: 1234,
         display_recipient: 'general',
         subject: 'a',
@@ -1302,7 +1301,7 @@ effectTest('history.readChannel filters by range.until (epoch seconds, inclusive
       {
         id: 3,
         sender_id: 5,
-        sender_full_name: 'Graeme Foster',
+        sender_full_name: 'Robin Reyes',
         stream_id: 1234,
         display_recipient: 'general',
         subject: 'a',
@@ -1325,7 +1324,7 @@ effectTest('history.readThread narrows by both channel and topic', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [])
     yield* adapter.history.readThread(generalChannel, decodeThreadNameSync('planning'), {
       limit: 10,
@@ -1343,7 +1342,7 @@ effectTest('history.readChannel with no limit defaults num_before to 100', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [])
     yield* adapter.history.readChannel(generalChannel, {})
     const req = yield* findRequest(stub, 'GET', '/api/v1/messages')
@@ -1355,7 +1354,7 @@ effectTest('history.recentThreads queries by sender and deduplicates per thread'
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [
       {
         id: 101,
@@ -1409,7 +1408,7 @@ effectTest('history.recentThreads queries by sender and deduplicates per thread'
       operator: string
       operand: unknown
     }>
-    // Zulip's `sender` narrow operand must be the INTEGER user id. A numeric
+    // Zulip's `sender` narrow operand must be the integer user id. A numeric
     // string ("9") is rejected as BAD_NARROW "unknown user 9".
     expect(narrow).toEqual([{ operator: 'sender', operand: HERMES.user_id }])
     expect(typeof narrow[0]?.operand).toBe('number')
@@ -1585,7 +1584,7 @@ effectTest(
 // write is structurally impossible (it 400s with "does not accept bot
 // requests"). The adapter therefore exposes no presence-write path. This guards
 // against the bot self-presence heartbeat being wired back in. The presence
-// READ — directory.presence, above — stays: a bot
+// read — directory.presence, above — stays: a bot
 // reading a human's presence is supported.
 
 effectTest('a bound adapter never writes its own presence', () =>
@@ -1769,7 +1768,7 @@ effectTest('inbox.replay(since) returns message-posted events for messages with 
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* stub.respond('GET', '/api/v1/messages', {
       body: {
         result: 'success',
@@ -1777,7 +1776,7 @@ effectTest('inbox.replay(since) returns message-posted events for messages with 
           {
             id: 1,
             sender_id: 5,
-            sender_full_name: 'Graeme Foster',
+            sender_full_name: 'Robin Reyes',
             stream_id: 100,
             display_recipient: 'general',
             subject: 'lobby',
@@ -1787,7 +1786,7 @@ effectTest('inbox.replay(since) returns message-posted events for messages with 
           {
             id: 2,
             sender_id: 5,
-            sender_full_name: 'Graeme Foster',
+            sender_full_name: 'Robin Reyes',
             stream_id: 100,
             display_recipient: 'general',
             subject: 'lobby',
@@ -1946,7 +1945,7 @@ const minterAuth = { email: 'minter@example.com', apiKey: 'minter-key' }
 effectTest('history.readChannel runs pre-acquire and routes via minter creds', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* stub.respond('GET', '/api/v1/messages', {
       body: { result: 'success', messages: [] },
     })
@@ -1960,7 +1959,7 @@ effectTest('history.readChannel runs pre-acquire and routes via minter creds', (
 effectTest('directory.listAgents runs pre-acquire and routes via minter creds', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
-    yield* seedUsers(stub, [HERMES, GRAEME])
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
     const adapter = yield* zulipAdapter(stub, yield* makeConfig())
     const agents = yield* adapter.directory.listAgents()
     expect(agents.map((a) => a.name)).toEqual([decodeDisplayNameSync('hermes-agent')])
@@ -1978,18 +1977,18 @@ effectTest('directory.listAgents runs pre-acquire and routes via minter creds', 
 effectTest('directory.presence runs pre-acquire and routes via minter creds', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
-    yield* seedUsers(stub, [GRAEME])
-    yield* stub.respond('GET', `/api/v1/users/${GRAEME.user_id}/presence`, {
+    yield* seedUsers(stub, [MAINTAINER])
+    yield* stub.respond('GET', `/api/v1/users/${MAINTAINER.user_id}/presence`, {
       body: { result: 'success', presence: { aggregated: { status: 'active' } } },
     })
     const adapter = yield* zulipAdapter(stub, yield* makeConfig())
     const presence = yield* adapter.directory.presence({
-      id: decodeIdentityIdSync(String(GRAEME.user_id)),
-      name: decodeDisplayNameSync(GRAEME.full_name),
+      id: decodeIdentityIdSync(String(MAINTAINER.user_id)),
+      name: decodeDisplayNameSync(MAINTAINER.full_name),
       kind: 'human',
     })
     expect(presence).toBe('online')
-    const req = yield* findRequest(stub, 'GET', `/api/v1/users/${GRAEME.user_id}/presence`)
+    const req = yield* findRequest(stub, 'GET', `/api/v1/users/${MAINTAINER.user_id}/presence`)
     expect(decodeBasicAuth(req.headers.get('Authorization'))).toEqual(minterAuth)
   }),
 )
@@ -2050,7 +2049,7 @@ effectTest('publisher.post after acquire uses BOUND bot creds, not minter creds'
     const auth = decodeBasicAuth(req.headers.get('Authorization'))
     expect(auth.email).toBe(HERMES.email)
     expect(auth.apiKey).toBe('fresh-key')
-    // And it must NOT be minter creds.
+    // And it must not be minter creds.
     expect(auth).not.toEqual(minterAuth)
   }),
 )
@@ -2100,13 +2099,13 @@ effectTest(
       const stub = yield* makeStubHttpClient
       yield* seedStreamsList(stub, [
         { stream_id: 11, name: 'commy' },
-        { stream_id: 12, name: 'assistant' },
-        { stream_id: 13, name: 'homelab' },
+        { stream_id: 12, name: 'myproject-a' },
+        { stream_id: 13, name: 'myproject-b' },
       ])
       yield* stub.respond('POST', '/api/v1/users/me/subscriptions', {
         body: {
           result: 'success',
-          subscribed: { 'minter@example.com': ['commy', 'assistant', 'homelab'] },
+          subscribed: { 'minter@example.com': ['commy', 'myproject-a', 'myproject-b'] },
           already_subscribed: {},
           unauthorized: [],
         },
@@ -2116,15 +2115,15 @@ effectTest(
       const report = yield* adapter.reconcileMinterSubscriptions()
       expect(report.added).toEqual([
         decodeChannelNameSync('commy'),
-        decodeChannelNameSync('assistant'),
-        decodeChannelNameSync('homelab'),
+        decodeChannelNameSync('myproject-a'),
+        decodeChannelNameSync('myproject-b'),
       ])
       expect(report.error).toBeUndefined()
       const post = yield* findRequest(stub, 'POST', '/api/v1/users/me/subscriptions')
       const subs = JSON.parse(
         new URLSearchParams(post.body).get('subscriptions') ?? '[]',
       ) as unknown
-      expect(subs).toEqual([{ name: 'commy' }, { name: 'assistant' }, { name: 'homelab' }])
+      expect(subs).toEqual([{ name: 'commy' }, { name: 'myproject-a' }, { name: 'myproject-b' }])
       yield* Effect.promise(() => adapter.close())
     }),
 )
@@ -2136,16 +2135,16 @@ effectTest(
       const stub = yield* makeStubHttpClient
       yield* seedStreamsList(stub, [
         { stream_id: 11, name: 'commy' },
-        { stream_id: 12, name: 'homelab' },
+        { stream_id: 12, name: 'myproject-b' },
       ])
-      // Race: another reconciler already subscribed `homelab` between
+      // Race: another reconciler already subscribed `myproject-b` between
       // our list and post. Zulip puts it under already_subscribed and the
       // reconciler's report mirrors that.
       yield* stub.respond('POST', '/api/v1/users/me/subscriptions', {
         body: {
           result: 'success',
           subscribed: { 'minter@example.com': ['commy'] },
-          already_subscribed: { 'minter@example.com': ['homelab'] },
+          already_subscribed: { 'minter@example.com': ['myproject-b'] },
           unauthorized: [],
         },
       })

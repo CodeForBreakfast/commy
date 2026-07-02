@@ -46,9 +46,9 @@ const HERMES: Identity = {
   kind: 'agent',
 }
 
-const GRAEME: Identity = {
+const MAINTAINER: Identity = {
   id: decodeIdentityIdSync('5'),
-  name: decodeDisplayNameSync('Graeme Foster'),
+  name: decodeDisplayNameSync('Robin Reyes'),
   kind: 'human',
 }
 
@@ -74,8 +74,8 @@ test('fires mention-received when bound identity is in content even if flags lac
   // to the queue owner — false for cross-bot mentions. Synthesis must gate
   // on the bound identity appearing in `portMessage.mentions`, not on the
   // queue-owner's flag.
-  const directory = directoryFor(HERMES, GRAEME)
-  const message = messageMentioning(HERMES, GRAEME)
+  const directory = directoryFor(HERMES, MAINTAINER)
+  const message = messageMentioning(HERMES, MAINTAINER)
 
   const events = Effect.runSync(messageToInboundEvents(message, directory, HERMES, PERMALINK_BASE))
   const mention = events.find((e) => e.kind === 'mention-received')
@@ -87,8 +87,8 @@ test('fires mention-received when bound identity is in content even if flags lac
 })
 
 test('decorates the inbound message ref with message, channel and topic permalinks', () => {
-  const directory = directoryFor(HERMES, GRAEME)
-  const message = messageMentioning(HERMES, GRAEME)
+  const directory = directoryFor(HERMES, MAINTAINER)
+  const message = messageMentioning(HERMES, MAINTAINER)
 
   const events = Effect.runSync(
     messageToInboundEvents(message, directory, HERMES, 'https://zulip.example.com'),
@@ -117,8 +117,8 @@ test('does not fire mention-received when bound identity is not in content', () 
     name: decodeDisplayNameSync('riq6r230'),
     kind: 'agent',
   }
-  const directory = directoryFor(HERMES, GRAEME, RIQ)
-  const message = messageMentioning(RIQ, GRAEME)
+  const directory = directoryFor(HERMES, MAINTAINER, RIQ)
+  const message = messageMentioning(RIQ, MAINTAINER)
 
   const events = Effect.runSync(messageToInboundEvents(message, directory, HERMES, PERMALINK_BASE))
   const mention = events.find((e) => e.kind === 'mention-received')
@@ -182,15 +182,15 @@ test('mapMessageEvent skips DM-shaped events instead of failing the parser', () 
   // events-queue narrow path cannot exclude DMs at source because
   // Zulip's /register drops negation (zerver/lib/narrow_helpers.py:
   // NeverNegatedNarrowTerm), so the gate has to live here.
-  const directory = directoryFor(HERMES, GRAEME)
-  const dm = dmRawEvent(GRAEME, [HERMES, GRAEME])
+  const directory = directoryFor(HERMES, MAINTAINER)
+  const dm = dmRawEvent(MAINTAINER, [HERMES, MAINTAINER])
 
   const result = Effect.runSync(mapMessageEvent(dm, directory, HERMES, PERMALINK_BASE))
   expect(result).toEqual([])
 })
 
 test('mapMessageEvent skips events whose message field is not a channel-shaped object', () => {
-  const directory = directoryFor(HERMES, GRAEME)
+  const directory = directoryFor(HERMES, MAINTAINER)
 
   expect(
     Effect.runSync(
@@ -216,8 +216,8 @@ test('mapMessageEvent parses channel-shaped events through messageToInboundEvent
   // Positive regression: a normal channel message must still flow through
   // the strict parser and emit a message-posted event. Guards the gate from
   // over-filtering.
-  const directory = directoryFor(HERMES, GRAEME)
-  const raw = channelRawEvent(messageMentioning(HERMES, GRAEME))
+  const directory = directoryFor(HERMES, MAINTAINER)
+  const raw = channelRawEvent(messageMentioning(HERMES, MAINTAINER))
 
   const result = Effect.runSync(mapMessageEvent(raw, directory, HERMES, PERMALINK_BASE))
   expect(result.some((e) => e.kind === 'message-posted')).toBe(true)
@@ -313,8 +313,8 @@ const drainOneUnderTestClock = (
 
 const aChannelMessage = (overrides: Partial<ParsedZulipMessage> = {}): Record<string, unknown> => ({
   id: 100,
-  sender_id: Number(GRAEME.id),
-  sender_full_name: GRAEME.name,
+  sender_id: Number(MAINTAINER.id),
+  sender_full_name: MAINTAINER.name,
   stream_id: 1,
   display_recipient: 'general',
   subject: 'topic',
@@ -364,7 +364,7 @@ test(
               return { result: 'success', events: [] }
             },
           }),
-          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, GRAEME)),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
           mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
@@ -406,7 +406,7 @@ test(
               return { result: 'success', events: [] }
             },
           }),
-          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, GRAEME)),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
           mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
@@ -465,7 +465,7 @@ test(
               return { result: 'success', events: [] }
             },
           }),
-          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, GRAEME)),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
           mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
@@ -514,7 +514,7 @@ test(
               }
             },
           }),
-          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, GRAEME)),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
           mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
@@ -524,7 +524,7 @@ test(
         // Capture (and discard) the skip diagnostic so it doesn't reach STDERR.
         yield* drainN(config, 2).pipe(Effect.provide(captureLogger([])))
         // First poll on a freshly-registered queue is last_event_id=0; the
-        // SECOND poll proves queue advanced past the malformed event.
+        // Second poll proves queue advanced past the malformed event.
         expect(polls.length).toBeGreaterThanOrEqual(2)
         expect(polls[1]).toBeGreaterThanOrEqual(42)
       }),
@@ -559,7 +559,7 @@ test(
               channel: { id: decodeChannelIdSync('1'), name: decodeChannelNameSync('general') },
               thread: { name: decodeThreadNameSync('topic') },
             },
-            sender: GRAEME,
+            sender: MAINTAINER,
             body: decodeMessageBodySync('posted while the queue was dead'),
             ts: decodeTimestampSync(1500),
             mentions: [],
@@ -609,7 +609,7 @@ test(
               }
             },
           }),
-          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, GRAEME)),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
           mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
@@ -686,7 +686,7 @@ test(
               }
             },
           }),
-          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, GRAEME)),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
           mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
@@ -746,7 +746,7 @@ test(
               }
             },
           }),
-          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, GRAEME)),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
           mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
@@ -818,7 +818,7 @@ test(
               }
             },
           }),
-          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, GRAEME)),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
           mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
@@ -886,7 +886,7 @@ test('producer retries on transient ZulipApiError and emits transient/reconnect 
             }
           },
         }),
-        resolveDirectory: () => Effect.succeed(directoryFor(HERMES, GRAEME)),
+        resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
         mode: 'all',
         boundIdentity: HERMES,
         messageRefCache: createMessageRefCache(),
@@ -934,7 +934,7 @@ test('producer survives multiple consecutive transient failures before recovery'
             }
           },
         }),
-        resolveDirectory: () => Effect.succeed(directoryFor(HERMES, GRAEME)),
+        resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
         mode: 'all',
         boundIdentity: HERMES,
         messageRefCache: createMessageRefCache(),
@@ -958,10 +958,10 @@ test('producer survives multiple consecutive transient failures before recovery'
 test('default retry schedule is exponential and caps at 30s', () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      // The reconnect backoff must be a CAP, not a floor: delays grow
+      // The reconnect backoff must be a cap, not a floor: delays grow
       // 1s, 2s, 4s, 8s, 16s then hold at 30s — early transient blips
       // recover fast and a long outage settles at a 30s ceiling. This is
-      // exponential ∪ spaced(30s) where `union` selects the SHORTER delay
+      // exponential ∪ spaced(30s) where `union` selects the shorter delay
       // (min), giving the cap. (`intersect` would give max — a 30s floor.)
       const delays = yield* Schedule.run(
         Schedule.delays(defaultRetrySchedule),
@@ -977,12 +977,12 @@ test('default retry schedule is exponential and caps at 30s', () =>
 test('producer fires each retry only after its capped-exponential backoff elapses', () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      // Behavioural proof of the CAP through the live producer: after each
+      // Behavioural proof of the cap through the live producer: after each
       // transient failure the next poll fires only once the virtual clock
       // advances by that rung's backoff. Six failures exercise the full
       // ramp — 1s, 2s, 4s, 8s, 16s — and then the 6th retry, which an
       // uncapped exponential would delay 32s, fires at the 30s ceiling.
-      // Advancing by JUST UNDER each delay must not release the poll;
+      // Advancing by just under each delay must not release the poll;
       // reaching it must. A floor (intersect → max) would stall every
       // early retry behind a full 30s and fail at the first rung.
       const perRungDelaysMs = [1000, 2000, 4000, 8000, 16000, 30000]
@@ -1009,7 +1009,7 @@ test('producer fires each retry only after its capped-exponential backoff elapse
             }
           },
         }),
-        resolveDirectory: () => Effect.succeed(directoryFor(HERMES, GRAEME)),
+        resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
         mode: 'all',
         boundIdentity: HERMES,
         messageRefCache: createMessageRefCache(),
@@ -1065,7 +1065,7 @@ test('producer surfaces non-Error rejections via the ZulipApiError message in th
             }
           },
         }),
-        resolveDirectory: () => Effect.succeed(directoryFor(HERMES, GRAEME)),
+        resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
         mode: 'all',
         boundIdentity: HERMES,
         messageRefCache: createMessageRefCache(),
@@ -1108,7 +1108,7 @@ test('producer logs a rate-limit backoff breadcrumb when /events returns HTTP 42
             }
           },
         }),
-        resolveDirectory: () => Effect.succeed(directoryFor(HERMES, GRAEME)),
+        resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
         mode: 'all',
         boundIdentity: HERMES,
         messageRefCache: createMessageRefCache(),

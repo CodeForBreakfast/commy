@@ -6,7 +6,7 @@
  * realm (the live ContractFactory). This file keeps only the Zulip-specific
  * facts that contract has no vocabulary for:
  *
- * - **upload BYTE round-trip** — bytes survive a real /user_uploads POST + GET.
+ * - **upload byte round-trip** — bytes survive a real /user_uploads POST + GET.
  * - **"Zulip can always mint"** — there is no unacquirable name; the minter can
  *   always mint (a substrate capability Discord will not share).
  * - **repeat-acquire regenerates the API key** — the regenerated key
@@ -88,8 +88,8 @@ const buildAdapter = (): Effect.Effect<ZulipAdapter> =>
 
 // Spacing between minter-authenticated calls. The live suite mints,
 // regenerates and deactivates bots through the shared minter; bursting them
-// trips Zulip's per-user rate limit on the homelab realm (zulip.example.com),
-// which knocks live concierges off MCP for the duration of the cool-off. Sleep
+// trips Zulip's per-user rate limit on the shared realm (zulip.example.com),
+// which knocks other live clients off MCP for the duration of the cool-off. Sleep
 // before every acquire/release keeps the suite under the limit and leaves
 // headroom for interactive sessions sharing the realm.
 const MINTER_PACE = Duration.millis(900)
