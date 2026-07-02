@@ -31,7 +31,7 @@ test('a canned response defaults to content-type application/json', () =>
     }),
   ))
 
-test('keys responses by method AND path — GET and POST to one path differ', () =>
+test('keys responses by method and path — GET and POST to one path differ', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient

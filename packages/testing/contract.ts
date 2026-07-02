@@ -84,7 +84,7 @@ export interface ContractEnv {
    */
   readonly unacquirableName?: string
   /**
-   * Optional. Post a message AUTHORED BY A SEEDED PEER (sender ≠ self) into a
+   * Optional. Post a message authored by a seeded peer (sender ≠ self) into a
    * channel the bound self can observe. Drives the mention-floor tests:
    * a peer @-mentions self and self's `events()` must yield
    * `mention-received`. This is the cross-identity shape `realm.live.test.ts`
@@ -349,10 +349,10 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         }),
       ))
 
-    // Caller writes `@**Name**` inline AND passes
+    // Caller writes `@**Name**` inline and passes
     // mentions[] for the same identity. Body must round-trip with exactly
     // one occurrence of the mention markup, not two.
-    test('publisher.post with inline @-mention markup AND opts.mentions does not double the markup in body', () =>
+    test('publisher.post with inline @-mention markup and opts.mentions does not double the markup in body', () =>
       Effect.runPromise(
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
@@ -720,12 +720,12 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         ),
       ))
 
-    // The mention floor (an @-mention of you reaches you). A PEER
+    // The mention floor (an @-mention of you reaches you). A peer
     // posts the mention (sender ≠ self) — the cross-identity shape
     // realm.live.test.ts proves, and one a single-identity self-mention cannot,
     // since live Zulip's `is:mentioned` narrow is keyed to the queue owner.
     //
-    // Self subscribes the CHANNEL (queue mode 'all') so the mention surfaces on
+    // Self subscribes the channel (queue mode 'all') so the mention surfaces on
     // live Zulip: a bound bot's events queue is minter-owned, so its own
     // mentions surface only in mode 'all' — which a channel subscription sets,
     // not the acquire-time / subscribe('mentions') narrow. The bare floor (a
@@ -844,7 +844,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
       // The reaction event arrives without stream/topic context — substrates
       // that lean on a MessageRef cache populated from message-posted events
       // (e.g. Zulip) must still resolve the target when the message pre-dates
-      // the iterator. Posting BEFORE subscribe() means no message-posted ever
+      // the iterator. Posting before subscribe() means no message-posted ever
       // flows through events(), so the cache is empty when the reaction lands.
       Effect.runPromise(
         Effect.scoped(

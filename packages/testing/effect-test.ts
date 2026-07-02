@@ -1,9 +1,9 @@
 /**
  * Effect-native bun:test harness.
  *
- * Lets a test body **return** an Effect instead of hand-wrapping
+ * Lets a test body return an Effect instead of hand-wrapping
  * `Effect.runPromise(Effect.scoped(Effect.gen(...)))` at every call site.
- * The harness owns three concerns the wrapper used to repeat by hand:
+ * The harness owns three concerns:
  *
  * 1. **Per-test Scope** — the body runs inside `Effect.scoped`, so a test can
  *    `Effect.addFinalizer` / acquire a scoped resource and its finalizers run

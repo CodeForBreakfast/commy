@@ -98,12 +98,11 @@ test('publisher.edit on an unknown message fails with a typed PublisherError, no
   }
 })
 
-// The mutable-state Refs pin the
-// concurrency-safety the closure-`let`s could not guarantee: counter
-// allocation and the acquire check-then-set both span `yield*` suspension
-// points, so under `Effect.all` they must still allocate distinct ids and
-// bind exactly once. Sequential semantics are already covered by the
-// contract suite; these assert the interleaved case the Refs make correct.
+// The mutable-state Refs pin concurrency-safety: counter allocation and the
+// acquire check-then-set both span `yield*` suspension points, so under
+// `Effect.all` they must still allocate distinct ids and bind exactly once.
+// Sequential semantics are already covered by the contract suite; these assert
+// the interleaved case the Refs make correct.
 
 // In-memory store, no rate-limited substrate — unbounded concurrency is the
 // point here: it maximises interleaving against the message-id Ref.

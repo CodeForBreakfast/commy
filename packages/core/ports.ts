@@ -98,8 +98,8 @@ export const decodeEmoji = Schema.decodeUnknown(EmojiSchema)
  *
  * In test setup a fixed literal that fails to decode is a programmer
  * error, so `Schema.decodeSync`'s throw is the legitimate fatal case —
- * fixtures need not thread a ParseError through Effect. PRODUCTION code
- * must use the Effect-returning `decode*` decoders above, never these.
+ * fixtures need not thread a ParseError through Effect. Production code
+ * uses the Effect-returning `decode*` decoders above, not these.
  */
 export const decodeIdentityIdSync = Schema.decodeSync(IdentityIdSchema)
 export const decodeChannelIdSync = Schema.decodeSync(ChannelIdSchema)
@@ -181,7 +181,7 @@ export interface Range {
 
 export interface PostOpts {
   /**
-   * Identities to notify. Metadata-only: adapters MUST NOT mutate
+   * Identities to notify. Metadata-only: adapters do not mutate
    * `body` based on this list. Where a substrate needs literal mention
    * markup inside the message text to trigger a notification (Zulip's
    * `@**name**`, Discord's `<@id>`), the caller writes that markup
@@ -287,7 +287,7 @@ export interface AcquiredIdentity {
  * Caller-supplied intent for `IdentityPort.release`. `persistent` flags an
  * identity meant to outlive the session — pinned via `COMMY_BOT_NAME`
  * rather than minted as an ephemeral `cc-*` seat. Substrates that deactivate
- * on release (Zulip) MUST skip deactivation for a persistent identity, so a
+ * on release (Zulip) skip deactivation for a persistent identity, so a
  * later re-acquire is an owner-permitted regenerate rather than an admin-only
  * reactivate of a bot the minter deactivated itself. Omitted /
  * `false` is the ephemeral default: deactivate as usual.
@@ -343,7 +343,7 @@ export interface IdentityPort {
    * deactivated bot's only path back is an admin-only reactivate, which
    * wedges a Member-rights minter. Leaving a persistent bot active keeps
    * re-acquire on the owner-permitted regenerate path. Omitted / `false`
-   * is the ephemeral default and deactivates as before.
+   * is the ephemeral default and deactivates as usual.
    */
   release(opts?: ReleaseOpts): Effect.Effect<void, never>
   resolve(name: string): Effect.Effect<Option.Option<Identity>, IdentityError>
@@ -377,7 +377,7 @@ export interface MessagePublisher {
 export interface MessageInbox {
   /**
    * Declare interest in a subscription target. When the returned
-   * Effect resolves, a subsequent `events()` subscription MUST observe
+   * Effect resolves, a subsequent `events()` subscription observes
    * matching events posted from that moment onward — adapters are
    * responsible for completing whatever substrate-level priming is
    * needed before resolving (e.g. Zulip's `POST /register` to open
@@ -474,7 +474,7 @@ export interface Directory {
  * Static, substrate-derived properties of an adapter's message-ordering
  * model that a consumer must adapt to. Not behaviour — these are facts about
  * the substrate the ports can't make uniform, surfaced so the same code
- * (tests AND production) reads them rather than branching on a substrate name.
+ * (tests and production) reads them rather than branching on a substrate name.
  * Deliberately minimal: one field per real consumer, never a junk drawer of
  * substrate flags.
  */
