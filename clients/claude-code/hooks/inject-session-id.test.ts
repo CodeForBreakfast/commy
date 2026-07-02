@@ -28,7 +28,7 @@ test('forwards session_id from stdin into updatedInput', async () => {
   const out = await runHook(
     JSON.stringify({
       session_id: 'sess-abcdef',
-      cwd: '/home/x/assistant',
+      cwd: '/home/x/myproject',
       tool_input: { channel_name: 'home', body: 'hello' },
     }),
   )
@@ -43,12 +43,12 @@ test('forwards cwd from stdin into updatedInput', async () => {
   const out = await runHook(
     JSON.stringify({
       session_id: 'sess-abcdef',
-      cwd: '/home/x/brewlife',
+      cwd: '/home/x/myproject',
       tool_input: { channel_name: 'home', body: 'hello' },
     }),
   )
   expect(out.hookSpecificOutput?.updatedInput).toMatchObject({
-    cwd: '/home/x/brewlife',
+    cwd: '/home/x/myproject',
   })
 })
 

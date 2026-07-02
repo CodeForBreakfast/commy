@@ -9,9 +9,9 @@
  *
  *   1. Reads `session_id` and `cwd` from the event.
  *   2. Emits `hookSpecificOutput.updatedInput` with `session_id`
- *      AND `cwd` merged into the tool's `tool_input`. Claude Code
+ *      and `cwd` merged into the tool's `tool_input`. Claude Code
  *      propagates `updatedInput` to the MCP server's
- *      `params.arguments` over the stdio wire (confirmed empirically).
+ *      `params.arguments` over the stdio wire.
  *
  * The server-side handler reads `params.arguments.session_id` and
  * routes through `identityCache.ensureBoundFor(session_id, project)`
@@ -21,11 +21,11 @@
  * reflects the *calling* session's project rather than the plugin's
  * own pinned cwd.
  *
- * The model never sees either field; the hook is a deterministic
- * shell that stamps fields the model never touches.
+ * The model never sees either field; the hook stamps them
+ * deterministically outside the model's view.
  *
  * `permissionDecision` is intentionally omitted: the plugin's hook
- * MUST NOT auto-allow write operations on behalf of the user. The
+ * must not auto-allow write operations on behalf of the user. The
  * standard CC permission flow proceeds untouched.
  *
  * Missing or malformed `session_id` → pass through with no

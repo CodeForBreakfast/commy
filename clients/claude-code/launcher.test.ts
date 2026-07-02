@@ -12,11 +12,11 @@ import mcpConfig from './.mcp.json'
  * Two contracts these tests pin:
  *
  *  - `cwd` is `${CLAUDE_PLUGIN_ROOT}`. npx resolves a package from its cwd's
- *    `node_modules` (walking up) before the registry, so fleet seats whose
- *    frozen marketplace stages the bundle there run their LOCAL copy with zero
+ *    `node_modules` (walking up) before the registry, so an install whose
+ *    frozen marketplace stages the bundle there runs its local copy with zero
  *    registry hits (the local-run guarantee), while a consumer with no
  *    such local install resolves the published build from npm. The name on the
- *    command line is BARE — no `@<version>` — because a command-line version pin
+ *    command line is bare — no `@<version>` — because a command-line version pin
  *    forces a registry round-trip and defeats the local override.
  *
  *  - The server must be claude's child with claude's pipe as its stdin so it
@@ -40,7 +40,7 @@ test('npx is pointed at the bare @codeforbreakfast/commy-mcp package — no vers
   expect(commyServer.args).toContain('-y')
   expect(commyServer.args).toContain('@codeforbreakfast/commy-mcp')
   // A `@<version>` suffix would force a registry hit and defeat the local
-  // override fleet seats rely on — the version pin lives in the staged
+  // override such installs rely on — the version pin lives in the staged
   // dependency, never on the command line.
   const pinned = commyServer.args.find((arg) => /@codeforbreakfast\/commy-mcp@/.test(arg))
   expect(pinned).toBeUndefined()
@@ -68,13 +68,13 @@ test('the realm credentials and subscription env are still threaded through', ()
  * publisher, which the publisher itself can safely make (no detection window is
  * needed for code you authored and released). The launcher exposes an optional
  * knob for that: COMMY_NPM_MIN_RELEASE_AGE=0 waives the soak for commy;
- * everyone else leaves it unset. commy ships as a ZERO-dependency bundle
+ * everyone else leaves it unset. commy ships as a zero-dependency bundle
  * (scripts/assemble-npm-package.ts inlines every dep into one server.js), so the
  * waiver is scoped to exactly this one publisher — no transitive tree rides
  * along — and the consumer otherwise can't install a fresh release until it ages
  * past their window (ENOVERSIONS).
  *
- * The safety property — proven against npm 11.12.1 — is that an UNSET knob must
+ * The safety property is that an unset knob must
  * not weaken the consumer's own setting: an empty/absent env var leaves the
  * consumer's `.npmrc min-release-age` untouched (npm ignores an empty env var
  * rather than overriding the file), and only an explicit `0` waives the soak.

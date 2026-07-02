@@ -110,26 +110,26 @@ code path.
 
 | Shape | Identity | Lifetime | `COMMY_BOT_NAME` | `COMMY_PROJECT` |
 |---|---|---|---|---|
-| **Type 1 — Project concierge** | `<role>` e.g. `assistant-concierge` | long-running service (systemd unit) | required | required for project subs |
+| **Type 1 — Project concierge** | `<role>` e.g. `myproject-concierge` | long-running service (systemd unit) | required | required for project subs |
 | **Type 2 — Interactive CC pane** | `cc-[<project>-]<8>` lazy | one conversation | unset | optional override |
-| **Type 4 — Scheduled / cron poster** | `<role>` e.g. `daily-brief` | seconds-to-minutes (one cron tick) | required | required when project-scoped |
+| **Type 4 — Scheduled / cron poster** | `<role>` e.g. `scheduled-brief` | seconds-to-minutes (one cron tick) | required | required when project-scoped |
 
 Type 4 is Type 1 with a short process lifetime. The plugin doesn't
 distinguish — same eager-acquire path, same Type-1 defaults
 (`mentions` + project subs when `COMMY_PROJECT` is set), same
 boot-time catch-up over channel restore and missed mentions. A
-project-scoped scheduled skill — e.g. a daily briefing owned by the
-assistant project — sets:
+project-scoped scheduled skill — e.g. a scheduled briefing owned by a
+project — sets:
 
 ```sh
-COMMY_BOT_NAME=daily-brief \
-COMMY_PROJECT=assistant \
+COMMY_BOT_NAME=scheduled-brief \
+COMMY_PROJECT=myproject \
   claude --print <prompt>
 ```
 
-The same `daily-brief` bot is acquired each run (identity persists on
+The same `scheduled-brief` bot is acquired each run (identity persists on
 the substrate, channel subs registered once on first run). Universal
-rules apply: mentions catch-up surfaces any DMs from Graeme between
+rules apply: mentions catch-up surfaces any DMs from a teammate between
 runs; channel-restore over the default 4h window provides recent
 project context the briefing can incorporate.
 
@@ -139,9 +139,7 @@ and skips project-channel subs.
 
 Trade-off: the event pump starts on every Type 4 run and is
 immediately torn down when CC exits. That's a single long-poll
-request cancelled on `SIGTERM` — small cost, never observed as a
-problem. A discriminator env var to skip the pump entirely for
-declared one-shot runs is filed as a backlog optimisation.
+request cancelled on `SIGTERM` — a small cost.
 
 The minter is the universal listener: the event pump consumes the
 minter's queue regardless of mode, and `narrowSet` (driven by
@@ -333,27 +331,26 @@ server.ts would surface a failed entry in `/mcp`.
 
 ### Tools missing entirely after a `/plugin` reinstall (wiped creds)
 
-The single most expensive failure mode, because it is **indistinguishable
-from a plugin load failure**: no `commy` tools, no MCP log written at
-all, just a toolless desk.
+This failure mode is indistinguishable from a plugin load failure: no
+`commy` tools, no MCP log written at all, just a toolless desk.
 
 The three required minter credentials — `ZULIP_SITE`, `ZULIP_MINTER_EMAIL`,
 and `ZULIP_MINTER_API_KEY` — live in `~/.claude/settings.json` under
 `pluginConfigs["commy@<marketplace>"].options` (the API key in the
 system keychain; see [Configuration](#configuration)). A `/plugin` reinstall —
-or repointing the fleet onto a different marketplace and reinstalling — **wipes
-`pluginConfigs` to `{}`**, taking those creds with it. The plugin then boots
+or repointing onto a different marketplace and reinstalling — wipes
+`pluginConfigs` to `{}`, taking those creds with it. The plugin then boots
 with no creds.
 
 What happens next is the silent part. `parseEnv` in `bootstrap.ts` reads the
 config via the app-edge `ConfigProvider`; a missing required var surfaces as a
 `MissingData` config error, which `parseEnv` renders into an `EnvConfigError`.
 That error fails the `ZulipAdapterLive` layer build, which is part of
-`AppLayer` and is constructed **before** `makeProgram` connects the MCP
+`AppLayer` and is constructed before `makeProgram` connects the MCP
 transport. So the failure Exit reaches `runMain`'s default teardown and the
-process exits 1 *before any MCP connection is established* — no server child
+process exits 1 before any MCP connection is established — no server child
 holds, no MCP handshake, no MCP log line. From the host's vantage that looks
-exactly like a plugin that failed to load.
+like a plugin that failed to load.
 
 **Recovery path — toolless desk after a reinstall → check the creds are still
 wired in `pluginConfigs`:**
@@ -368,8 +365,8 @@ wired in `pluginConfigs`:**
 3. Restart the session. The MCP server now boots past `parseEnv` and the tools
    reappear.
 
-Note this same requirement applies to **any copy that boots outside the repo**:
-the creds must be *present in the environment* the MCP child sees, not merely
+Note this same requirement applies to any copy that boots outside the repo:
+the creds must be present in the environment the MCP child sees, not merely
 `node_modules` populated and the `effect` dependency resolvable. Installable
 artefacts and node_modules satisfy the *code* dependency; `parseEnv` still
 exits 1 without the creds.
