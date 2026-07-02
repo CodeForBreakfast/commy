@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Run the live end-to-end suite for the commy Hermes adapter against the
-# REAL Zulip realm (comms-a7j.6). This is the Python mirror of the TS
+# REAL Zulip realm. This is the Python mirror of the TS
 # `test:live` script: the default `scripts/test.sh` excludes `-m live`, this
 # one targets it explicitly.
 #
@@ -12,7 +12,7 @@
 #
 # The live tests spawn `bun packages/mcp/server.ts`, so `bun` must be on PATH
 # and the commy checkout (COMMY_SERVER_DIR, default: repo root) must
-# have `node_modules` (`bun install`). Requires `uv` on PATH (comms-0m15).
+# have `node_modules` (`bun install`). Requires `uv` on PATH.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

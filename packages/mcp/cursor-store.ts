@@ -7,7 +7,7 @@ import type { PlatformError } from '@effect/platform/Error'
 import { Config, Context, Effect, Layer, Option, type ParseResult, Schema } from 'effect'
 
 /**
- * Persistent per-identity "have-seen-up-to" cursor (comms-rxo).
+ * Persistent per-identity "have-seen-up-to" cursor.
  *
  * On resume the plugin reads the cursor for its identity to know how far
  * back to fetch missed @-mentions; on every observed mention the cursor
@@ -33,7 +33,7 @@ export interface CursorStore {
 }
 
 /**
- * Context tag for the per-identity mentions cursor store (comms-spj3.39).
+ * Context tag for the per-identity mentions cursor store.
  * The boot program reads it from context; the app layer registers
  * {@link FileCursorStoreLive} in production, tests register an in-memory
  * layer.
@@ -45,7 +45,7 @@ export interface FileCursorStoreDeps {
   readonly dir: string
   /**
    * The filesystem every read/write executes against, injected at
-   * construction (comms-5db). {@link FileCursorStoreLive} reads it from
+   * construction. {@link FileCursorStoreLive} reads it from
    * context (`NodeContext.layer`, provided once in the app layer).
    */
   readonly fs: FileSystem.FileSystem
@@ -117,7 +117,7 @@ const STATE_SEGMENT = 'commy'
 
 /**
  * The XDG state-home base, read from the ambient ConfigProvider at the
- * boot edge (comms-nrv). `XDG_STATE_HOME` is the base; an unset or empty
+ * boot edge. `XDG_STATE_HOME` is the base; an unset or empty
  * value falls back to `<home>/.local/state`. `Config.nonEmptyString` emits
  * `MissingData` for an empty value, so `Config.withDefault` supplies the
  * home-dir fallback for both the unset and blank cases.
@@ -136,11 +136,11 @@ export const cursorDirConfig: Config.Config<string> = stateBaseConfig.pipe(
 )
 
 /**
- * Production cursor-store layer (comms-spj3.39): a file-backed store
+ * Production cursor-store layer: a file-backed store
  * under the XDG state home. Reads `FileSystem` and the cursor directory
- * (via {@link cursorDirConfig} against the boot-edge ConfigProvider,
- * comms-nrv) from context — the app layer provides `NodeContext.layer`
- * and the ConfigProvider once (comms-5db) — and injects them into the
+ * (via {@link cursorDirConfig} against the boot-edge ConfigProvider)
+ * from context — the app layer provides `NodeContext.layer`
+ * and the ConfigProvider once — and injects them into the
  * store at construction.
  *
  * `cursorDirConfig` always yields a value (`withDefault` covers the

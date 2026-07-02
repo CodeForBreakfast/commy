@@ -79,7 +79,7 @@ import {
   Stream,
 } from 'effect'
 
-// Synthesised, stable permalinks (comms-e7my). The memory substrate has no web
+// Synthesised, stable permalinks. The memory substrate has no web
 // client, so these are deliberately fake `memory://` URIs — their only job is to
 // let the MCP tools rig assert that the permalink field is plumbed on every
 // surface without a live Zulip realm. They mirror the message/channel/topic

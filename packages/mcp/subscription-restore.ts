@@ -7,7 +7,7 @@ import { intentToTarget, type SubscribeIntent } from './subscribe-parser.ts'
 import type { SubscriptionStore } from './subscription-store.ts'
 
 /**
- * Restore (or seed) a session's narrow set on its first action (comms-4pgy).
+ * Restore (or seed) a session's narrow set on its first action.
  *
  * Resume vs fresh is decided by the per-session_id subscription store, exactly
  * as the mentions cursor decides resume vs fresh for catch-up:

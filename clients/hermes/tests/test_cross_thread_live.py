@@ -1,4 +1,4 @@
-"""End-to-end live proof of structural cross-thread isolation (comms-a7j.6).
+"""End-to-end live proof of structural cross-thread isolation.
 
 Drives the REAL assembled receive path + connection pool — ``CommyAdapter``
 + ``TopicConnectionManager`` + the real ``McpTopicTransport`` spawning

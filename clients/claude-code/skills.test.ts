@@ -4,7 +4,7 @@ import { expect, test } from 'bun:test'
  * The plugin ships substrate-general etiquette as the `using-commy`
  * skill — opt-in guidance on how to communicate *well* on commy, layered
  * on top of the always-on mechanics the MCP server echoes via its
- * `instructions:` field (comms-tonj). Lock the frontmatter contract
+ * `instructions:` field. Lock the frontmatter contract
  * Claude Code resolves the skill by, and assert it covers the etiquette
  * the always-on block deliberately leaves out.
  */

@@ -1,5 +1,5 @@
 {
-  description = "commy plugin — substrate-agnostic agent communications (ass-15qi, ass-x09b)";
+  description = "commy plugin — substrate-agnostic agent communications";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";

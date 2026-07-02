@@ -131,7 +131,7 @@ const withRigAndCache = <E>(
     return rig
   })
 
-test('tools/list advertises current_identity with optional session_id (ass-2dhb)', () =>
+test('tools/list advertises current_identity with optional session_id', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -227,7 +227,7 @@ test('current_identity flips to bound after a post triggers ensureBound', () =>
     ),
   ))
 
-test('current_identity includes recent_threads showing where the bot posted (comms-esu)', () =>
+test('current_identity includes recent_threads showing where the bot posted', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -273,7 +273,7 @@ test('current_identity includes recent_threads showing where the bot posted (com
     ),
   ))
 
-test('current_identity fails soft when the recent_threads enrichment throws — still returns bound (comms-wpp)', () =>
+test('current_identity fails soft when the recent_threads enrichment throws — still returns bound', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -611,7 +611,7 @@ test('read_channel honours the limit argument', () =>
     ),
   ))
 
-test('post returns a clickable permalink for the new message (comms-e7my)', () =>
+test('post returns a clickable permalink for the new message', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -640,7 +640,7 @@ test('post returns a clickable permalink for the new message (comms-e7my)', () =
     ),
   ))
 
-test('read_channel decorates each message with message and channel permalinks (comms-e7my)', () =>
+test('read_channel decorates each message with message and channel permalinks', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -675,7 +675,7 @@ test('read_channel decorates each message with message and channel permalinks (c
     ),
   ))
 
-test('list_channels decorates each channel with a permalink (comms-e7my)', () =>
+test('list_channels decorates each channel with a permalink', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -698,7 +698,7 @@ test('list_channels decorates each channel with a permalink (comms-e7my)', () =>
     ),
   ))
 
-test('message_link returns the cached permalink for a known message id (comms-e7my)', () =>
+test('message_link returns the cached permalink for a known message id', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -727,7 +727,7 @@ test('message_link returns the cached permalink for a known message id (comms-e7
     ),
   ))
 
-test('message_link builds a permalink from a channel hint for an uncached id (comms-e7my)', () =>
+test('message_link builds a permalink from a channel hint for an uncached id', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -782,7 +782,7 @@ test('subscribe with channel:<name> calls inbox.subscribe with a matching Channe
         expect(result.isError).toBeFalsy()
         expect(subscribed).toHaveLength(1)
         expect(subscribed[0]).toMatchObject({ name: channelRef.name })
-        // narrowSet is updated alongside the substrate call (ass-220u).
+        // narrowSet is updated alongside the substrate call.
         expect(rig.narrowSet.size()).toBe(1)
       }),
     ),
@@ -890,7 +890,7 @@ test('post supports thread arg', () =>
     ),
   ))
 
-test('post to a thread auto-subscribes the poster to that thread (comms-1q8)', () =>
+test('post to a thread auto-subscribes the poster to that thread', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -924,7 +924,7 @@ test('post to a thread auto-subscribes the poster to that thread (comms-1q8)', (
     ),
   ))
 
-test('post without a thread does NOT auto-subscribe (comms-1q8)', () =>
+test('post without a thread does NOT auto-subscribe', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -953,7 +953,7 @@ test('post without a thread does NOT auto-subscribe (comms-1q8)', () =>
     ),
   ))
 
-test('posting to the same thread twice subscribes only once (comms-1q8 idempotency)', () =>
+test('posting to the same thread twice subscribes only once (idempotency)', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1064,7 +1064,7 @@ test('react with cache miss and no channel_name surfaces UnknownMessage', () =>
     ),
   ))
 
-test('react with a malformed emoji arg yields a typed ParseError tool error, not a crash (comms-spj3.36)', () =>
+test('react with a malformed emoji arg yields a typed ParseError tool error, not a crash', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1215,7 +1215,7 @@ test('unreact mirrors react: routes through publisher.unreact', () =>
     ),
   ))
 
-test('post into an existing thread (other agent posted first) auto-subscribes the poster (comms-iut)', () =>
+test('post into an existing thread (other agent posted first) auto-subscribes the poster', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1262,7 +1262,7 @@ test('post into an existing thread (other agent posted first) auto-subscribes th
     ),
   ))
 
-test('react to a message in a thread auto-subscribes the reactor (comms-iut)', () =>
+test('react to a message in a thread auto-subscribes the reactor', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1313,7 +1313,7 @@ test('react to a message in a thread auto-subscribes the reactor (comms-iut)', (
     ),
   ))
 
-test('react to a top-level (no-thread) message does NOT auto-subscribe (comms-iut)', () =>
+test('react to a top-level (no-thread) message does NOT auto-subscribe', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1353,7 +1353,7 @@ test('react to a top-level (no-thread) message does NOT auto-subscribe (comms-iu
     ),
   ))
 
-test('reacting to the same thread twice subscribes only once (comms-iut idempotency)', () =>
+test('reacting to the same thread twice subscribes only once (idempotency)', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1406,7 +1406,7 @@ test('reacting to the same thread twice subscribes only once (comms-iut idempote
     ),
   ))
 
-test('unreact does not change subscription state (comms-iut: no unsub-on-disengage)', () =>
+test('unreact does not change subscription state (no unsub-on-disengage)', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1495,7 +1495,7 @@ test('read_thread returns only messages in the given thread', () =>
     ),
   ))
 
-test('read_thread schema uses thread not thread_name (comms-476)', () =>
+test('read_thread schema uses thread not thread_name', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1513,7 +1513,7 @@ test('read_thread schema uses thread not thread_name (comms-476)', () =>
     ),
   ))
 
-test('post with unknown argument rejects instead of silently dropping (comms-476)', () =>
+test('post with unknown argument rejects instead of silently dropping', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1538,7 +1538,7 @@ test('post with unknown argument rejects instead of silently dropping (comms-476
     ),
   ))
 
-test('post with a non-string required arg rejects via the typed args decode (comms-o52)', () =>
+test('post with a non-string required arg rejects via the typed args decode', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1570,7 +1570,7 @@ test('post with a non-string required arg rejects via the typed args decode (com
     ),
   ))
 
-test('post with valid args decodes to the typed shape and posts (comms-o52)', () =>
+test('post with valid args decodes to the typed shape and posts', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1600,7 +1600,7 @@ test('post with valid args decodes to the typed shape and posts (comms-o52)', ()
     ),
   ))
 
-test('react with unknown argument rejects (comms-476)', () =>
+test('react with unknown argument rejects', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1631,7 +1631,7 @@ test('react with unknown argument rejects (comms-476)', () =>
     ),
   ))
 
-// --- download_file (comms-xos) ---
+// --- download_file ---
 
 interface DownloadRig {
   readonly client: Client
@@ -1650,7 +1650,7 @@ const withDownloadRig = (
     return { client: rig.client }
   })
 
-test('tools/list advertises download_file when downloadFile dep is provided (comms-xos)', () =>
+test('tools/list advertises download_file when downloadFile dep is provided', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1676,7 +1676,7 @@ test('tools/list advertises download_file when downloadFile dep is provided (com
     ),
   ))
 
-test('tools/list does not advertise download_file when downloadFile dep is missing (comms-xos)', () =>
+test('tools/list does not advertise download_file when downloadFile dep is missing', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1688,12 +1688,12 @@ test('tools/list does not advertise download_file when downloadFile dep is missi
     ),
   ))
 
-test('download_file returns the file path, content type, and size from the callback (comms-xos)', () =>
+test('download_file returns the file path, content type, and size from the callback', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const pngHeader = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
-        const tmpPath = join(tmpdir(), `comms-xos-test-${Date.now()}.png`)
+        const tmpPath = join(tmpdir(), `download-file-test-${Date.now()}.png`)
         writeFileSync(tmpPath, pngHeader)
         yield* Effect.addFinalizer(() => Effect.sync(() => rmSync(tmpPath, { force: true })))
         const rig = yield* withDownloadRig((urlPath) =>
@@ -1721,7 +1721,7 @@ test('download_file returns the file path, content type, and size from the callb
     ),
   ))
 
-test('download_file rejects paths not starting with /user_uploads/ (comms-xos)', () =>
+test('download_file rejects paths not starting with /user_uploads/', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1742,7 +1742,7 @@ test('download_file rejects paths not starting with /user_uploads/ (comms-xos)',
             catch: (e) => e as { message: string },
           }),
         )
-        // The reject is a typed ParseError threaded through runEdge (comms-spj3.36),
+        // The reject is a typed ParseError threaded through runEdge,
         // not a defect/crash; its message names the user_uploads constraint.
         expect(error.message).toContain('ParseError')
         expect(error.message).toContain('user_uploads')
@@ -1750,7 +1750,7 @@ test('download_file rejects paths not starting with /user_uploads/ (comms-xos)',
     ),
   ))
 
-// --- upload_file (comms-nsa) ---
+// --- upload_file ---
 
 interface UploadRig {
   readonly client: Client
@@ -1767,7 +1767,7 @@ const withUploadRig = (
     return { client: rig.client }
   })
 
-test('tools/list advertises upload_file when the upload dep is provided (comms-nsa)', () =>
+test('tools/list advertises upload_file when the upload dep is provided', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1793,7 +1793,7 @@ test('tools/list advertises upload_file when the upload dep is provided (comms-n
     ),
   ))
 
-test('tools/list does not advertise upload_file when the upload dep is missing (comms-nsa)', () =>
+test('tools/list does not advertise upload_file when the upload dep is missing', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1805,7 +1805,7 @@ test('tools/list does not advertise upload_file when the upload dep is missing (
     ),
   ))
 
-test('upload_file passes the path through and returns reference, filename, and size (comms-nsa)', () =>
+test('upload_file passes the path through and returns reference, filename, and size', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1838,7 +1838,7 @@ test('upload_file passes the path through and returns reference, filename, and s
     ),
   ))
 
-test('upload_file rejects a relative path (comms-nsa)', () =>
+test('upload_file rejects a relative path', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {

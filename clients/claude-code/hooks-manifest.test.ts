@@ -10,10 +10,6 @@ import hooksManifest from './hooks/hooks.json'
  * the alternation — otherwise the handler sees `session_id`
  * undefined and `readSessionId` falls back to ephemeral binding.
  *
- * That drift has already happened once: comms-dsr added `edit_message`
- * to the mint set without updating the matcher (see comms-bhp). This
- * test pins the two declarations together at the unit-test bar.
- *
  * Direct callers only — if `ensureBoundFor` is invoked through a
  * helper indirection, the parser will miss it. Add the wrapper here
  * if/when that pattern appears.

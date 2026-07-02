@@ -1,13 +1,13 @@
 /**
- * Tier-3 residue (comms-4lz5): the **one** assertion in the suite that
+ * Tier-3 residue: the **one** assertion in the suite that
  * genuinely cannot leave the socket — proving that interrupting an in-flight
  * `FetchHttpClient` long-poll on scope close actually tears down the underlying
  * TCP connection (`AbortSignal → fetch → socket`).
  *
  * Everything else the event pump does — gap-replay, 429 retry,
  * BAD_EVENT_QUEUE_ID reconnect, the Effect fiber-interrupt LOGIC of scope close
- * — moved onto the owned-fake stub HttpClient + TestClock in `adapter-events.test.ts`
- * (comms-e5vm.2): deterministic, no socket. The stub proves the fiber unwinds.
+ * — moved onto the owned-fake stub HttpClient + TestClock in `adapter-events.test.ts`:
+ * deterministic, no socket. The stub proves the fiber unwinds.
  * It cannot prove the *socket* unwinds, because there is no socket. That gap is
  * this test, and it is the **only surviving `Bun.serve` long-poll** in the suite.
  *
@@ -72,7 +72,7 @@ const startLongPollServer = (): LongPollServer => {
 }
 
 effectTest(
-  'closing the scope of an in-flight FetchHttpClient long-poll tears down the TCP connection (comms-4lz5)',
+  'closing the scope of an in-flight FetchHttpClient long-poll tears down the TCP connection',
   () =>
     Effect.gen(function* () {
       const server = yield* Effect.acquireRelease(Effect.sync(startLongPollServer), (s) =>

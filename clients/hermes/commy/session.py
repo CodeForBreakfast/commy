@@ -1,4 +1,4 @@
-"""Channel-aware MCP client session for the commy Hermes adapter (comms-b7it).
+"""Channel-aware MCP client session for the commy Hermes adapter.
 
 The substrate dual-emits each inbound event on two carriers (see
 ``docs/claude-channel-inbound-contract.md``): ``notifications/message`` — the

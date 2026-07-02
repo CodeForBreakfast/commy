@@ -1,4 +1,4 @@
-"""Real per-topic MCP transport for the commy Hermes adapter (comms-a7j.5).
+"""Real per-topic MCP transport for the commy Hermes adapter.
 
 Implements ``TopicTransport`` by spawning the commy server subprocess over
 stdio and holding an MCP ``ClientSession``, routing each inbound frame into the
@@ -12,7 +12,7 @@ MCP-standard ``notifications/message`` (``channelNotifier``,
 ``packages/mcp/event-pump.ts``). We bind the latter via the SDK's
 ``logging_callback``: ``notifications/message`` is ``LoggingMessageNotification``
 and is delivered to ``logging_callback``, carrying the full machine frame (incl.
-``sender_id``). Per the bb7.1 contract the ``{content, meta}`` frame is nested
+``sender_id``). Per the inbound contract the ``{content, meta}`` frame is nested
 under ``params.data`` (the MCP logging envelope requires ``level`` at the params
 root), so we forward ``params.data`` — the same shape the receive path consumes.
 
@@ -20,7 +20,7 @@ The Python MCP SDK validates EVERY incoming notification against its typed
 ``ServerNotification`` union *before* any handler runs, and
 ``notifications/claude/channel`` has no slot in that union — so the SDK does NOT
 silently drop it, it logs a ``"Failed to validate notification"`` warning on
-every inbound frame (comms-b7it). ``ChannelAwareClientSession`` extends the union
+every inbound frame. ``ChannelAwareClientSession`` extends the union
 to recognise the ungated display carrier, so the SDK validates and discards it
 cleanly while the ``notifications/message`` binding above is untouched. See
 ``commy/session.py``.
@@ -130,7 +130,7 @@ class McpTopicTransport:
                 async with ChannelAwareClientSession(read, write, logging_callback=self._on_log) as session:
                     await session.initialize()
                     # Hold the live session so `post` can deliver outbound replies
-                    # over the same connection (comms-a9q4). Concurrent requests
+                    # over the same connection. Concurrent requests
                     # from another task are safe — the SDK routes responses by id.
                     self._session = session
                     self._ready.set()

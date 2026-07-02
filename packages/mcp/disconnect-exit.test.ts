@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test'
 
 /**
- * Runtime proof for comms-hfhm: the stdio MCP server exits when its client
- * closes stdin, over a REAL OS pipe and a REAL spawned process — the
- * coverage b8ac13f lacked. Its unit tests fed `clientDisconnect` a bare
- * `EventEmitter`; that proves the listener wiring but NOT that bun's
+ * Runtime proof: the stdio MCP server exits when its client
+ * closes stdin, over a real OS pipe and a real spawned process — the
+ * coverage the earlier unit tests lacked. Those fed `clientDisconnect` a bare
+ * `EventEmitter`; that proves the listener wiring but not that bun's
  * `process.stdin` actually emits `end`/`close` on a real pipe peer-close,
  * which is the property the production launch depends on once the server
  * is claude's direct child (no `bun run start` grandchild — see
@@ -15,7 +15,7 @@ import { expect, test } from 'bun:test'
  * announces `FIXTURE_ARMED` once `clientDisconnect` has attached its
  * listeners; we close stdin only after that, then require the process to
  * exit cleanly within a bounded window. If it hangs, the disconnect signal
- * never fired — the orphan-leak regression (comms-8nkv / comms-4c26).
+ * never fired — the orphan-leak regression.
  */
 
 const FIXTURE = `${import.meta.dir}/disconnect-exit.fixture.ts`

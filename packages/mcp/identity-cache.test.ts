@@ -32,7 +32,7 @@ import {
  * Test helper. Constructs a `SessionId` from an 8-char hex prefix so the
  * minted bot name is `cc-<prefix>` (the leading 8 of a UUID are what
  * `composeBotName` slices). All session ids in this suite are UUIDs since
- * the brand demands UUID shape (comms-uqf).
+ * the brand demands UUID shape.
  */
 const sid = (hex8: string): SessionId => {
   const parsed = parseSessionId(`${hex8}-0000-0000-0000-000000000000`)
@@ -113,7 +113,7 @@ const buildAdapterSpy = (): AdapterSpy => {
  * Run an Effect with the deterministic `TestClock` provided. `ensureBoundFor`
  * stamps `lastUsedMs` from `Clock.currentTimeMillis`; under `TestClock` that
  * starts at 0 and only advances on `TestClock.adjust`, so the idle-sweep
- * assertions are reproducible without an injected `now` lambda (comms-1jl).
+ * assertions are reproducible without an injected `now` lambda.
  */
 const runTest = <A, E>(self: Effect.Effect<A, E>): Promise<A> =>
   Effect.runPromise(self.pipe(Effect.provide(TestContext.TestContext)))
@@ -385,7 +385,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('ensureBoundFor(undefined) returns the unbound stub even when a slot is active (comms-67j: no leak across /clear)', () =>
+  test('ensureBoundFor(undefined) returns the unbound stub even when a slot is active (no leak across /clear)', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -439,7 +439,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('unbound stub rejects with an UnboundEphemeralSession tagged error (comms-spj3.17)', () =>
+  test('unbound stub rejects with an UnboundEphemeralSession tagged error', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -487,7 +487,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('mints cc-<project>-<8> when project is supplied per call (ass-v7b4)', () =>
+  test('mints cc-<project>-<8> when project is supplied per call', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -502,7 +502,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('two sessions in different projects mint two project-prefixed names (ass-v7b4)', () =>
+  test('two sessions in different projects mint two project-prefixed names', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -519,7 +519,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('project on a returning sid is ignored — the slot is named once (ass-v7b4)', () =>
+  test('project on a returning sid is ignored — the slot is named once', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -536,7 +536,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('boundIdentityIds reflects project-prefixed name (ass-v7b4)', () =>
+  test('boundIdentityIds reflects project-prefixed name', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -568,7 +568,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('onAcquire fires after the first successful acquire with the acquired identity (comms-ae4)', () =>
+  test('onAcquire fires after the first successful acquire with the acquired identity', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -590,7 +590,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('onAcquire does not fire when ensureBoundFor returns a cached entry (comms-ae4)', () =>
+  test('onAcquire does not fire when ensureBoundFor returns a cached entry', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -613,7 +613,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('onAcquire fires again on session_id transition after release-then-acquire (comms-ae4)', () =>
+  test('onAcquire fires again on session_id transition after release-then-acquire', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -635,7 +635,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('onAcquire fires after sweepIdle release on re-acquire (comms-ae4)', () =>
+  test('onAcquire fires after sweepIdle release on re-acquire', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -661,7 +661,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('onAcquire does not fire when acquire rejects (comms-ae4)', () =>
+  test('onAcquire does not fire when acquire rejects', () =>
     runTest(
       Effect.gen(function* () {
         let fired = 0
@@ -684,7 +684,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('onAcquire is awaited inline — the acquire result does not return until onAcquire resolves (comms-ae4)', () =>
+  test('onAcquire is awaited inline — the acquire result does not return until onAcquire resolves', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -709,7 +709,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  test('onAcquire rejection surfaces to the caller and reverts the ensureBound to idle (comms-ae4)', () =>
+  test('onAcquire rejection surfaces to the caller and reverts the ensureBound to idle', () =>
     runTest(
       Effect.gen(function* () {
         const spy = buildAdapterSpy()
@@ -756,7 +756,7 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
       }),
     ))
 
-  // ─── onAcquire hook (comms-iyf) ────────────────────────────────────────
+  // ─── onAcquire hook ────────────────────────────────────────────────────
 
   test('onAcquire fires once per fresh slot, receives identity + project', () =>
     runTest(

@@ -39,7 +39,7 @@ test('forwards session_id from stdin into updatedInput', async () => {
   })
 })
 
-test('forwards cwd from stdin into updatedInput (ass-v7b4)', async () => {
+test('forwards cwd from stdin into updatedInput', async () => {
   const out = await runHook(
     JSON.stringify({
       session_id: 'sess-abcdef',

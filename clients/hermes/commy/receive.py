@@ -1,4 +1,4 @@
-"""Receive-path frame model for the commy Hermes adapter (comms-a7j.2).
+"""Receive-path frame model for the commy Hermes adapter.
 
 Models the host-neutral ``{content, meta}`` frame a ``claude/channel`` inbound
 notification carries (the contract in ``docs/claude-channel-inbound-contract.md``)

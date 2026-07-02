@@ -21,7 +21,7 @@ import { createEnsureBound } from './ensure-bound.ts'
 export type EnsureBoundError = UnknownIdentity | IdentityError | UnboundEphemeralSession
 
 /**
- * Identity binding strategy for a single MCP child (ass-2dhb).
+ * Identity binding strategy for a single MCP child.
  *
  * Two implementations:
  *   - **Single (persistent mode)**: wraps one pre-built `ensureBound` and
@@ -30,8 +30,8 @@ export type EnsureBoundError = UnknownIdentity | IdentityError | UnboundEphemera
  *   - **Ephemeral**: at-most-one slot keyed by `session_id`. A new sid
  *     releases the prior identity (Zulip deactivates the bot) before
  *     acquiring the new one. Idle sweep releases the slot after N
- *     minutes of inactivity. Slot collapses Path 1 of ass-2dhb's bead
- *     body — see the 1-slot simplification note for why this isn't a
+ *     minutes of inactivity. The slot collapses to a single entry —
+ *     see the 1-slot simplification note for why this isn't a
  *     `Map<sid, AcquiredIdentity>`.
  *
  * Consumers (`tools.ts`, `event-pump.ts`, `release-shutdown.ts`) depend
@@ -46,7 +46,7 @@ export interface IdentityCache {
    * Ephemeral:
    *   - `state === undefined` → mint a fresh `EnsureBound` for
    *     `cc-[<project>-]<sid.slice(0,8)>` and store it. `project` is
-   *     a per-call arg (ass-v7b4): the calling session's project,
+   *     a per-call arg: the calling session's project,
    *     derived from the hook-injected cwd at the boundary in
    *     `tools.ts`. Process-level project state is gone — that was
    *     the leak source.
@@ -56,7 +56,7 @@ export interface IdentityCache {
    *     acquired), then mint a fresh entry for the new sid using
    *     the new call's `project`.
    *   - `sid === undefined` → return the unbound stub regardless of
-   *     slot state (comms-67j). We can't tell "same conversation, hook
+   *     slot state. We can't tell "same conversation, hook
    *     didn't fire" apart from "different conversation, hook didn't
    *     fire" — and the latter leaked the prior conversation's seat
    *     into the new one across `/clear`. Stub's `current()` reads
@@ -70,8 +70,8 @@ export interface IdentityCache {
   ): Effect.Effect<EnsureBound<EnsureBoundError>>
   /**
    * IDs of currently-bound identities. Size is 0 or 1 in V1 — the set
-   * shape leaves room for future N-identity adapters (see Path 2 note
-   * on ass-2dhb) without churning consumers.
+   * shape leaves room for future N-identity adapters without churning
+   * consumers.
    *
    * Consumers:
    *   - `event-pump`/`narrow-set` use this for the mentions narrow
@@ -133,7 +133,7 @@ export interface EphemeralIdentityCacheDeps {
   /** Idle threshold for `sweepIdle`. */
   readonly idleReleaseMs: number
   /**
-   * Post-acquire hook (comms-ae4, comms-iyf). Fires after every
+   * Post-acquire hook. Fires after every
    * successful adapter-side acquire — both the fresh-slot path (first
    * call for a sid) and the different-sid transition path
    * (release-then-acquire). Receives the freshly-acquired identity
@@ -146,7 +146,7 @@ export interface EphemeralIdentityCacheDeps {
    * Sequenced inline as part of the acquire Effect — the caller's
    * first attribution-producing tool call does not return until
    * `onAcquire` has completed. The plugin's catch-up wiring
-   * (comms-ae4) relies on this so a replayed mention surfaces
+   * relies on this so a replayed mention surfaces
    * alongside the tool result that triggered acquire.
    *
    * If the callback fails, the failure is threaded back to the
@@ -272,10 +272,10 @@ export const createEphemeralIdentityCache = (
       // entry's `EnsureBound` inside the atomic region.
       ensureBoundFor: (sessionId, project): Effect.Effect<EnsureBound<EnsureBoundError>> =>
         sessionId === undefined
-          ? // Refuse to surface the slot when no sid was supplied (comms-67j).
+          ? // Refuse to surface the slot when no sid was supplied.
             // A missing sid means the PreToolUse hook either didn't fire or
-            // didn't see one in CC's event — and post-`/clear` that meant the
-            // prior conversation's seat leaked into the new one via
+            // didn't see one in CC's event — and post-`/clear` returning it
+            // would leak the prior conversation's seat into the new one via
             // `current_identity`/`post`/`react`/`unreact`. The slot itself is
             // preserved: a follow-up call with the original sid still reaches
             // the same binding.

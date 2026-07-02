@@ -1,4 +1,4 @@
-"""Receive-notification contract tests for the channel-aware client session (comms-b7it).
+"""Receive-notification contract tests for the channel-aware client session.
 
 The substrate dual-emits each inbound event on ``notifications/message`` (the
 machine carrier the adapter consumes) and ``notifications/claude/channel`` (the
@@ -34,7 +34,7 @@ _CLAUDE_CHANNEL_FRAME = {
     "content": "hello",
     "meta": {
         "channel_name": "commy",
-        "thread": "p2ac-b7it",
+        "thread": "standup",
         "message_id": "1",
         "sender_name": "peer",
     },

@@ -1,4 +1,4 @@
-"""Real-subprocess + real-SDK tests for the per-topic transport (comms-a7j.5).
+"""Real-subprocess + real-SDK tests for the per-topic transport.
 
 No mocks and no Zulip: the manager drives the REAL ``McpTopicTransport`` against
 a REAL stub MCP server subprocess (``_stub_mcp_server.py``). This proves the
@@ -191,7 +191,7 @@ def test_shutdown_stops_real_subprocess():
         asyncio.run(scenario())
 
 
-# --- outbound post over a real MCP tools/call round-trip (comms-a9q4) --------
+# --- outbound post over a real MCP tools/call round-trip ---------------------
 
 
 def _post_stub_spec(record_path: str) -> ConnectionSpec:

@@ -115,7 +115,7 @@ export interface ToolsCache {
  * attribution-producing call. In persistent mode it wraps a singleton
  * (`createSingleIdentityCache`); in ephemeral mode it holds an at-most-
  * one slot keyed by `session_id` (`createEphemeralIdentityCache`) and
- * release-then-acquires across session transitions (ass-2dhb). The
+ * release-then-acquires across session transitions. The
  * attribution-producing tools (`post`/`edit_message`/`react`/`unreact`)
  * and the passive `current_identity` read all route through it.
  *
@@ -123,7 +123,7 @@ export interface ToolsCache {
  * pump. `subscribe` / `unsubscribe` mutate it so the pump tees only
  * intended events to the MCP host. The substrate-side call
  * (`inbox.subscribe` / `inbox.unsubscribe`) handles streams created
- * after the plugin booted; the boot-time minter reconciler (ass-6a77)
+ * after the plugin booted; the boot-time minter reconciler
  * covers the rest.
  */
 export interface RegisterToolsDeps {
@@ -131,7 +131,7 @@ export interface RegisterToolsDeps {
   readonly identityCache: IdentityCache
   readonly narrowSet: NarrowSet
   /**
-   * Resolve a project slug from the calling session's cwd (ass-v7b4).
+   * Resolve a project slug from the calling session's cwd.
    * Called at every attribution-producing tool call; the result is
    * passed to `identityCache.ensureBoundFor(sid, project)` so the
    * minted `cc-<project>-<8>` name reflects the *calling* session's
@@ -145,7 +145,7 @@ export interface RegisterToolsDeps {
    * Restore (or seed) this session's narrow set on its first `subscribe`/
    * `unsubscribe` — memoised once per session_id in `server.ts`, so it runs
    * before any persistence write and the store's presence stays a true resume
-   * signal (comms-4pgy). Omitted in tests that don't exercise persistence;
+   * signal. Omitted in tests that don't exercise persistence;
    * when absent, subscribe/unsubscribe behave exactly as before.
    */
   readonly ensureSessionSubscriptions?: (
@@ -154,7 +154,7 @@ export interface RegisterToolsDeps {
   ) => Effect.Effect<void>
   /**
    * Persist the current narrow set under the session_id after a
-   * `subscribe`/`unsubscribe` mutation (comms-4pgy). Best-effort — never
+   * `subscribe`/`unsubscribe` mutation. Best-effort — never
    * fails the tool call. Omitted in tests that don't exercise persistence.
    */
   readonly persistSessionSubscriptions?: (sessionId: SessionId) => Effect.Effect<void>
@@ -329,7 +329,7 @@ const rangeSchemaFields = {
 /**
  * Typed parse of the raw MCP `arguments` object, decoded once at the top of
  * each handler's Effect rather than reached into with `args['k']` + per-field
- * `typeof` checks (comms-o52). The struct schemas below are the single source
+ * `typeof` checks. The struct schemas below are the single source
  * of truth for each tool's parsed-args shape; a wrong-type or missing required
  * field surfaces as a `ParseError` threaded through `runEdge` (the same typed
  * tool-error path the brand decoders already use), never an ad-hoc throw.
@@ -391,17 +391,17 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
   const sessionIdField = {
     type: 'string',
     description:
-      "Per-conversation identifier (UUID). In Claude Code, the plugin's PreToolUse hook injects this from the harness session id; non-CC MCP clients must supply a UUID (e.g. via crypto.randomUUID()). Anything that fails UUID validation is treated as missing — the server returns the unbound-stub error rather than minting a malformed cc-* identity (comms-uqf). Drives ephemeral identity minting (ass-2dhb).",
+      "Per-conversation identifier (UUID). In Claude Code, the plugin's PreToolUse hook injects this from the harness session id; non-CC MCP clients must supply a UUID (e.g. via crypto.randomUUID()). Anything that fails UUID validation is treated as missing — the server returns the unbound-stub error rather than minting a malformed cc-* identity. Drives ephemeral identity minting.",
   } as const
   const cwdField = {
     type: 'string',
     description:
-      "Calling session's working directory. In Claude Code, the PreToolUse hook injects this from the harness cwd; non-CC MCP clients may supply their own. Drives the project component of ephemeral cc-<project>-<8> names (ass-v7b4) — without this the minted name falls back to bare cc-<8> (or the operator-forced COMMY_PROJECT slug).",
+      "Calling session's working directory. In Claude Code, the PreToolUse hook injects this from the harness cwd; non-CC MCP clients may supply their own. Drives the project component of ephemeral cc-<project>-<8> names — without this the minted name falls back to bare cc-<8> (or the operator-forced COMMY_PROJECT slug).",
   } as const
   // SessionId is a branded type — `parseSessionId` is the single mint point.
   // A non-UUID raw value (model-guessed string, hook misfire) returns
   // `undefined` and routes through the cache's unbound stub. This is the
-  // structural fix for comms-uqf: unvalidated strings cannot reach
+  // structural fix: unvalidated strings cannot reach
   // `composeBotName` and produce a malformed `cc-<project>-<garbage>`
   // identity. Note that the hook injects session_id from CC's session UUID
   // which always passes; non-CC clients that lacked a UUID before now fail
@@ -415,7 +415,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
   const projectForArgs = (
     args: Readonly<Record<string, unknown>>,
   ): Effect.Effect<ProjectSlug | undefined> => projectForCwd(readCwd(args))
-  // Sticky engagement (comms-iut): active participation in a thread —
+  // Sticky engagement: active participation in a thread —
   // posting or reacting — implies interest in its replies. Idempotent;
   // narrow-set add is set-backed and inbox.subscribe mirrors the explicit
   // subscribe tool. No-op for refs without a thread (top-level channel
@@ -469,7 +469,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         } catch {
           // recent_threads is a best-effort orientation enrichment; a binding
           // self-check must never hard-fail on the round-trip. Omit it on any
-          // error rather than propagating (comms-wpp).
+          // error rather than propagating.
           return bound
         }
       },
@@ -743,14 +743,14 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             const sessionId = readSessionId(args)
             // Restore (or seed) this session's set before the first mutation, so
             // the snapshot persisted below captures the full live set and the
-            // store's presence stays a true resume signal (comms-4pgy).
+            // store's presence stays a true resume signal.
             if (sessionId !== undefined && deps.ensureSessionSubscriptions !== undefined) {
               yield* deps.ensureSessionSubscriptions(sessionId, yield* projectForArgs(args))
             }
             // Two sinks (see bootstrap.subscribeFromEnv): the consumer-side
             // narrow tells the event pump to tee matching events through;
             // the substrate-side call subscribes the minter to streams the
-            // boot-time reconciler (ass-6a77) didn't have a chance to cover.
+            // boot-time reconciler didn't have a chance to cover.
             narrowSet.add(intent)
             const target = yield* intentToTarget(intent)
             yield* adapter.inbox.subscribe(target)

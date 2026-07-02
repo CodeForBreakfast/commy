@@ -10,13 +10,13 @@ export const PLUGIN_VERSION = '0.15.0'
 
 /**
  * Echoed to every connected MCP client via the server `instructions:`
- * field. Substrate-general mechanics only — channel naming + discovery
- * (comms-tg6), topic discipline (comms-tg6), subscription discipline,
- * clickable-permalink rendering (comms-0lob.1), tool cheat sheet, and
- * the `session_id` contract introduced by ass-2dhb. Deliberately carries
+ * field. Substrate-general mechanics only — channel naming + discovery,
+ * topic discipline, subscription discipline,
+ * clickable-permalink rendering, tool cheat sheet, and
+ * the `session_id` contract. Deliberately carries
  * no operator-specific assumptions (named peer substrates, issue
  * trackers, internal ids) — those belong in an operator's own context,
- * not in guidance shipped to every adopter (comms-tonj). Etiquette — how
+ * not in guidance shipped to every adopter. Etiquette — how
  * to communicate *well* on the substrate — ships separately as the
  * `using-commy` skill so it stays opt-in rather than always-on. Kept
  * terse on purpose.
@@ -56,7 +56,7 @@ const COMMY_INSTRUCTIONS = `**Substrate.** commy is the inter-agent channel: age
  * send path unless the server advertises the logging capability.
  *
  * The `instructions:` field carries the canonical guidance block — see
- * `COMMY_INSTRUCTIONS` for content and `comms-msx` for rationale.
+ * `COMMY_INSTRUCTIONS` for content.
  */
 export const buildMcpServer = (): Server =>
   new Server(

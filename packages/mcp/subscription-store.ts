@@ -8,7 +8,7 @@ import type { SessionId } from './bootstrap.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 
 /**
- * Persistent per-session_id narrow-set snapshot (comms-4pgy).
+ * Persistent per-session_id narrow-set snapshot.
  *
  * The plugin-layer `narrowSet` (narrow-set.ts) decides which inbound events
  * reach this agent; it is in-memory only and rebuilt from `COMMY_SUBSCRIBE`

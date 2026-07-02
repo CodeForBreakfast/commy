@@ -50,7 +50,7 @@ def deterministic_bot_name(channel: str, topic: str) -> str:
 
 
 def deterministic_listener_name(channel: str) -> str:
-    """The persistent boot-listener identity for ``channel`` (comms-a7j.4).
+    """The persistent boot-listener identity for ``channel``.
 
     Same stability + brand-safety guarantees as ``deterministic_bot_name``, but a
     distinct ``listen-`` prefix and hash domain so the channel-level boot

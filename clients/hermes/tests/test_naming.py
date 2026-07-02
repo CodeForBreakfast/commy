@@ -1,4 +1,4 @@
-"""Tests for the deterministic per-topic bot name (comms-a7j.5).
+"""Tests for the deterministic per-topic bot name.
 
 The name is the ``COMMY_BOT_NAME`` for a per-topic connection. It MUST
 satisfy the substrate's ``BotName`` brand invariant — lowercase ASCII, digits,
@@ -27,8 +27,8 @@ def test_name_is_brand_safe():
 
 
 def test_name_is_stable_across_calls():
-    a = deterministic_bot_name("epr-backend", "p2ac-a7j.5")
-    b = deterministic_bot_name("epr-backend", "p2ac-a7j.5")
+    a = deterministic_bot_name("epr-backend", "standup")
+    b = deterministic_bot_name("epr-backend", "standup")
     assert a == b
 
 

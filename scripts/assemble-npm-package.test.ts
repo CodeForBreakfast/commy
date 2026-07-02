@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { assembleNpmPackage, NPM_PACKAGE_NAME } from './assemble-npm-package.ts'
 
-// comms-iw8w.4: the publishable npm artifact for `npx @codeforbreakfast/commy-mcp`.
+// The publishable npm artifact for `npx @codeforbreakfast/commy-mcp`.
 // These lock the repo-side contract the (fleet-local) release-plugin skill calls
 // before `npm publish`; the publish itself stays Graeme's local, authed step.
 

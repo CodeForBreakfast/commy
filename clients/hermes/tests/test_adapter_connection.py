@@ -1,4 +1,4 @@
-"""Adapter ↔ connection-lifecycle wiring tests (comms-a7j.5).
+"""Adapter ↔ connection-lifecycle wiring tests.
 
 Drives the REAL ``CommyAdapter`` + REAL ``TopicConnectionManager`` with a
 recording fake transport at the subprocess/MCP seam, and asserts the adapter's
@@ -171,17 +171,16 @@ def test_disconnect_shuts_down_connections():
     assert adapter._reaper_task is None
 
 
-# --- Framework send delivers the prose reply (comms-a9q4) --------------------
+# --- Framework send delivers the prose reply ---------------------------------
 #
 # The Hermes gateway funnels each turn's composed PROSE through ``adapter.send``
 # (stream_consumer per-turn delivery), guarded by ``if not text.strip()`` so it
 # only fires when the model actually wrote prose. ``send`` delivers that prose
 # into the inbound frame's channel + topic via the live per-topic connection's
-# ``post`` tool — fixing the silent drop (a prose reply was previously
-# discarded) and routing replies to the right topic (resolves comms-xc7y).
+# ``post`` tool.
 #
 # The explicit ``post`` MCP tool stays the agent's path for cross-topic replies;
-# the two are complementary (comms-a9q4, Graeme-ratified). A pure ``post``-tool
+# the two are complementary (Graeme-ratified). A pure ``post``-tool
 # turn emits no prose, so ``send`` is never called for it — no double-reply.
 
 
@@ -314,7 +313,7 @@ def test_spawn_config_from_env_defaults_optional():
 
 def test_spawn_config_from_env_reads_attach_identity():
     # COMMY_BOT_NAME (persona) + COMMY_BOT_API_KEY (stable key) are the attach
-    # inputs the boot listener uses to bind a provisioned persona (comms-to1c).
+    # inputs the boot listener uses to bind a provisioned persona.
     env = {
         "COMMY_SERVER_DIR": "/opt/commy",
         "COMMY_PROJECT": "epr-backend",

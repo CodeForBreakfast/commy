@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-// comms-iw8w.3: the npx-migration ships the commy MCP server as a
+// The npx-migration ships the commy MCP server as a
 // self-contained node-runnable bundle so `npx -y @commy/mcp` works with
 // only node on PATH — no bun runtime, no workspace:* resolution at consume
 // time. These tests lock that contract: the build wiring exists, and the

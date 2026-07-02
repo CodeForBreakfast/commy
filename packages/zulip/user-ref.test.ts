@@ -17,14 +17,14 @@ test('userPresencePath embeds the integer ref in the path', () => {
   expect(userPresencePath(ZulipUserRef(473))).toBe('/users/473/presence')
 })
 
-// ─── Type proofs (comms-7ee) ────────────────────────────────────────────────
+// ─── Type proofs ────────────────────────────────────────────────
 // A user-scoped Zulip call must reject anything that isn't a ZulipUserRef
 // minted from a real integer user_id. These @ts-expect-error directives fire
 // at compile time (tsc, via `bun run check`); if a brand were weakened the
 // directive would go unused and tsc would fail.
 
 test('a bare string cannot reach a sender narrow', () => {
-  // @ts-expect-error — a numeric string is exactly the comms-wpp bug; Zulip needs the integer
+  // @ts-expect-error — Zulip needs the integer, not a numeric string
   senderNarrow('473')
   // @ts-expect-error — a bare IdentityId is the cross-substrate handle, not a Zulip user ref
   senderNarrow(decodeIdentityIdSync('473'))

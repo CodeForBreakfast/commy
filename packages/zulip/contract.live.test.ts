@@ -1,7 +1,7 @@
 /**
  * The AgentComms contract, run against a REAL Zulip realm.
  *
- * This is the Tier-0 "contract-against-real" run (comms-e5vm.5): the same
+ * This is the Tier-0 "contract-against-real" run: the same
  * `runAgentCommsContract` suite that the stateful fake and the memory adapter
  * pass, pointed at a live realm via a ContractFactory built on the real
  * `makeZulipHttp` + minter-driven identity flow (the seam reused from
@@ -16,7 +16,7 @@
  *   run re-acquires it without a mint. A FRESH adapter instance is built per
  *   test (per `factory()` call) so each test gets a fresh Zulip events queue
  *   (`/register`) — a reused adapter re-polls a stale queue that silently
- *   stops delivering (the realm.live.test.ts lesson, comms-hcw). The bot
+ *   stops delivering (the realm.live.test.ts lesson). The bot
  *   account is suite-scoped; only the adapter is per-test.
  * - **Per-test channel namespace.** `seedChannel(name)` creates a real stream
  *   named `cc-ct-<run>-<seq>-<name>` so each test reads/writes an isolated
@@ -34,7 +34,7 @@
  *   substrates "whose acquire-acceptable names are pinned by external
  *   configuration (transitional Zulip)". It skips the rebind/no-op lifecycle
  *   tests, which on a non-admin minter would hit the admin-only
- *   reactivate path (comms-ch7) and fail.
+ *   reactivate path and fail.
  * - **Retry-After** is honoured automatically: the request layer's
  *   `rateLimitSchedule` absorbs 429s under a cumulative-wait budget.
  *
@@ -83,7 +83,7 @@ const httpClient = Effect.runSync(HttpClient.HttpClient.pipe(Effect.provide(Fetc
 // Spacing between minter-authenticated calls (acquire/release/regenerate),
 // mirroring realm.live.test.ts. The contract regenerates the self key once per
 // test (~50×) through the shared minter; bursting trips Zulip's per-user rate
-// limit and knocks live concierges off MCP for the cool-off (comms-jfd).
+// limit and knocks live concierges off MCP for the cool-off.
 const MINTER_PACE = Duration.millis(900)
 
 const SELF_NAME = decodeBotNameSync('cc-contract-self')

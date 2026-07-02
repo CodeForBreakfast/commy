@@ -69,7 +69,7 @@ const messageMentioning = (target: Identity, sender: Identity): ParsedZulipMessa
 })
 
 test('fires mention-received when bound identity is in content even if flags lack "mentioned"', () => {
-  // The minter-routing gap (comms-wy0): on the real realm, the events
+  // The minter-routing gap: on the real realm, the events
   // queue is registered against the minter, so `flags.mentioned` is keyed
   // to the queue owner — false for cross-bot mentions. Synthesis must gate
   // on the bound identity appearing in `portMessage.mentions`, not on the
@@ -174,7 +174,7 @@ const channelRawEvent = (message: ParsedZulipMessage): { readonly [key: string]:
   message,
 })
 
-test('mapMessageEvent skips DM-shaped events instead of failing the parser (comms-ov3)', () => {
+test('mapMessageEvent skips DM-shaped events instead of failing the parser', () => {
   // DMs arrive on the live events queue with `display_recipient` as the
   // recipient array, no `stream_id`, and an empty `subject` — the strict
   // schema would fail and the unhandled error would surface to the
@@ -212,7 +212,7 @@ test('mapMessageEvent skips events whose message field is not a channel-shaped o
   ).toEqual([])
 })
 
-test('mapMessageEvent parses channel-shaped events through messageToInboundEvents (comms-ov3 regression)', () => {
+test('mapMessageEvent parses channel-shaped events through messageToInboundEvents (regression)', () => {
   // Positive regression: a normal channel message must still flow through
   // the strict parser and emit a message-posted event. Guards the gate from
   // over-filtering.
@@ -225,10 +225,10 @@ test('mapMessageEvent parses channel-shaped events through messageToInboundEvent
 })
 
 // ---------------------------------------------------------------------------
-// Iterator-level defence (comms-aod): shape-violating events must be logged
+// Iterator-level defence: shape-violating events must be logged
 // and skipped, never escape the iterator. A ZodError escaping fetchBatch
 // reaches startEventPump.reportFatal → process.exit(1), killing MCP for
-// every bot in the realm. The patches below generalise the comms-ov3 DM gate
+// every bot in the realm. The patches below generalise the DM gate
 // to any unforeseen schema drift.
 // ---------------------------------------------------------------------------
 
@@ -330,7 +330,7 @@ const aChannelMessage = (overrides: Partial<ParsedZulipMessage> = {}): Record<st
 const ITERATOR_TEST_TIMEOUT_MS = 2_000
 
 test(
-  'iterator skips malformed reaction event and yields subsequent valid events (comms-aod)',
+  'iterator skips malformed reaction event and yields subsequent valid events',
   () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -379,14 +379,13 @@ test(
 )
 
 test(
-  'iterator skips event whose message body fails strict schema (comms-aod)',
+  'iterator skips event whose message body fails strict schema',
   () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        // Channel-shaped event (stream_id present, passes the comms-ov3 gate)
+        // Channel-shaped event (stream_id present, passes the DM gate)
         // but with an empty subject — the strict zulipMessageContentSchema
-        // requires subject.min(1). Before comms-aod the ZodError escaped
-        // fetchBatch and crashed the pump.
+        // requires subject.min(1).
         const lines: string[] = []
         let getCalls = 0
         const config: EventsConfig = {
@@ -426,15 +425,13 @@ test(
 )
 
 test(
-  'iterator skips reaction whose cache-miss lookup returns a malformed message (comms-aod)',
+  'iterator skips reaction whose cache-miss lookup returns a malformed message',
   () =>
     Effect.runPromise(
       Effect.gen(function* () {
         // The reaction is well-formed; the cache misses; fetchMessageRef hits
         // /messages and the returned message fails zulipMessageContentSchema
-        // (subject=''). Before comms-aod the ZodError escaped fetchBatch and
-        // killed the pump for every bot in the realm. Now the reaction is
-        // logged + skipped and the iterator survives.
+        // (subject=''). The reaction is logged + skipped and the iterator survives.
         const lines: string[] = []
         let getCalls = 0
         const config: EventsConfig = {
@@ -483,7 +480,7 @@ test(
 )
 
 test(
-  'iterator advances queue past a malformed event so it is not re-delivered (comms-aod)',
+  'iterator advances queue past a malformed event so it is not re-delivered',
   () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -536,7 +533,7 @@ test(
 )
 
 // ---------------------------------------------------------------------------
-// Transparent gap-replay on BAD_EVENT_QUEUE_ID (comms-jnn): when Zulip
+// Transparent gap-replay on BAD_EVENT_QUEUE_ID: when Zulip
 // invalidates the events queue (TTL expiry, manual invalidation, etc.) the
 // iterator re-registers — but anything posted during the dead window is lost
 // from the live stream. Wire a `replay(since)` callback into EventsConfig that
@@ -547,7 +544,7 @@ test(
 // ---------------------------------------------------------------------------
 
 test(
-  'iterator calls replay() on BAD_EVENT_QUEUE_ID and emits gap events flagged replayed=true (comms-jnn)',
+  'iterator calls replay() on BAD_EVENT_QUEUE_ID and emits gap events flagged replayed=true',
   () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -652,12 +649,12 @@ test(
 )
 
 test(
-  'iterator skips replay() when no replay callback configured (comms-jnn back-compat)',
+  'iterator skips replay() when no replay callback configured (back-compat)',
   () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        // Existing pre-comms-jnn behaviour must remain: BAD_EVENT_QUEUE_ID is
-        // handled by silent re-register, no replay call attempted.
+        // BAD_EVENT_QUEUE_ID is handled by silent re-register, no replay call
+        // attempted.
         let registerCalls = 0
         let getCalls = 0
         const config: EventsConfig = {
@@ -708,7 +705,7 @@ test(
 )
 
 test(
-  'iterator skips replay() when no live message has been seen yet (comms-jnn)',
+  'iterator skips replay() when no live message has been seen yet',
   () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -769,7 +766,7 @@ test(
 )
 
 test(
-  'iterator logs gap-replay failure via the InboxError tag and recovers on the next poll (comms-spj3.28)',
+  'iterator logs gap-replay failure via the InboxError tag and recovers on the next poll',
   () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -849,18 +846,16 @@ test(
 )
 
 // ---------------------------------------------------------------------------
-// Producer-level retry + breadcrumb (comms-ynb): non-recoverable substrate
+// Producer-level retry + breadcrumb: non-recoverable substrate
 // hiccups (network failure, 500-class ZulipApiError, response-shape parse
 // drift) drive an internal capped-exponential `Schedule` retry inside the
 // producer. The Stream's E channel stays `never`; the breadcrumb format is
 // `transient error (attempt N): <message>` and (on first event after
-// recovery) `reconnected after N transient error(s)`. These tests pin the
-// invariants the pump's old `Stream.tapError + Stream.retry` wiring used
-// to enforce externally. Since comms-spj3.27 the backoff is a real
+// recovery) `reconnected after N transient error(s)`. The backoff is a real
 // `Schedule` on the virtual clock, so the drain runs under TestClock.
 // ---------------------------------------------------------------------------
 
-test('producer retries on transient ZulipApiError and emits transient/reconnect breadcrumbs (comms-ynb)', () =>
+test('producer retries on transient ZulipApiError and emits transient/reconnect breadcrumbs', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       let getCalls = 0
@@ -908,7 +903,7 @@ test('producer retries on transient ZulipApiError and emits transient/reconnect 
     }),
   ))
 
-test('producer survives multiple consecutive transient failures before recovery (comms-ynb)', () =>
+test('producer survives multiple consecutive transient failures before recovery', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       let getCalls = 0
@@ -960,7 +955,7 @@ test('producer survives multiple consecutive transient failures before recovery 
     }),
   ))
 
-test('default retry schedule is exponential and caps at 30s (comms-spj3.27)', () =>
+test('default retry schedule is exponential and caps at 30s', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       // The reconnect backoff must be a CAP, not a floor: delays grow
@@ -979,7 +974,7 @@ test('default retry schedule is exponential and caps at 30s (comms-spj3.27)', ()
     }).pipe(Effect.provide(TestContext.TestContext)),
   ))
 
-test('producer fires each retry only after its capped-exponential backoff elapses (comms-spj3.27)', () =>
+test('producer fires each retry only after its capped-exponential backoff elapses', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       // Behavioural proof of the CAP through the live producer: after each
@@ -1039,7 +1034,7 @@ test('producer fires each retry only after its capped-exponential backoff elapse
     }),
   ))
 
-test('producer surfaces non-Error rejections via the ZulipApiError message in the transient-error log (comms-ynb)', () =>
+test('producer surfaces non-Error rejections via the ZulipApiError message in the transient-error log', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       let getCalls = 0
@@ -1082,7 +1077,7 @@ test('producer surfaces non-Error rejections via the ZulipApiError message in th
     }),
   ))
 
-test('producer logs a rate-limit backoff breadcrumb when /events returns HTTP 429 (comms-l8v)', () =>
+test('producer logs a rate-limit backoff breadcrumb when /events returns HTTP 429', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       // The 429 branch sleeps for retry_after and returns an empty chunk —

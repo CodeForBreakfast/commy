@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-// comms-iw8w.3: the PreToolUse hook ships as a node-runnable bundle so the
+// The PreToolUse hook ships as a node-runnable bundle so the
 // plugin's only prereq is node on PATH — the bundled `.js` drops the
 // reliance on node's native TS type-stripping (node ≥23.6) that running the
 // raw `.ts` would require. These tests prove the bundle builds and behaves

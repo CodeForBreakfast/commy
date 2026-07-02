@@ -5,7 +5,6 @@ import { join } from 'node:path'
 // The published npm package name. The 'commy' brand is the default everywhere
 // except where it clashes — npm is the one such surface, so the published
 // package alone carries the @codeforbreakfast scope (Graeme's naming ruling).
-// comms-iw8w.4.
 export const NPM_PACKAGE_NAME = '@codeforbreakfast/commy-mcp'
 
 // A node shebang on the bundle so `npx @codeforbreakfast/commy-mcp` (which runs
@@ -53,7 +52,7 @@ function publishManifest(version: string): PublishManifest {
 }
 
 // Assemble a publishable npm package at outDir: the node-target server bundle
-// (deps inlined by comms-iw8w.3, prefixed with a node shebang so it runs as the
+// (deps inlined, prefixed with a node shebang so it runs as the
 // package bin) plus a generated, dependency-free package.json whose version
 // tracks plugin.json. `npm publish <outDir>` ships it. bun is the build tool
 // here, not a runtime the consumer needs.

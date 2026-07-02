@@ -1,5 +1,5 @@
 """A minimal real MCP server exposing a ``post`` tool, for the transport's
-outbound-delivery test (comms-a9q4).
+outbound-delivery test.
 
 Stands in for the commy server so the transport test exercises a REAL subprocess
 + REAL MCP ``tools/call`` round-trip with no Zulip realm. It is faithful to the

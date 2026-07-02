@@ -85,8 +85,8 @@ export interface ContractEnv {
   readonly unacquirableName?: string
   /**
    * Optional. Post a message AUTHORED BY A SEEDED PEER (sender ≠ self) into a
-   * channel the bound self can observe. Drives the mention-floor tests
-   * (comms-5kx): a peer @-mentions self and self's `events()` must yield
+   * channel the bound self can observe. Drives the mention-floor tests:
+   * a peer @-mentions self and self's `events()` must yield
    * `mention-received`. This is the cross-identity shape `realm.live.test.ts`
    * proves with observer ≠ sender — the contract can't express it through
    * `comms.publisher.post` alone because that always authors as self, and a
@@ -146,10 +146,10 @@ const takeUntil = (
 /**
  * Await the first event matching `predicate`, failing the test (with
  * `description`) if none arrives within `EVENT_DELIVERY_DEADLINE`. Intervening
- * events are drained and discarded — so a positive event-delivery assertion no
- * longer depends on the *position* of its event in the stream. On the live
+ * events are drained and discarded — so a positive event-delivery assertion
+ * does not depend on the *position* of its event in the stream. On the live
  * realm an events queue under 429 backoff can redeliver or gap-replay a
- * `message-posted` (comms-jnn), which a positional `Queue.take` + `.kind`
+ * `message-posted`, which a positional `Queue.take` + `.kind`
  * assertion would mistake for the wrong event; draining-until-match is immune.
  * Memory delivers exactly once so the match is immediate there.
  */
@@ -227,7 +227,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
           const channel = yield* env.seedChannel('lobby')
           const ref = yield* env.comms.publisher.post(channel, decodeMessageBodySync('hello world'))
           // Channel identity, not the whole ref: a substrate may decorate the
-          // returned ChannelRef (e.g. Zulip hangs a permalink off it, comms-e7my)
+          // returned ChannelRef (e.g. Zulip hangs a permalink off it)
           // beyond the bare {id,name} the seed factory hands back.
           expect(ref.channel.id).toEqual(channel.id)
           expect(ref.channel.name).toEqual(channel.name)
@@ -254,7 +254,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
 
     // Compare against the refs `seedChannel` returns rather than the literal
     // names: a substrate may namespace the underlying channel (the live Zulip
-    // factory prefixes per-test, comms-e5vm.5). The neutral invariant is that
+    // factory prefixes per-test). The neutral invariant is that
     // a seeded channel is enumerated, keyed by the name the substrate assigned.
     test('directory.listChannels enumerates seeded channels by name', () =>
       Effect.runPromise(
@@ -349,7 +349,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         }),
       ))
 
-    // Regression for comms-izp. Caller writes `@**Name**` inline AND passes
+    // Caller writes `@**Name**` inline AND passes
     // mentions[] for the same identity. Body must round-trip with exactly
     // one occurrence of the mention markup, not two.
     test('publisher.post with inline @-mention markup AND opts.mentions does not double the markup in body', () =>
@@ -665,7 +665,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
       ))
 
     // The returned name must reflect (derive from) the seed input; a substrate
-    // may namespace it (live Zulip prefixes per-test, comms-e5vm.5), so the
+    // may namespace it (live Zulip prefixes per-test), so the
     // neutral invariant is containment of the seed input, not exact equality.
     test('seedChannel returns a ChannelRef whose name matches the seed input', () =>
       Effect.runPromise(
@@ -720,7 +720,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         ),
       ))
 
-    // The mention floor (comms-5kx: an @-mention of you reaches you). A PEER
+    // The mention floor (an @-mention of you reaches you). A PEER
     // posts the mention (sender ≠ self) — the cross-identity shape
     // realm.live.test.ts proves, and one a single-identity self-mention cannot,
     // since live Zulip's `is:mentioned` narrow is keyed to the queue owner.
@@ -729,9 +729,8 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
     // live Zulip: a bound bot's events queue is minter-owned, so its own
     // mentions surface only in mode 'all' — which a channel subscription sets,
     // not the acquire-time / subscribe('mentions') narrow. The bare floor (a
-    // mention WITHOUT a channel subscribe) holds on Memory but not yet on
-    // Zulip; comms-9usb tracks restoring it cross-substrate (per-bot queue),
-    // after which the channel subscribe here becomes unnecessary.
+    // mention without a channel subscribe) holds on Memory but not yet on
+    // Zulip.
     test('a peer mention surfaces as mention-received when self is subscribed to the channel', () =>
       Effect.runPromise(
         Effect.scoped(
@@ -760,8 +759,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
 
     // Subscribing the 'mentions' narrow alongside the channel must not suppress
     // the delivery. The channel subscribe is again what surfaces the bound
-    // bot's mention on live Zulip (mode 'all'); comms-9usb will let
-    // subscribe('mentions') alone suffice.
+    // bot's mention on live Zulip (mode 'all').
     test('inbox.subscribe("mentions") alongside a channel subscription yields a peer mention-received', () =>
       Effect.runPromise(
         Effect.scoped(

@@ -1,7 +1,6 @@
 /**
  * `ZulipHttp` request-shape and response-handling, exercised on the **owned-fake
- * stub HttpClient** — no `Bun.serve`, no real socket (the Tier-2 migration,
- * comms-e5vm.8; follows the event-pump proof comms-e5vm.2).
+ * stub HttpClient** — no `Bun.serve`, no real socket.
  *
  * The stub answers each request from a canned `(method, path)` registry and
  * captures the outgoing `HttpClientRequest` (serialized exactly as the wire
@@ -20,7 +19,7 @@
  *    ZulipApiError` — needs a genuine platform `RequestError` from a refused
  *    connection, which the in-memory stub cannot fabricate without lowering
  *    fidelity. It keeps a real `FetchHttpClient` against a claimed-then-released
- *    port (comms-e5vm.8 orchestrator ruling).
+ *    port.
  *
  * Happy-path cases that merely re-asserted a success body round-trip
  * (GET-parses-success-envelope, POST-returns-success-body) were deleted: the
@@ -404,7 +403,7 @@ effectTest(
 )
 
 test('a transport failure surfaces as a ZulipApiError that preserves the underlying cause', () =>
-  // IRREDUCIBLE real socket (comms-e5vm.8 ruling): a genuine platform
+  // Irreducible real socket: a genuine platform
   // `RequestError` only arises from a real refused connection. Claim a port
   // then release it so the connection is refused — no mock, no in-memory stub
   // (which cannot fabricate a real RequestError without dropping fidelity).
@@ -428,7 +427,7 @@ test('a transport failure surfaces as a ZulipApiError that preserves the underly
     }).pipe(Effect.provide(FetchHttpClient.layer)),
   ))
 
-// --- 429 rate-limit retry (comms-nbz) ---
+// --- 429 rate-limit retry ---
 //
 // A 429 carries `retry-after` — backpressure with instructions, not a fatal
 // error. The send path absorbs it: wait the realm's retry-after and retry
@@ -661,8 +660,7 @@ test('ApiKey rejects empty strings', () =>
   ))
 
 // A path not starting with '/' is a programmer error, so it surfaces as a
-// TypeError defect in the Effect channel (comms-0m8) — no longer a synchronous
-// throw from an Effect-returning verb. No request is sent, so these run on the
+// TypeError defect in the Effect channel. No request is sent, so these run on the
 // stub with no canned response registered.
 const expectPathDefect = <A, E>(eff: Effect.Effect<A, E>): Effect.Effect<void> =>
   Effect.gen(function* () {
@@ -699,7 +697,7 @@ effectTest('DELETE fails with a TypeError defect when path does not start with /
   }),
 )
 
-// --- downloadRaw (comms-xos) ---
+// --- downloadRaw ---
 
 effectTest('downloadRaw resolves path against realm root, not /api/v1', () =>
   Effect.gen(function* () {
@@ -798,7 +796,7 @@ effectTest('downloadRaw uses GET method', () =>
   }),
 )
 
-// --- uploadRaw (comms-nsa) ---
+// --- uploadRaw ---
 
 const uploadSuccess = (urlPath: string, filename: string) => ({
   result: 'success',
@@ -896,7 +894,7 @@ effectTest('uploadRaw sends host header when configured', () =>
   }),
 )
 
-// --- decodeUserUploadPath (comms-spj3.13) ---
+// --- decodeUserUploadPath ---
 
 test('decodeUserUploadPath succeeds on a /user_uploads/ path', () =>
   Effect.runPromise(

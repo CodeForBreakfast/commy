@@ -91,7 +91,7 @@ For other hosts, `clients/hermes/` is a
 presents commy as a gateway platform. It reads the same realm credentials plus
 `COMMY_SERVER_DIR` (a commy checkout) from the environment. The receive path and
 connection lifecycle are wired; **automated install into `~/.hermes/plugins/` is
-still in progress** (`comms-a7j.7`). See
+still in progress**. See
 [`clients/hermes/README.md`](clients/hermes/README.md) for the current wiring.
 
 ## Bring your own realm (no central committee hosts this)

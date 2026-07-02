@@ -64,7 +64,7 @@ const buildSessionRig = (
     return { client, adapter }
   })
 
-// UUID-shaped test session ids. The brand demands UUID format (comms-uqf);
+// UUID-shaped test session ids. The brand demands UUID format;
 // these are valid UUIDs whose leading 8 hex chars give readable bot-name
 // suffixes (`cc-aaaaaaaa`, `cc-bbbbbbbb`, etc.).
 const SID_A = 'aaaaaaaa-0000-4000-8000-000000000001'
@@ -148,11 +148,11 @@ test('current_identity for an unknown session_id returns unbound without minting
     ),
   ))
 
-test('current_identity with a non-UUID session_id returns unbound (comms-uqf)', () =>
+test('current_identity with a non-UUID session_id returns unbound', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        // Regression for the comms-uqf class of bug: a model-guessed session_id
+        // Regression: a model-guessed session_id
         // string (or a non-CC client supplying a non-UUID like `homelab-iphone-...`)
         // must NOT mint a malformed `cc-<garbage>` identity. `readSessionId` now
         // validates UUID shape via the SessionId brand; non-UUID inputs route to
@@ -171,7 +171,7 @@ test('current_identity with a non-UUID session_id returns unbound (comms-uqf)', 
     ),
   ))
 
-test('post with a non-UUID session_id is rejected — no malformed cc-* identity minted (comms-uqf)', () =>
+test('post with a non-UUID session_id is rejected — no malformed cc-* identity minted', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -194,10 +194,9 @@ test('post with a non-UUID session_id is rejected — no malformed cc-* identity
           }),
         )
         expect(error.message).toMatch(/session_id|ephemeral/i)
-        // The unbound refusal now carries a discriminator (comms-spj3.17): the
+        // The unbound refusal carries a discriminator: the
         // tagged error's name reaches the MCP edge reshape, so the client sees
-        // `UnboundEphemeralSession: …` rather than the bare message the old
-        // `name === 'Error'` skip produced.
+        // `UnboundEphemeralSession: …`.
         expect(error.message).toContain('UnboundEphemeralSession')
         const exit = yield* Effect.exit(rig.adapter.identity.currentIdentity())
         expect(exit._tag).toBe('Failure')
@@ -241,7 +240,7 @@ test('post with a new session_id after one already bound releases the prior iden
     ),
   ))
 
-test('post without session_id rejects even when a prior session bound an identity (comms-67j)', () =>
+test('post without session_id rejects even when a prior session bound an identity', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -294,7 +293,7 @@ test('post without session_id rejects even when a prior session bound an identit
     ),
   ))
 
-test('current_identity without session_id returns unbound, even when a prior session bound an identity (comms-67j)', () =>
+test('current_identity without session_id returns unbound, even when a prior session bound an identity', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -348,7 +347,7 @@ test('post without session_id and no prior binding rejects with an instructive e
     ),
   ))
 
-test('post with session_id + cwd mints cc-<project>-<sid-prefix> derived from cwd (ass-v7b4)', () =>
+test('post with session_id + cwd mints cc-<project>-<sid-prefix> derived from cwd', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -378,7 +377,7 @@ test('post with session_id + cwd mints cc-<project>-<sid-prefix> derived from cw
     ),
   ))
 
-test('two sessions in different cwds mint two different project prefixes (ass-v7b4)', () =>
+test('two sessions in different cwds mint two different project prefixes', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -424,7 +423,7 @@ test('two sessions in different cwds mint two different project prefixes (ass-v7
     ),
   ))
 
-test('post with cwd from a non-project directory falls back to bare cc-<8> (ass-v7b4)', () =>
+test('post with cwd from a non-project directory falls back to bare cc-<8>', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {

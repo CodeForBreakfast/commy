@@ -1,18 +1,17 @@
 #!/usr/bin/env node
 /**
- * PreToolUse hook for the commy plugin (ass-2dhb + ass-v7b4).
+ * PreToolUse hook for the commy plugin.
  *
  * Claude Code invokes this script before any matching tool call
  * (the plugin-namespaced `mcp__plugin_commy_commy__*`
- * shape — see ass-4umr) and pipes the event JSON to stdin. The
+ * shape) and pipes the event JSON to stdin. The
  * script:
  *
  *   1. Reads `session_id` and `cwd` from the event.
  *   2. Emits `hookSpecificOutput.updatedInput` with `session_id`
  *      AND `cwd` merged into the tool's `tool_input`. Claude Code
  *      propagates `updatedInput` to the MCP server's
- *      `params.arguments` over the stdio wire (confirmed empirically
- *      — see ass-2vg0).
+ *      `params.arguments` over the stdio wire (confirmed empirically).
  *
  * The server-side handler reads `params.arguments.session_id` and
  * routes through `identityCache.ensureBoundFor(session_id, project)`
@@ -20,7 +19,7 @@
  * boot-time `projectForCwd` resolver (operator-override > git probe;
  * see `server.ts`). This way the minted `cc-<project>-<8>` name
  * reflects the *calling* session's project rather than the plugin's
- * own pinned cwd (ass-v7b4).
+ * own pinned cwd.
  *
  * The model never sees either field; the hook is a deterministic
  * shell that stamps fields the model never touches.

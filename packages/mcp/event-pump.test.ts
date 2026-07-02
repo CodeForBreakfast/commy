@@ -802,7 +802,7 @@ test('pump does NOT call onMention for self-echo mentions', () =>
     }),
   ))
 
-test('pump dispatches a single notifier call when message-posted and mention-received share the same message.ref.id (comms-oyy)', () =>
+test('pump dispatches a single notifier call when message-posted and mention-received share the same message.ref.id', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const bot: Identity = { id: BOT_ID, name: decodeDisplayNameSync('cc-bot'), kind: 'agent' }
@@ -826,7 +826,7 @@ test('pump dispatches a single notifier call when message-posted and mention-rec
     }),
   ))
 
-test('pump still calls onMention when mention-received is the deduped duplicate (comms-oyy)', () =>
+test('pump still calls onMention when mention-received is the deduped duplicate', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       // The notifier-side dedup must not swallow the mention-cursor advance:
@@ -858,7 +858,7 @@ test('pump still calls onMention when mention-received is the deduped duplicate 
     }),
   ))
 
-test('pump dedup is keyed per message id — distinct ids each fire (comms-oyy)', () =>
+test('pump dedup is keyed per message id — distinct ids each fire', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const inbox = queueInbox({
@@ -891,7 +891,7 @@ test('pump dedup is keyed per message id — distinct ids each fire (comms-oyy)'
     }),
   ))
 
-test('pump does not dedup a reaction whose target.id matches a previously delivered message (comms-oyy)', () =>
+test('pump does not dedup a reaction whose target.id matches a previously delivered message', () =>
   runWithClockSeconds(
     1715450010,
     Effect.gen(function* () {
@@ -961,7 +961,7 @@ test('pump exits and produces no further notifications after cancel', () =>
     }),
   ))
 
-// The comms-ynb invariants (auto-reconnect on transient substrate
+// The reconnect invariants (auto-reconnect on transient substrate
 // failure, `transient error (attempt N)` + `reconnected after N
 // transient error(s)` breadcrumbs, default backoff schedule, clean
 // cancel-during-backoff unwind, non-Error rejection stringification)
@@ -973,7 +973,7 @@ test('pump exits and produces no further notifications after cancel', () =>
 // are absorbed at the producer with `Schedule.forever.addDelay` and
 // the consumer just runs the stream to completion.
 
-test('pump still parks on dispatch failure to preserve comms-ian for non-iterator errors', () => {
+test('pump still parks on dispatch failure to preserve the fatal-park flow for non-iterator errors', () => {
   const logLines: string[] = []
   return Effect.runPromise(
     Effect.scoped(
@@ -983,7 +983,7 @@ test('pump still parks on dispatch failure to preserve comms-ian for non-iterato
         // is broken or the host rejected the params, neither of which a fresh
         // iterator will fix. Logging + a sticky error block + not resolving
         // done (until cancel) keeps the process alive so other MCP tools still
-        // work, matching the original comms-ian rationale.
+        // work.
         const inbox = queueInbox({
           events: [
             {

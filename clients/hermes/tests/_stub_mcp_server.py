@@ -5,7 +5,7 @@ subprocess + REAL MCP handshake + REAL ``notifications/message`` emission with n
 Zulip realm. It is faithful to the one behaviour under test: after the client
 completes the MCP initialize handshake, it emits the inbound carrier the
 substrate dual-emits — ``notifications/message`` with the ``{content, meta}``
-frame nested under ``params.data`` (the bb7.1 envelope).
+frame nested under ``params.data``.
 
 To prove the manager's env wiring end-to-end, the emitted frame echoes the
 ``COMMY_BOT_NAME`` and ``COMMY_SUBSCRIBE`` the parent process set —

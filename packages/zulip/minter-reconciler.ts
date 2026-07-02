@@ -3,12 +3,12 @@ import type { ChannelName } from '@commy/core/ports'
 import { Effect } from 'effect'
 
 /**
- * Minter subscription reconciler (ass-6a77).
+ * Minter subscription reconciler.
  *
  * Substrates with realm-level subscription (Zulip) require the
  * minter to be subscribed to every public stream so the plugin's
- * event pump observes events even from lurker (un-acquired) sessions
- * — see ass-220u. This module is the boot-time pass that closes any
+ * event pump observes events even from lurker (un-acquired) sessions.
+ * This module is the boot-time pass that closes any
  * gap between "every public stream" and the minter's current
  * subscription set. Per-session `inbox.subscribe()` continues to
  * register the minter for streams created after boot.
@@ -19,8 +19,8 @@ import { Effect } from 'effect'
  * on its public shape.
  *
  * Failure is non-fatal: any failing dep is captured in `error` and
- * the boot path keeps running with a degraded lurker view (`bd show
- * ass-6a77` "log + continue" decision). The deps' typed error
+ * the boot path keeps running with a degraded lurker view (a
+ * "log + continue" decision). The deps' typed error
  * channel is collapsed into the report, so the reconciler never
  * fails — its E channel is `never`.
  */

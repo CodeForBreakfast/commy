@@ -140,14 +140,13 @@ test('decodeEmoji fails with a ParseError on the empty string', () => {
   expectParseError(decodeEmoji(''))
 })
 
-test('MessagePublisher.post rejects an unbranded body at the type level (comms-m1y)', () => {
+test('MessagePublisher.post rejects an unbranded body at the type level', () => {
   // A bare `string` for the MessageBody-branded `body` param must not compile.
   // Method-vs-arrow syntax is irrelevant: strictFunctionTypes bivariance only
   // loosens function-type *assignability*, never a direct call-site argument
   // check — so the brand bites even though `post` is declared with method
-  // shorthand. comms-m1y was filed believing the opposite (that bivariance
-  // let a bare string through here); this proof is the disproof. If it stops
-  // firing, the MessageBody brand has genuinely been weakened.
+  // shorthand. If it stops firing, the MessageBody brand has genuinely been
+  // weakened.
   const proof = (publisher: MessagePublisher, channel: ChannelRef): void => {
     // @ts-expect-error — body must be MessageBody, not string
     void publisher.post(channel, 'raw-unbranded-body')

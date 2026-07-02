@@ -131,7 +131,7 @@ interface AdapterOverrides {
   /**
    * Boot in ephemeral mode (omits COMMY_BOT_NAME). First
    * attribution-producing tool call must include a `session_id`
-   * argument so the cache can mint a lazy identity (ass-2dhb).
+   * argument so the cache can mint a lazy identity.
    */
   readonly ephemeral?: boolean
   /**
@@ -145,7 +145,7 @@ interface AdapterOverrides {
   /**
    * Arbitrary env overrides on top of `validEnv`. Pass `undefined` to
    * effectively drop a key (parseEnv treats missing and undefined
-   * identically) — used by comms-iyf tests to set
+   * identically) — used by tests to set
    * COMMY_PROJECT for Type-2 default-narrow derivation.
    */
   readonly env?: Record<string, string | undefined>
@@ -157,7 +157,7 @@ interface Harness {
   readonly closes: { readonly count: number }
   /**
    * Acquire/release counters drawn from the wrapped IdentityPort. Used
-   * by the Type 4 cron-shape integration test (comms-1te) to assert
+   * by the Type 4 cron-shape integration test to assert
    * the boot-acquire-then-shutdown-release sequence fires exactly once
    * each — the memory adapter's underlying state is silent on call
    * counts.
@@ -247,7 +247,7 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
     messagePermalink: (id, hint) => base.history.messagePermalink(id, hint),
   }
 
-  // Always wrap identity to count acquires/releases — comms-1te asserts
+  // Always wrap identity to count acquires/releases — we assert
   // the cron-shape lifecycle (one acquire at boot, one release on
   // SIGTERM). Wrapping here (before composing overrides) means a test
   // that supplies its own `identityOverrides.acquire` is never observed,
@@ -332,7 +332,7 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
     ...(overrides.env ?? {}),
   }
 
-  // The boot program (comms-spj3.39): the substrate adapter and cursor
+  // The boot program: the substrate adapter and cursor
   // store arrive through the app Layer (the adapter layer parse-gated like
   // production's `ZulipAdapterLive`, so `close()` is a layer-scope
   // finalizer), the env through an outermost ConfigProvider. A single
@@ -493,9 +493,9 @@ test('no allowlist code path exists in server.ts source', () => {
 test('static audit: no plugin source imports or calls fs-write APIs', () => {
   const pluginDir = import.meta.dir
   // Sanctioned writers:
-  //   cursor-store.ts        — per-identity mentions cursor under <XDG_STATE_HOME> (comms-rxo)
-  //   subscription-store.ts  — per-session_id narrow-set snapshot under <XDG_STATE_HOME> (comms-4pgy)
-  //   server.ts              — download_file temp files under os.tmpdir() (comms-xos)
+  //   cursor-store.ts        — per-identity mentions cursor under <XDG_STATE_HOME>
+  //   subscription-store.ts  — per-session_id narrow-set snapshot under <XDG_STATE_HOME>
+  //   server.ts              — download_file temp files under os.tmpdir()
   const writeAllowlist = new Set(['cursor-store.ts', 'subscription-store.ts', 'server.ts'])
   const sources = readdirSync(pluginDir).filter(
     (n) =>
@@ -592,7 +592,7 @@ test('runtime: plugin directory tree is unchanged across a full plugin exercise'
   expect(snapshotPluginDir(pluginDir)).toEqual(before)
 })
 
-// ─── Per-tool: download_file / upload_file — real FileSystem builder (comms-spj3.21) ───
+// ─── Per-tool: download_file / upload_file — real FileSystem builder ───
 
 test('download_file: server FileSystem builder writes the download to a real temp file and returns its path', async () => {
   const h = await buildHarness({
@@ -620,7 +620,7 @@ test('download_file: server FileSystem builder writes the download to a real tem
 })
 
 test('upload_file: server FileSystem builder reads the real local file and reports its byte length', async () => {
-  const localPath = join(tmpdir(), `comms-spj3-21-upload-${process.pid}.bin`)
+  const localPath = join(tmpdir(), `upload-test-${process.pid}.bin`)
   const payload = new Uint8Array([1, 2, 3, 4, 5])
   writeFileSync(localPath, payload)
   const h = await buildHarness({
@@ -660,7 +660,7 @@ test('current_identity (happy): returns the bound bot identity envelope', async 
 })
 
 test('current_identity is passive: does NOT call IdentityPort.currentIdentity', async () => {
-  // ass-220u: current_identity reads from the boot-orchestrator's
+  // current_identity reads from the boot-orchestrator's
   // ensureBound state, never round-trips to the substrate. Wire a
   // throwing currentIdentity to prove the tool path doesn't touch it.
   class SubstrateOffline extends Error {
@@ -850,7 +850,7 @@ test('presence (error): surfaces port exception with class-name prefix', async (
   }
 })
 
-test('presence (happy): resolves an identity first seen only via an inbound notification (comms-lox)', async () => {
+test('presence (happy): resolves an identity first seen only via an inbound notification', async () => {
   // Drive a single message-posted event from a peer the bot never
   // resolved/listed — pre-fix, presence(stranger.id) threw
   // UnknownIdentity because the tools-side cache was unreachable from
@@ -965,7 +965,7 @@ test('read_thread (error): rejects when thread argument is missing', async () =>
   }
 })
 
-test('unknown arguments are rejected with a clear error (comms-476)', async () => {
+test('unknown arguments are rejected with a clear error', async () => {
   const h = await buildHarness({ seedChannels: ['home'] })
   try {
     await expect(
@@ -1126,10 +1126,10 @@ test('unreact (error): UnknownMessage for an uncached message_id with no channel
   }
 })
 
-// ─── Self-echo suppression (comms-vkx) ───────────────────────────────────────
+// ─── Self-echo suppression ───────────────────────────────────────
 
 test('post by self does NOT fire a claude/channel notification (self-echo suppressed)', async () => {
-  // Regression for comms-vkx: the substrate's events queue replays the
+  // The substrate's events queue replays the
   // poster's own message back to it. Without the pump's self-echo guard
   // every poster receives an inbound copy of the message it just sent —
   // useful to no subscriber and forcing every consumer to filter out
@@ -1161,7 +1161,7 @@ test('post by self does NOT fire a claude/channel notification (self-echo suppre
 
 test('pump filter: event for a never-subscribed channel does NOT fire claude/channel notification', async () => {
   // Production wiring assertion. The Zulip minter is subscribed to every
-  // public stream (per `minter-reconciler.ts`, ass-6a77), so the adapter
+  // public stream (per `minter-reconciler.ts`), so the adapter
   // inbox yields events for streams the calling session never subscribed
   // to via the MCP `subscribe` tool or `COMMY_SUBSCRIBE` env. The
   // plugin-layer NarrowSet (`narrow-set.ts`) is the filter that decides
@@ -1222,7 +1222,7 @@ test('pump filter: event for a never-subscribed channel does NOT fire claude/cha
   }
 })
 
-// ─── comms-rxo: mentions catch-up on persistent-mode resume ────────────────
+// ─── mentions catch-up on persistent-mode resume ────────────────
 
 test('persistent boot with no prior cursor: no replay events fired, cursor initialised to now', async () => {
   const writes: { id: string; ts: number }[] = []
@@ -1357,7 +1357,7 @@ test('persistent boot with a prior cursor: replay fires, mention-received notifi
   }
 })
 
-// ─── comms-ae4: mentions catch-up on ephemeral-mode lazy acquire ────────────
+// ─── mentions catch-up on ephemeral-mode lazy acquire ────────────
 
 test('ephemeral lazy acquire with no prior cursor: no replay, cursor initialised to now', async () => {
   const writes: { id: string; ts: number }[] = []
@@ -1532,7 +1532,7 @@ test('ephemeral catch-up failure is non-fatal: tool call succeeds, failure is lo
   ).toBe(true)
 })
 
-// ─── comms-iyf: Type-2 default sub set for interactive CC sessions ─────────
+// ─── Type-2 default sub set for interactive CC sessions ─────────
 
 const captureSubscribes = (): {
   readonly inboxOverrides: Partial<MessageInbox>
@@ -1573,7 +1573,7 @@ test('ephemeral mode + project: first post registers mentions and thread:#<proje
     })
     // Order isn't load-bearing — only membership. The captured subscribes
     // here are exactly the onAcquire-time defaults; sticky-engagement
-    // (comms-iut) doesn't fire because the post has no thread.
+    // doesn't fire because the post has no thread.
     expect(new Set(cap.tokens)).toEqual(new Set(['mentions', 'thread:brewlife/general']))
   } finally {
     await h.cleanup()
@@ -1679,7 +1679,7 @@ test('ephemeral mode + project: distinct session_ids each register their own def
   }
 })
 
-// ─── comms-4pgy: subscription persist + restore across ephemeral resume ─────
+// ─── subscription persist + restore across ephemeral resume ─────
 
 test('ephemeral subscribe persists the live narrow set (defaults + new sub) under the session_id', async () => {
   const writes: { sid: string; intents: ReadonlyArray<SubscribeIntent> }[] = []
@@ -1750,7 +1750,7 @@ test('ephemeral resume restores the persisted narrow set and does NOT re-apply T
   }
 })
 
-// ─── comms-3wl: channel/thread catch-up on persistent-mode boot ─────────────
+// ─── channel/thread catch-up on persistent-mode boot ─────────────
 
 test('persistent boot surfaces recent channel messages within the catch-up window', async () => {
   // Stub history.readChannel so we can control what the catch-up sees
@@ -1819,7 +1819,7 @@ test('persistent boot surfaces recent channel messages within the catch-up windo
   }
 })
 
-// ─── comms-c2k: Type-1 default sub set for project concierges ──────────────
+// ─── Type-1 default sub set for project concierges ──────────────
 
 test('persistent boot with COMMY_PROJECT registers Type-1 defaults at the substrate', async () => {
   const cap = captureSubscribes()
@@ -1865,7 +1865,7 @@ test('persistent boot Type-1 intents feed the channels catch-up (new-topics + th
     await new Promise((r) => setTimeout(r, 50))
     // new-topics:brewlife → readChannel('brewlife'); thread:brewlife/general → readThread.
     // The `mentions` Type-1 default is intentionally skipped by the channels
-    // catch-up (comms-rxo's cursor-bounded mentions catch-up owns that path).
+    // catch-up (the cursor-bounded mentions catch-up owns that path).
     expect(readChannelCalls).toEqual([{ channel: 'brewlife' }])
     expect(readThreadCalls).toEqual([{ channel: 'brewlife', thread: 'general' }])
   } finally {
@@ -1873,7 +1873,7 @@ test('persistent boot Type-1 intents feed the channels catch-up (new-topics + th
   }
 })
 
-// ─── comms-3wl: channel/thread catch-up on persistent-mode boot (continued) ─
+// ─── channel/thread catch-up on persistent-mode boot (continued) ─
 
 test('persistent boot with no env subscriptions: no readChannel/readThread calls', async () => {
   const readChannelCalls: number[] = []
@@ -1903,10 +1903,10 @@ test('persistent boot with no env subscriptions: no readChannel/readThread calls
   }
 })
 
-// ─── comms-1te: Type-4 cron-shape boot (acquire → post → SIGTERM → release) ─
+// ─── Type-4 cron-shape boot (acquire → post → SIGTERM → release) ─
 
 test('Type-4 cron-shape (no project): acquire-post-shutdown-release fires once with no leaks', async () => {
-  // The cron / scheduled poster shape (comms-628): persistent boot
+  // The cron / scheduled poster shape: persistent boot
   // path (`COMMY_BOT_NAME` set), one tool call, then shutdown.
   // The Type-4 design's no-new-code argument is "Type 1 covers it" —
   // this test verifies that end-to-end against the real boot program,
@@ -1961,9 +1961,9 @@ test('Type-4 cron-shape (no project): acquire-post-shutdown-release fires once w
 })
 
 test('Type-4 cron-shape (project-scoped): Type-1 default subs registered post-acquire, clean shutdown', async () => {
-  // Project-scoped variant of the cron-shape boot. Adds the
-  // assertion from the bead: Type-1 default sub set
-  // (mentions + new-topics:<project> + thread:<project>/general)
+  // Project-scoped variant of the cron-shape boot. Also asserts the
+  // Type-1 default sub set
+  // (mentions + new-topics:<project> + thread:<project>/general) is
   // registered after the eager acquire. Catch-up window disabled so
   // the boot doesn't block on history reads — Type-4 runs are
   // short-lived and don't need the 4h skim.
@@ -1997,7 +1997,7 @@ test('Type-4 cron-shape (project-scoped): Type-1 default subs registered post-ac
     expect(h.identityCalls.acquires).toEqual(['assistant-concierge'])
     expect(h.identityCalls.releases).toBe(1)
     expect(h.closes.count).toBe(1)
-    // Sticky-engagement (comms-iut) only fires for thread posts; the
+    // Sticky-engagement only fires for thread posts; the
     // post above had no thread, so no extra subscribes beyond the
     // Type-1 default set.
     expect(new Set(cap.tokens)).toEqual(

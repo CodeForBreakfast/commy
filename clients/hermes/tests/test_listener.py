@@ -1,4 +1,4 @@
-"""Boot-time channel listener tests (comms-a7j.4).
+"""Boot-time channel listener tests.
 
 The listener is the ONE persistent-identity connection created at startup,
 subscribed ``channel:<name>`` + ``mentions``. Its sole job: notice a
@@ -152,7 +152,7 @@ def test_listener_identity_never_collides_with_a_per_topic_identity():
     assert listener != deterministic_bot_name("epr-backend", "")
 
 
-# --- attach mode: bind a provisioned persona via a supplied key (comms-to1c) -
+# --- attach mode: bind a provisioned persona via a supplied key --------------
 
 
 def test_build_listener_spec_attaches_persona_when_key_present():

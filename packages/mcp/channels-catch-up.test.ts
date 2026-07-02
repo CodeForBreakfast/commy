@@ -180,7 +180,7 @@ describe('catchUpChannels', () => {
     expect(notifier.payloads[0]?.content).toBe('in-thread')
   })
 
-  test('mentions intent → skipped (deferred to comms-rxo), no calls or dispatches', async () => {
+  test('mentions intent → skipped (deferred to the mentions catch-up), no calls or dispatches', async () => {
     const history = buildHistorySpy()
     const notifier = buildNotifierSpy()
     await runCatchUp({

@@ -19,7 +19,7 @@ export interface ChannelEventPayload {
  * (`notifications/message`) but are omitted from the agent-display projection
  * (`notifications/claude/channel`). The bare numbers collide with message ids
  * and are noise in the agent's turn, while machine consumers (e.g. Hermes
- * `SessionSource` keying) read them off the data carrier (comms-dtcm).
+ * `SessionSource` keying) read them off the data carrier.
  */
 export const IDENTITY_ID_META_KEYS = ['sender_id', 'by_id'] as const
 
@@ -58,7 +58,7 @@ export const formatMessage = (
     ['thread', ref.thread?.name],
     ['message_id', ref.id],
     // Clickable narrow permalinks for the ref the substrate handed us — message,
-    // channel, and topic (comms-e7my). Omitted by buildMeta when the substrate
+    // channel, and topic. Omitted by buildMeta when the substrate
     // has none.
     ['permalink', ref.permalink],
     ['channel_permalink', ref.channel.permalink],
@@ -68,7 +68,7 @@ export const formatMessage = (
     ['sender_kind', sender.kind],
     ['ts', String(msg.ts)],
     ['mentioned', mentioned],
-    // Gap-replay marker (comms-jnn). When the substrate iterator
+    // Gap-replay marker. When the substrate iterator
     // backfills messages on BAD_EVENT_QUEUE_ID recovery it stamps the
     // event with replayed=true; surface that as a meta attribute so the
     // CC host's `<channel ... replayed="true">` block tells the

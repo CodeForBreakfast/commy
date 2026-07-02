@@ -1,4 +1,4 @@
-"""Receive-path tests for the commy Hermes adapter (comms-a7j.2).
+"""Receive-path tests for the commy Hermes adapter.
 
 Drives the real routing/dedup path with no mocks of that logic: a
 ``claude/channel`` notification frame goes through
@@ -116,7 +116,7 @@ def test_distinct_message_ids_both_delivered():
 
 
 def test_thread_less_frame_is_ignored():
-    # Policy (comms-a7j.3): a top-level post (no `thread`) carries no natural
+    # Policy: a top-level post (no `thread`) carries no natural
     # session key — Hermes keys on (channel, topic). By the substrate convention
     # "top-level = terse pings only; substantive work goes in a topic", such a
     # frame is not agent-actionable, so it is dropped before handle_message

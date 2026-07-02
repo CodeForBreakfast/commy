@@ -1,4 +1,4 @@
-"""Lifecycle tests for the per-topic connection manager (comms-a7j.5).
+"""Lifecycle tests for the per-topic connection manager.
 
 These drive the REAL manager logic — spawn-on-demand, idle reap, respawn — with
 a recording fake transport and a fake clock standing in for the subprocess/MCP
@@ -104,7 +104,7 @@ def test_build_spec_carries_persistent_mode_identity_and_subscriptions():
 
 
 def test_build_spec_ignores_attach_identity_keeping_per_topic_minted():
-    # HYBRID scope (comms-to1c): only the boot listener attaches the persona.
+    # Hybrid scope: only the boot listener attaches the persona.
     # Per-topic connections keep their own deterministic `t-*` identity even
     # when an attach key is configured, preserving per-thread recent-window
     # catch-up. The attach key must never leak into a per-topic spec's env.
@@ -266,8 +266,7 @@ def test_respawn_after_reap_reuses_the_same_bot_name():
     # COMMY_BOT_NAME re-acquires the SAME Zulip user_id and replays the
     # thread's recent window (persistent-mode catch-up). What this layer owns
     # and asserts is that a respawn computes the identical name; the user_id
-    # reuse + window replay are the substrate's guarantee (live-verified in
-    # comms-uuy), exercised end-to-end in the a7j.6 E2E lane, not here.
+    # reuse + window replay are the substrate's guarantee, not exercised here.
     factory = _RecordingFactory()
     clock = _FakeClock()
     manager = _make_manager(factory, clock=clock, config=_config(idle_timeout_seconds=300))

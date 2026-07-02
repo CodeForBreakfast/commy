@@ -1,10 +1,10 @@
-"""Boot-time channel listener for the commy Hermes adapter (comms-a7j.4).
+"""Boot-time channel listener for the commy Hermes adapter.
 
 One persistent-identity connection, created at startup, subscribed
 ``channel:<name>`` + ``mentions``. Its sole job is the cold-start path: notice a
 ``(channel, topic)`` that no per-topic identity owns yet and trigger a spawn
-(``CommyAdapter.ensure_topic_connection`` → ``TopicConnectionManager.ensure``,
-the seam comms-a7j.5 landed). Ongoing topics are owned by their per-topic
+(``CommyAdapter.ensure_topic_connection`` → ``TopicConnectionManager.ensure``).
+Ongoing topics are owned by their per-topic
 identity, which is subscribed to its own thread and refreshes its own idle
 timer; the listener reads that ownership live off the manager and ignores an
 already-owned topic, so it never re-triggers (dedup by ownership).
@@ -72,7 +72,7 @@ def build_listener_spec(config: SpawnConfig, channel: str) -> ConnectionSpec:
 
     Per-topic connections (``connection.build_spec``) always mint their own
     ``t-*`` identity regardless of the attach key — only the boot listener
-    attaches the persona (the hybrid scope, comms-to1c). Mirrors
+    attaches the persona (the hybrid scope). Mirrors
     ``connection.build_spec`` but with a channel-level subscription.
     """
     env: dict[str, str] = {

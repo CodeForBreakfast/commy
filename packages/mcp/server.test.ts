@@ -89,7 +89,7 @@ const inMemorySubscriptionStore = (): SubscriptionStore => {
 }
 
 /**
- * Run the boot program with a substituted adapter (comms-spj3.39). The
+ * Run the boot program with a substituted adapter. The
  * adapter layer is parse-gated like the production `ZulipAdapterLive`, so
  * an invalid env fails the layer build — the adapter is never acquired
  * and `close()` never fires — mirroring production exactly. The logger is
@@ -255,7 +255,7 @@ test('main writes acquire failure to stderr in the canonical format, fails boot,
 })
 
 test('lazy mode (cc-<8> from session id) does NOT acquire at boot', async () => {
-  // ass-220u: when COMMY_BOT_NAME is unset and we fall back to
+  // when COMMY_BOT_NAME is unset and we fall back to
   // cc-<first-8-of-session-id>, the plugin boots without minting a
   // bot. Acquire is deferred to the first attribution-producing
   // tool call. Even an acquireError-rigged adapter must not see a
@@ -345,7 +345,7 @@ test('main drives a real memory adapter through acquire + env subscribe + close'
   }
   const logs: string[] = []
   // The memory adapter's history is id-strict; the synthetic refs the
-  // boot-time channels catch-up (comms-3wl) builds from token names
+  // boot-time channels catch-up builds from token names
   // don't resolve. Capture the log so the test's stderr stays pristine.
   // The catch-up failure is non-fatal, and this test asserts only the
   // subscribe wiring — catch-up integration is covered by the
@@ -410,7 +410,7 @@ test('main applies env-driven subscriptions in order after acquire and Type-1 de
   expect(fake.calls.closes.count).toBe(1)
 })
 
-test('main reconciles minter subscriptions during boot before env subscribes (ass-6a77)', async () => {
+test('main reconciles minter subscriptions during boot before env subscribes', async () => {
   const fake = buildFakeAdapter({
     reconcileReport: {
       added: [decodeChannelNameSync('commy'), decodeChannelNameSync('homelab')],
@@ -446,7 +446,7 @@ test('main keeps booting when reconcile reports an error (log + continue)', asyn
   expect(log.some((line) => line.includes('realm unreachable'))).toBe(true)
 })
 
-// ─── comms-c2k: Type-1 default sub set for project concierges ──────────────
+// ─── Type-1 default sub set for project concierges ──────────────
 
 test('persistent mode + project registers Type-1 defaults (mentions + new-topics + thread/general)', async () => {
   const fake = buildFakeAdapter()
@@ -553,14 +553,14 @@ test('Type-1 default failure is logged + continues — does not crash boot', asy
   expect(log.some((line) => line.includes('Type-1 default narrow registration failed'))).toBe(true)
 })
 
-// ─── comms-8nkv / comms-4c26: exit on client disconnect ──────────────
+// ─── exit on client disconnect ──────────────
 
 test('a resolved shutdown signal unwinds a live event pump and closes the adapter', async () => {
   const fake = buildFakeAdapter()
   // Production's Zulip `events()` long-polls forever, so the pump parks on
   // `Effect.never` and only a signal unwinds it. Mirror that with a stream
   // that never ends: without a disconnect signal `makeProgram` would block
-  // here forever — the orphaned-server leak (comms-8nkv / comms-4c26).
+  // here forever — the orphaned-server leak.
   const liveAdapter: ZulipAdapter = {
     ...fake.adapter,
     inbox: { ...fake.adapter.inbox, events: () => Stream.never },
@@ -597,7 +597,7 @@ test('clientDisconnect resolves once and detaches its listeners after EOF', asyn
   expect(stdin.listenerCount('close')).toBe(0)
 })
 
-// ─── comms-spj3.26: ephemeral idle sweep on Clock + Schedule ──────────────
+// ─── ephemeral idle sweep on Clock + Schedule ──────────────
 
 interface SweepSpyCache {
   readonly cache: Pick<IdentityCache, 'sweepIdle'>

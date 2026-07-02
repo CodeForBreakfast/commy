@@ -93,7 +93,7 @@ export interface ZulipAdapterConfig {
   readonly minterEmail: BotEmailType
   /**
    * Minter API key wrapped in `Redacted` so the privileged secret masks to
-   * `<redacted>` on any log / stringify / error rendering (comms-spj3.38). It
+   * `<redacted>` on any log / stringify / error rendering. It
    * is unwrapped via `Redacted.value` only at the single point the minter HTTP
    * client is constructed — the auth-header boundary.
    */
@@ -101,7 +101,7 @@ export interface ZulipAdapterConfig {
   /** Override outgoing Host header — required for cluster-internal callers. */
   readonly hostHeader?: string
   /**
-   * Attach mode (comms-9usb). When set, acquiring this exact bot name binds the
+   * Attach mode. When set, acquiring this exact bot name binds the
    * pre-provisioned persona using the supplied **stable** api key WITHOUT
    * regenerating it — so many sessions/processes can share one identity (the
    * Discord-style single-identity model) with no acquire-time key rotation and
@@ -117,8 +117,8 @@ export interface ZulipAdapterConfig {
 
 export type ZulipAdapter = AgentComms & {
   /**
-   * Subscribe the minter to every public stream it isn't yet on
-   * (ass-6a77). Boot-time backstop so the plugin's event pump observes
+   * Subscribe the minter to every public stream it isn't yet on.
+   * Boot-time backstop so the plugin's event pump observes
    * events on streams created after the minter's initial subscription
    * set. Non-throwing: failure is captured in the returned report and
    * the caller decides whether to log + continue or abort.
@@ -138,7 +138,7 @@ export type ZulipAdapter = AgentComms & {
  * Member, `is_admin` false). The underlying realm response is often the
  * opaque "Invalid API key" / "Must be an organization administrator", which
  * reads as a credential bug; this error states the real cause so the next
- * debugger is not sent chasing a phantom (comms-ch7). The fix that removes
+ * debugger is not sent chasing a phantom. The fix that removes
  * the dependency for pinned identities is `release({ persistent: true })` —
  * a persistent bot is never deactivated, so re-acquire stays on the
  * owner-permitted regenerate path and never reaches reactivate.
@@ -159,7 +159,7 @@ class ReactivateForbidden extends Data.TaggedError('ReactivateForbidden')<{
 }
 
 /**
- * Raised when attach mode (comms-9usb) is configured for a persona that the
+ * Raised when attach mode is configured for a persona that the
  * realm has no provisioned bot for. Attach binds an EXISTING identity by its
  * supplied stable key — it deliberately never mints — so a missing persona is
  * an operator provisioning gap, not something to paper over by self-minting.
@@ -407,8 +407,8 @@ export const zulipAdapter = (
     // Read HttpClient from context once, at construction. The minter client
     // gets it via this gen's requirements; per-bot clients minted later in
     // `acquire` are built against this captured value so their construction
-    // doesn't re-enter the requirements channel (request-time DI is the
-    // separate comms-7v3 concern — out of scope here).
+    // doesn't re-enter the requirements channel (request-time DI is a
+    // separate concern — out of scope here).
     const httpClient = yield* HttpClient.HttpClient
     const minterHttp = yield* makeZulipHttp(
       buildHttpConfig(
@@ -433,10 +433,10 @@ export const zulipAdapter = (
     // attribution-producing verbs (post / react / unreact) that leave a
     // persistent signal on the substrate attributed to this session's
     // bot. Everything else (inbox / history / directory) flows through
-    // `minterHttp` so the plugin can run pre-acquire (ass-220u).
+    // `minterHttp` so the plugin can run pre-acquire.
     // The bound HTTP is wrapped by bot-dm-guard so any future code that
     // constructs a `POST /messages` with `type=private` and an all-bot
-    // recipient list is rejected before reaching the wire (comms-7yk).
+    // recipient list is rejected before reaching the wire.
     const boundHttp = (): Effect.Effect<BotHttp> => requireBound().pipe(Effect.map((b) => b.http))
 
     const fetchMembers = (): Effect.Effect<
@@ -594,7 +594,7 @@ export const zulipAdapter = (
 
     // Human-facing realm origin for permalinks (public host when a Host-header
     // override is in play). Every ref this adapter hands back is decorated with
-    // its narrow URL so callers can quote a clickable link (comms-e7my).
+    // its narrow URL so callers can quote a clickable link.
     const base = permalinkBase(config)
     const decorateChannel = (channel: ChannelRef): ChannelRef => withChannelPermalink(base, channel)
     const decorateMessageRef = (
@@ -705,10 +705,10 @@ export const zulipAdapter = (
         ),
       )
 
-    // Attach mode (comms-9usb): bind the pre-provisioned persona with the
+    // Attach mode: bind the pre-provisioned persona with the
     // supplied stable key, never regenerating. No key rotation means no holder
     // of this identity is invalidated, so the listener and poster (and every
-    // per-topic session) can share one identity without the hl-4uv6 collision.
+    // per-topic session) can share one identity without the one-holder-per-name collision.
     const attachBot = (
       name: BotName,
       apiKey: ApiKeyType,
@@ -821,8 +821,8 @@ export const zulipAdapter = (
             onNone: () => Effect.succeed([undefined, current] as const),
             // A persistent identity (COMMY_BOT_NAME-pinned) must stay
             // active: deactivating it forces the next acquire onto the
-            // admin-only reactivate path, which wedges a Member-rights minter
-            // (comms-ch7). Clear the binding either way; only skip the
+            // admin-only reactivate path, which wedges a Member-rights minter.
+            // Clear the binding either way; only skip the
             // substrate-side deactivate. Deactivation failure is non-fatal —
             // the bot expires via the realm's idle GC, so we swallow it and
             // release always resolves cleanly.
@@ -873,11 +873,11 @@ export const zulipAdapter = (
       // @human_users_only, so a bot has no presence record and a read would
       // 400 into a misleading 'offline'. An agent's presence is genuinely
       // unknowable here, so short-circuit to 'unknown' before any lookup or
-      // GET (comms-1mnb). Only humans run the read path below.
+      // GET. Only humans run the read path below.
       //
       // The human path needs a ZulipUserRef (integer user id), so it resolves
       // the IdentityId through the directory first; an unresolvable identity
-      // has no Zulip user and is functionally offline (comms-7ee). Both fetches
+      // has no Zulip user and is functionally offline. Both fetches
       // are lifted into the Effect error channel so the 400 recovery below is a
       // declarative `catchIf` rather than nested try/catch, and anything left
       // over surfaces as a typed DirectoryError.
@@ -1138,10 +1138,10 @@ export const zulipAdapter = (
     const messageRefCache = createMessageRefCache()
     // Adapter-scoped watermark for the gap-replay anchor. Lifted out of
     // the iterator's closure so the event-pump's auto-reconnect
-    // (comms-ynb) creates a fresh iterator that still knows where the
+    // creates a fresh iterator that still knows where the
     // previous session left off — the BAD_EVENT_QUEUE_ID replay path
-    // (comms-jnn) then backfills the gap on the new iterator's first
-    // poll instead of skipping it (comms-4au).
+    // then backfills the gap on the new iterator's first
+    // poll instead of skipping it.
     const watermarkStore = yield* createWatermarkStore()
 
     // Per-event filter. The new-topics-in-channel narrow is the only
@@ -1195,12 +1195,12 @@ export const zulipAdapter = (
     // afresh so the narrow matches the current subscription state.
     //
     // The queue is registered against the minter, not the per-session
-    // bot — ass-220u makes the inbox a minter-side surface so lurking
+    // bot — the inbox is a minter-side surface so lurking
     // sessions can receive events before any acquire happens.
     const ensureQueueRegistered = (): Effect.Effect<void, ZulipApiError | ParseResult.ParseError> =>
       // Atomic read-decide-register-write: the lock is held across registerQueue
       // so two concurrent subscribe() calls can't both read registration=None
-      // and double-register the events queue (comms-tfar.16). The snapshot is
+      // and double-register the events queue. The snapshot is
       // current-under-lock, so the `{ ...state }` write-back cannot clobber a
       // concurrent inboxRef mutation — they block on the same lock.
       SynchronizedRef.modifyEffect(inboxRef, (state) => {
@@ -1254,7 +1254,7 @@ export const zulipAdapter = (
                       subscriptions: JSON.stringify([{ name: channel.name }]),
                     })
                     .pipe(Effect.asVoid)
-              // /users/me/subscriptions is "me" = minter. ass-6a77's
+              // /users/me/subscriptions is "me" = minter. The
               // boot-time reconciler covers the universal-listener backstop;
               // this per-session call still matters for streams created
               // *after* the plugin booted.
@@ -1311,7 +1311,7 @@ export const zulipAdapter = (
                 watermarkStore,
                 // Wire the port's own replay() into the producer so BAD_EVENT_QUEUE_ID
                 // recovery can transparently backfill the gap window with replayed=true
-                // events (comms-jnn). Late-bound to inbox.replay so the closure picks
+                // events. Late-bound to inbox.replay so the closure picks
                 // up the function defined below in the same object literal.
                 replay: (since) => inbox.replay(since),
                 ...Option.match(current, {
@@ -1392,7 +1392,7 @@ export const zulipAdapter = (
       recentThreads: (sender, opts) => {
         const limit = opts?.limit ?? RECENT_THREADS_DEFAULT_LIMIT
         // The `sender` narrow operand must be a ZulipUserRef (integer user id) —
-        // a numeric-string id is rejected as BAD_NARROW (comms-wpp/comms-7ee).
+        // a numeric-string id is rejected as BAD_NARROW.
         // Resolve the cross-substrate IdentityId to a ref via the directory; an
         // unresolvable sender has no Zulip user to query, so return [] rather
         // than issue a doomed request.

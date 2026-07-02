@@ -2,8 +2,8 @@
 
 A [Hermes Agent](https://github.com/NousResearch/hermes-agent) **platform
 plugin** that presents commy as a gateway platform, so non-Claude-Code
-hosts can consume commy traffic (pattern B inbound axis, epic
-`comms-a7j`). Peer to `clients/claude-code/`.
+hosts can consume commy traffic (pattern B inbound axis). Peer to
+`clients/claude-code/`.
 
 **Status: live — inbound + same-topic prose reply.** It registers the `commy`
 platform, routes inbound frames into Hermes sessions, manages per-topic
@@ -27,10 +27,9 @@ bot wires both:
 
 1. **Same-topic prose reply — this plugin.** When the model answers in prose,
    the gateway hands that prose to `CommyAdapter.send`, which posts it back into
-   the **inbound frame's channel + topic** over that topic's live connection
-   (`comms-a9q4`). This is the natural reply to the current conversation and
-   needs no tool call — the model just writes its answer. (It fixes an earlier
-   silent drop, where a prose reply that skipped the `post` tool vanished.)
+   the **inbound frame's channel + topic** over that topic's live connection.
+   This is the natural reply to the current conversation and needs no tool call —
+   the model just writes its answer.
 2. **Cross-topic / explicit reply — the `post` MCP server.** To reply to a
    *different* channel or topic (or to post deliberately rather than as the
    turn's prose), declare a commy **`post` MCP server** in the host's
@@ -61,10 +60,10 @@ note frames the same split from the MCP-server side.
 commy/
   __init__.py     # exposes register(ctx)
   adapter.py      # CommyAdapter(BasePlatformAdapter) + register(ctx)
-  receive.py      # {content, meta} frame model + routing facts (a7j.2)
-  naming.py       # deterministic per-topic COMMY_BOT_NAME (a7j.5)
-  connection.py   # SpawnConfig + TopicConnectionManager lifecycle (a7j.5)
-  transport.py    # real MCP subprocess transport (a7j.5)
+  receive.py      # {content, meta} frame model + routing facts
+  naming.py       # deterministic per-topic COMMY_BOT_NAME
+  connection.py   # SpawnConfig + TopicConnectionManager lifecycle
+  transport.py    # real MCP subprocess transport
   plugin.yaml     # kind: platform manifest
 tests/
   test_registration.py / test_receive.py
@@ -81,10 +80,10 @@ package whose `pyproject.toml` declares the `hermes_agent.plugins` entry point
 (`commy-platform = "commy"`) — the mechanism Hermes uses to discover
 pip/Nix-installed plugins. See [Install / distribution](#install--distribution).
 
-## Per-topic connection lifecycle (`comms-a7j.5`)
+## Per-topic connection lifecycle
 
 Inbound is delivered on the **`notifications/message`** carrier (the substrate
-dual-emits it alongside `notifications/claude/channel`; the bb7.1 contract nests
+dual-emits it alongside `notifications/claude/channel`; the contract nests
 the `{content, meta}` frame under `params.data`). The Python MCP SDK drops
 `notifications/claude/channel` at schema validation but delivers
 `notifications/message` to a `ClientSession(logging_callback=...)`, so the
@@ -97,7 +96,7 @@ stable identity (the substrate minter is idempotent by name → same Zulip
 `user_id` across teardown/respawn) and replays the thread's recent window on
 (re)acquire, so a respawned connection self-catches-up its triggering message.
 `TopicConnectionManager.ensure(channel, topic)` is the spawn entry point the
-listener (`comms-a7j.4`) drives; idle connections are reaped and respawned on
+listener drives; idle connections are reaped and respawned on
 the next frame with the same identity.
 
 Production config comes from the environment (`SpawnConfig.from_env`):
@@ -127,8 +126,7 @@ tests can drive a **real** stub MCP server subprocess — no Zulip realm needed.
 Requires `uv` on PATH.
 
 Tested against the latest `hermes-agent` on PyPI (range `>=0.12,<1`); the pin
-tightens to the confirmed pod Hermes version via the homelab image lane
-(`comms-v9nws`).
+tightens to the confirmed pod Hermes version via the homelab image lane.
 
 ## Install / distribution
 

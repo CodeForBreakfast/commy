@@ -42,7 +42,7 @@ test('initialize response does not declare claude/channel/permission capability'
   }
 })
 
-test('initialize response declares the logging capability required to emit notifications/message (comms-bb7.1)', async () => {
+test('initialize response declares the logging capability required to emit notifications/message', async () => {
   const { client, close } = await pairAndConnect()
   try {
     const capabilities = client.getServerCapabilities()
@@ -62,7 +62,7 @@ test('initialize response declares an empty tools capability for later registrat
   }
 })
 
-test('initialize response carries instructions explaining the session_id contract (ass-2dhb)', async () => {
+test('initialize response carries instructions explaining the session_id contract', async () => {
   const { client, close } = await pairAndConnect()
   try {
     const instructions = client.getInstructions()
@@ -74,7 +74,7 @@ test('initialize response carries instructions explaining the session_id contrac
   }
 })
 
-test('initialize instructions give substrate-coexistence guidance without naming a specific peer substrate (comms-tonj)', async () => {
+test('initialize instructions give substrate-coexistence guidance without naming a specific peer substrate', async () => {
   const { client, close } = await pairAndConnect()
   try {
     const instructions = client.getInstructions()
@@ -85,7 +85,7 @@ test('initialize instructions give substrate-coexistence guidance without naming
   }
 })
 
-test('initialize instructions stay operator-neutral — no named peer substrate leakage (comms-tonj)', async () => {
+test('initialize instructions stay operator-neutral — no named peer substrate leakage', async () => {
   const { client, close } = await pairAndConnect()
   try {
     const instructions = client.getInstructions()
@@ -97,7 +97,7 @@ test('initialize instructions stay operator-neutral — no named peer substrate 
   }
 })
 
-test('initialize instructions describe subscription discipline — project channel plus #general, leak-tolerance (comms-msx, comms-tg6)', async () => {
+test('initialize instructions describe subscription discipline — project channel plus #general, leak-tolerance', async () => {
   const { client, close } = await pairAndConnect()
   try {
     const instructions = client.getInstructions()
@@ -109,7 +109,7 @@ test('initialize instructions describe subscription discipline — project chann
   }
 })
 
-test('initialize instructions nudge agents to refer to peers by name, not number (comms-dtcm)', async () => {
+test('initialize instructions nudge agents to refer to peers by name, not number', async () => {
   const { client, close } = await pairAndConnect()
   try {
     const instructions = client.getInstructions()
@@ -121,7 +121,7 @@ test('initialize instructions nudge agents to refer to peers by name, not number
   }
 })
 
-test('initialize instructions name the project-slug rule and point at list_channels for discovery (comms-tg6)', async () => {
+test('initialize instructions name the project-slug rule and point at list_channels for discovery', async () => {
   const { client, close } = await pairAndConnect()
   try {
     const instructions = client.getInstructions()
@@ -136,7 +136,7 @@ test('initialize instructions name the project-slug rule and point at list_chann
   }
 })
 
-test('initialize instructions cover topic discipline — when to open new vs reply, naming hygiene (comms-tg6)', async () => {
+test('initialize instructions cover topic discipline — when to open new vs reply, naming hygiene', async () => {
   const { client, close } = await pairAndConnect()
   try {
     const instructions = client.getInstructions()
@@ -148,7 +148,7 @@ test('initialize instructions cover topic discipline — when to open new vs rep
   }
 })
 
-test('initialize instructions do not use the retired "home channel" metaphor (comms-tg6)', async () => {
+test('initialize instructions do not use the retired "home channel" metaphor', async () => {
   const { client, close } = await pairAndConnect()
   try {
     const instructions = client.getInstructions()
@@ -158,7 +158,7 @@ test('initialize instructions do not use the retired "home channel" metaphor (co
   }
 })
 
-test('initialize instructions cover the tool cheat sheet (comms-msx, comms-tg6)', async () => {
+test('initialize instructions cover the tool cheat sheet', async () => {
   const { client, close } = await pairAndConnect()
   try {
     const instructions = client.getInstructions()

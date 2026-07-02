@@ -81,7 +81,7 @@ export interface ProgramParams {
    */
   readonly notifier?: Notifier
   /**
-   * Git-context probe for per-call project derivation (ass-v7b4).
+   * Git-context probe for per-call project derivation.
    * Defaults to the real `git -C <cwd>` shell-out. Tests inject a fake
    * so derivation doesn't depend on the runner's cwd or git state.
    */
@@ -96,8 +96,8 @@ export interface ProgramParams {
    */
   readonly loggerLayer?: Layer.Layer<never>
   /**
-   * Completion trigger raced against the daemon event pump (comms-8nkv /
-   * comms-4c26). Production passes {@link clientDisconnect} over
+   * Completion trigger raced against the daemon event pump.
+   * Production passes {@link clientDisconnect} over
    * `process.stdin` so the server exits when its MCP client closes the
    * stdio pipe — the only disconnect signal a plain parent exit delivers
    * (no SIGINT/SIGTERM). Omitted (tests, and the one-shot integration
@@ -111,10 +111,9 @@ export interface ProgramParams {
 const RELEASE_TIMEOUT_MS = 5000
 
 /**
- * Idle timeout for the ephemeral identity cache. Per ass-2dhb body:
- * "N is conservative — an hour, say." Sessions that go an hour without
- * an attribution-producing tool call get their bot deactivated and the
- * slot cleared. A returning session re-acquires via Zulip's reactivate
+ * Idle timeout for the ephemeral identity cache. Sessions that go an hour
+ * without an attribution-producing tool call get their bot deactivated and
+ * the slot cleared. A returning session re-acquires via Zulip's reactivate
  * + regenerate-api-key path.
  */
 const EPHEMERAL_IDLE_RELEASE_MS = 60 * 60 * 1000
@@ -122,8 +121,7 @@ const EPHEMERAL_IDLE_SWEEP_INTERVAL_MS = 5 * 60 * 1000
 
 /**
  * Fork the ephemeral idle sweep onto a periodic schedule scoped to the
- * enclosing fiber Scope (comms-spj3.26). Replaces the old
- * `setInterval`/`unref`/`clearInterval` triplet:
+ * enclosing fiber Scope:
  *
  *   - `Schedule.spaced` keeps `intervalMs` between sweeps — matching the
  *     old timer's period. (`Effect.repeat` runs the body once at fork too;
@@ -152,7 +150,7 @@ export const forkIdleSweep = (
 }
 
 /**
- * Type-2 default sub set for interactive CC sessions (comms-iyf). Fires
+ * Type-2 default sub set for interactive CC sessions. Fires
  * once per ephemeral slot, right after the substrate-side acquire
  * resolves: registers the universal `mentions` narrow plus the project
  * broadcast topic `thread:#<project>/general` (skipped when no project
@@ -195,7 +193,7 @@ const createType2DefaultsOnAcquire = (
 }
 
 /**
- * Type-1 default sub set for persistent project concierges (comms-c2k).
+ * Type-1 default sub set for persistent project concierges.
  * Fires once at boot, immediately after the persistent-mode eager
  * acquire resolves. Registers:
  *
@@ -213,7 +211,7 @@ const createType2DefaultsOnAcquire = (
  * MCP tool.
  *
  * Returns the intents that were submitted to the substrate so the
- * boot-time channels catch-up (comms-3wl) can include them in its
+ * boot-time channels catch-up can include them in its
  * recent-traffic skim.
  */
 const logType1Failure = (err: unknown): Effect.Effect<void> =>
@@ -258,8 +256,8 @@ const registerType1DefaultsOnBoot = (
   )
 
 /**
- * Default boot-time channel/thread catch-up window for persistent bots
- * (comms-3wl). 4 hours covers overnight downtime without flooding the
+ * Default boot-time channel/thread catch-up window for persistent bots.
+ * 4 hours covers overnight downtime without flooding the
  * model on a busy channel. Overridable per-deployment via the
  * `COMMY_CATCHUP_WINDOW_SECONDS` env var; set to 0 to disable.
  */
@@ -289,39 +287,38 @@ const buildIdentityCache = (
 }
 
 /**
- * The plugin's boot program as ONE composed Effect (comms-spj3.39),
+ * The plugin's boot program as ONE composed Effect,
  * from parse → reconcile → identity → tools → pump, run at a single
  * `runMain` edge. Services (substrate adapter, cursor store,
  * ConfigProvider, logger) arrive through the app Layer;
  * {@link ProgramParams} carries the remaining per-run knobs.
  *
- * Boot sequence per the canonical V1 design (ass-x09b, refined by
- * ass-220u for lazy mode, ass-2dhb for per-session identity):
+ * Boot sequence per the canonical V1 design:
  *   1. parseEnv          — required minter creds, optional bot name +
  *                          subscribe list + project override, from the
  *                          ambient ConfigProvider set at the app edge.
  *   2. SubstrateAdapter  — the driven adapter, from context. Its
  *                          `close()` is a layer finalizer, so teardown
  *                          drops out of this program.
- *   3. projectForCwd     — per-call project resolver (ass-v7b4):
+ *   3. projectForCwd     — per-call project resolver:
  *                          COMMY_PROJECT > caller-cwd git remote
  *                          basename > git root basename > undefined.
  *   4. narrowSet + mcp + notifier + resolveNow — built before the cache
  *                          so the ephemeral `onAcquire` callback closes
- *                          over them (Type-2 defaults need narrowSet,
- *                          comms-iyf; mentions catch-up needs notifier +
- *                          cursorStore + now, comms-ae4).
+ *                          over them (Type-2 defaults need narrowSet;
+ *                          mentions catch-up needs notifier +
+ *                          cursorStore + now).
  *   5. buildIdentityCache — single (persistent) or ephemeral (1-slot,
  *                          release-then-acquire across session_id
- *                          transitions; ass-2dhb).
+ *                          transitions).
  *   6. ★ env-driven branch on `parsed.botName`:
  *      • Persistent (botName set): eager acquire now. Rejection writes
  *        the canonical diagnostic and FAILS with BootError — runMain's
- *        teardown maps that to exit 1 (ass-x09b.5.4).
+ *        teardown maps that to exit 1.
  *      • Ephemeral (botName unset): skip the boot acquire; the first
  *        attribution-producing call mints `cc-[<project>-]<sid>` lazily.
  *   7. release finalizer — registered after acquire, gated on
- *                          `boundIdentityIds().size > 0` (ass-220u).
+ *                          `boundIdentityIds().size > 0`.
  *                          LIFO ordering: it runs AFTER pump-cancel
  *                          (registered later) and BEFORE the substrate
  *                          `close()` finalizer (the outer layer scope),
@@ -330,8 +327,8 @@ const buildIdentityCache = (
  *   9. registerTools     — wire the cache + projectForCwd into the MCP
  *                          tool surface.
  *  10. mcp.connect       — bind to the supplied transport (stdio in prod).
- *  11. persistent boot-time mentions + channels catch-up (comms-rxo /
- *      comms-3wl). No-op in ephemeral mode (onAcquire owns that path).
+ *  11. persistent boot-time mentions + channels catch-up. No-op in
+ *      ephemeral mode (onAcquire owns that path).
  *  12. startEventPump    — filter inbound events through the narrowSet,
  *                          dispatch via the notifier. The pump is a
  *                          daemon, so a `pump.cancel` finalizer stops it
@@ -357,8 +354,7 @@ export const makeProgram = (
       const subscriptionStore = yield* SubscriptionStoreTag
       // The download/upload tool builders execute against this filesystem,
       // captured once from context (NodeContext.layer, provided in the
-      // app layer) instead of self-providing a platform layer per call
-      // (comms-5db).
+      // app layer) instead of self-providing a platform layer per call.
       const fs = yield* FileSystem.FileSystem
       // Diagnostics route to STDERR via the logger layer provided at the
       // program edge — STDOUT is the MCP JSON-RPC channel and must stay
@@ -385,14 +381,14 @@ export const makeProgram = (
           Effect.logError(`commy plugin: ${label} catch-up failed: ${Cause.pretty(cause)}`)
       // Per-call project resolver. Operator override (COMMY_PROJECT)
       // is authoritative; otherwise derive from the calling session's cwd
-      // at call time (ass-v7b4) — process cwd is irrelevant.
+      // at call time — process cwd is irrelevant.
       const projectForCwd = (cwd: string | undefined): Effect.Effect<ProjectSlug | undefined> => {
         if (parsed.project !== undefined) return Effect.succeed(parsed.project)
         if (cwd === undefined) return Effect.succeed(undefined)
         return Effect.map(deriveProject({ cwd, readGitContext }), Option.getOrUndefined)
       }
 
-      // Minter subscription reconcile (ass-6a77): boot-time backstop that
+      // Minter subscription reconcile: boot-time backstop that
       // keeps the minter subscribed to every public stream. Non-fatal —
       // log + continue. Silent in the steady-state no-op case.
       yield* adapter.reconcileMinterSubscriptions().pipe(
@@ -413,14 +409,14 @@ export const makeProgram = (
       const mcp = buildMcpServer()
       const notifier = params.notifier ?? channelNotifier(mcp)
 
-      // Ephemeral-mode Type-2 default subs (comms-iyf). Undefined in
+      // Ephemeral-mode Type-2 default subs. Undefined in
       // persistent mode (which registers Type-1 defaults at boot instead).
       const registerType2Defaults =
         parsed.botName === undefined
           ? createType2DefaultsOnAcquire(narrowSet, adapter.inbox)
           : undefined
 
-      // Subscription restore/persist (comms-4pgy). Ephemeral mode only: a
+      // Subscription restore/persist. Ephemeral mode only: a
       // persistent COMMY_BOT_NAME pane gets a new session_id every launch, so
       // its store is always absent → the fresh path → COMMY_SUBSCRIBE-only,
       // exactly as before. `restoredSessions` memoises the once-per-session_id
@@ -473,7 +469,7 @@ export const makeProgram = (
               Effect.provide(loggerLayer),
             )
 
-      // Ephemeral-mode post-acquire hook (comms-ae4 + comms-4pgy): restore (or
+      // Ephemeral-mode post-acquire hook: restore (or
       // seed) the narrow set on the first action of this session_id, then
       // replay missed @-mentions. The cache runs this via ensure-bound's own
       // runtime edge; the composed Effect self-provides the logger so
@@ -502,9 +498,9 @@ export const makeProgram = (
       const identityCache = yield* buildIdentityCache(adapter, parsed.botName, ephemeralOnAcquire)
 
       // Persistent mode (COMMY_BOT_NAME set): eager acquire so a
-      // misconfigured concierge dies at boot rather than on first message
-      // (ass-x09b.5.4). The single-identity cache ignores the session_id.
-      // Ephemeral mode: skip — the first tool call mints lazily (ass-2dhb).
+      // misconfigured concierge dies at boot rather than on first message.
+      // The single-identity cache ignores the session_id.
+      // Ephemeral mode: skip — the first tool call mints lazily.
       let type1Intents: ReadonlyArray<SubscribeIntent> = []
       if (parsed.botName !== undefined) {
         const botName = parsed.botName
@@ -524,24 +520,24 @@ export const makeProgram = (
               Effect.logError(
                 `commy plugin: acquire("${botName}") failed: ${bootErr.message}`,
               ).pipe(Effect.zipRight(Effect.fail(bootErr))),
-            // Type-1 defaults (comms-c2k): post-acquire register the
+            // Type-1 defaults: post-acquire register the
             // universal `mentions` narrow plus project-specific subs.
             onSuccess: () => registerType1DefaultsOnBoot(adapter.inbox, narrowSet, parsed.project),
           }),
         )
       }
 
-      // Release-on-shutdown finalizer (E2.8). Registered after acquire and
-      // BEFORE the pump-cancel finalizer, so LIFO teardown runs
+      // Release-on-shutdown finalizer. Registered after acquire and
+      // before the pump-cancel finalizer, so LIFO teardown runs
       // pump-cancel → release; the substrate `close()` (outer layer scope)
-      // then runs last. Gated on the acquisition state (ass-220u): an
+      // then runs last. Gated on the acquisition state: an
       // ephemeral session that never acquired has nothing to release.
       //
       // Persistent mode (COMMY_BOT_NAME set) releases with
       // `{ persistent: true }` so the substrate keeps the pinned bot active —
       // deactivating it would force the next session's acquire onto the
-      // admin-only reactivate path and wedge a Member-rights minter
-      // (comms-ch7). Ephemeral seats deactivate as before.
+      // admin-only reactivate path and wedge a Member-rights minter.
+      // Ephemeral seats deactivate as before.
       const releasePersistent = parsed.botName !== undefined
       yield* Effect.addFinalizer(() =>
         identityCache.boundIdentityIds().size > 0
@@ -589,14 +585,14 @@ export const makeProgram = (
         yield* Effect.promise(() => mcp.connect(transport))
       }
 
-      // V1: pump uses a single bot-id getter (the 1-slot cache, ass-2dhb).
+      // V1: pump uses a single bot-id getter (the 1-slot cache).
       const getBotIdentityId = () => {
         const ids = identityCache.boundIdentityIds()
         return ids.size === 0 ? undefined : ids.values().next().value
       }
 
-      // Missed-mentions catch-up on persistent-mode resume (comms-rxo) +
-      // boot-time channel/thread catch-up (comms-3wl). Both non-fatal —
+      // Missed-mentions catch-up on persistent-mode resume +
+      // boot-time channel/thread catch-up. Both non-fatal —
       // log + continue. Ephemeral mode runs the equivalent via onAcquire.
       const persistentBotId = parsed.botName !== undefined ? getBotIdentityId() : undefined
       if (persistentBotId !== undefined) {
@@ -627,11 +623,11 @@ export const makeProgram = (
         match: (event) => narrowSet.matches(event, getBotIdentityId()),
         // Populate the tools-side identity cache from inbound events so
         // `presence` / `post` mentions / `react` can resolve ids only ever
-        // seen via a notification (comms-lox).
+        // seen via a notification.
         rememberIdentity: toolsCache.rememberIdentity,
         // Advance the per-identity cursor on every observed mention so the
-        // next resume's catch-up has an accurate "have-seen-up-to" mark
-        // (comms-rxo). Returns the write Effect for the pump to sequence;
+        // next resume's catch-up has an accurate "have-seen-up-to" mark.
+        // Returns the write Effect for the pump to sequence;
         // its failures are swallowed because the advance is best-effort and
         // cursor writes are monotonic.
         onMention: (ts) => {
@@ -654,7 +650,7 @@ export const makeProgram = (
 
       // Block until either the event stream ends / the pump fatally parks
       // and is interrupted (the SIGINT/SIGTERM path), OR the MCP client
-      // disconnects (comms-8nkv / comms-4c26). The pump is a daemon that
+      // disconnects. The pump is a daemon that
       // long-polls Zulip forever, so without the disconnect race a plain
       // client exit — which sends no signal — would block here and orphan
       // the server child. `raceFirst` interrupts the losing wait and the
@@ -664,11 +660,11 @@ export const makeProgram = (
   )
 
 /**
- * Production app Layer (comms-spj3.39): the substrate adapter (Zulip,
+ * Production app Layer: the substrate adapter (Zulip,
  * `close()` as a finalizer), the file-backed cursor store, the file-backed
  * subscription store, and the stderr logger. Reads `HttpClient` +
  * `FileSystem` from context — the platform layers are fed in once at the
- * edge (comms-5db) so the Zulip adapter and stores inject the held services
+ * edge so the Zulip adapter and stores inject the held services
  * at construction rather than self-providing a layer per call. The
  * ConfigProvider is fed in the same way — built first, so
  * `ZulipAdapterLive`'s own `parseEnv` reads it during the layer build and
@@ -690,7 +686,7 @@ const AppLayer: Layer.Layer<
  * `process.env`), the network client, and the file system. These are the
  * leaves `AppLayer` reads — the ConfigProvider during its build (so
  * `ZulipAdapterLive`'s own `parseEnv` reads it), and `HttpClient` +
- * `FileSystem` from context at construction (comms-5db). `fromEnv()` reads
+ * `FileSystem` from context at construction. `fromEnv()` reads
  * `process.env` lazily; since the env never mutates at runtime the
  * lazy read is equivalent to a one-time snapshot. Tests substitute a
  * fixture platform (a `ConfigProvider.fromMap` source over the same
@@ -711,7 +707,7 @@ export const PlatformLive: Layer.Layer<
  * output so `makeProgram`'s own captured `FileSystem` is satisfied by the
  * same provision that feeds the app layer's builds — one `Effect.provide`
  * at the edge, so the language-service `multipleEffectProvide` rule stays
- * green (comms-5db). `R = never`: the composition root has no unmet
+ * green. `R = never`: the composition root has no unmet
  * requirements.
  */
 export const MainLive: Layer.Layer<
@@ -737,7 +733,7 @@ interface CloseEmitter {
  * signal. Raced against the daemon event pump in {@link main}, completing
  * here unwinds the program scope (pump-cancel → release → close) and the
  * ~166MB bun child exits instead of orphaning under systemd and
- * accumulating across sessions (comms-8nkv / comms-4c26).
+ * accumulating across sessions.
  */
 export const clientDisconnect = (stdin: CloseEmitter): Effect.Effect<void> =>
   Effect.async<void>((resume) => {
@@ -764,13 +760,13 @@ export const clientDisconnect = (stdin: CloseEmitter): Effect.Effect<void> =>
  * program fiber, or the MCP client disconnecting — {@link clientDisconnect}
  * over `process.stdin`, raced against the daemon pump inside
  * {@link makeProgram} so a plain parent exit (no signal) still tears down
- * instead of orphaning the child (comms-8nkv / comms-4c26). Either way the
+ * instead of orphaning the child. Either way the
  * scope finalizers fire (pump-cancel → release → close) and the Exit maps
  * to the process exit code via runMain's default teardown.
  *
  * `disablePrettyLogger` is mandatory: runMain otherwise swaps in the
  * pretty logger, whose `console.group`/`groupEnd` write to STDOUT and
- * corrupt the MCP JSON-RPC channel (the comms-spj3.25 stdio gotcha). The
+ * corrupt the MCP JSON-RPC channel (the stdio gotcha). The
  * stderr logger layer routes every `Effect.log*` to STDERR regardless.
  */
 export const main = (): void =>
