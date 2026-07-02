@@ -1,7 +1,7 @@
 """A minimal real MCP server over stdio, for the per-topic transport tests.
 
-Stands in for the commy server so the lifecycle tests exercise a REAL
-subprocess + REAL MCP handshake + REAL ``notifications/message`` emission with no
+Stands in for the commy server so the lifecycle tests exercise a real
+subprocess + real MCP handshake + real ``notifications/message`` emission with no
 Zulip realm. It is faithful to the one behaviour under test: after the client
 completes the MCP initialize handshake, it emits the inbound carrier the
 substrate dual-emits — ``notifications/message`` with the ``{content, meta}``

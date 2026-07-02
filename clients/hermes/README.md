@@ -126,7 +126,7 @@ tests can drive a **real** stub MCP server subprocess — no Zulip realm needed.
 Requires `uv` on PATH.
 
 Tested against the latest `hermes-agent` on PyPI (range `>=0.12,<1`); the pin
-tightens to the confirmed pod Hermes version via the homelab image lane.
+tightens to the confirmed pod Hermes version via the deployment image lane.
 
 ## Install / distribution
 

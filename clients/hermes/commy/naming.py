@@ -5,7 +5,7 @@ A per-topic connection runs in persistent mode under
 properties matter:
 
 * **Stable & pure** — the same ``(channel, topic)`` always yields the same
-  name, so a teardown/respawn re-acquires the SAME Zulip user_id (the substrate
+  name, so a teardown/respawn re-acquires the same Zulip user_id (the substrate
   minter is idempotent by name). This is what gives a respawned per-topic
   identity continuity of authorship (e.g. ``edit_message`` on a prior anchor)
   and the persistent-mode recent-window catch-up.

@@ -9,7 +9,7 @@ identity, which is subscribed to its own thread and refreshes its own idle
 timer; the listener reads that ownership live off the manager and ignores an
 already-owned topic, so it never re-triggers (dedup by ownership).
 
-The listener's connection lifecycle is the process's — it is the ONLY connection
+The listener's connection lifecycle is the process's — it is the only connection
 created at startup and is never reaped, decoupled from the per-topic set the
 manager spawns and reaps on demand.
 

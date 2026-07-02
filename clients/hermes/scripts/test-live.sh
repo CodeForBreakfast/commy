@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Run the live end-to-end suite for the commy Hermes adapter against the
-# REAL Zulip realm. This is the Python mirror of the TS
+# real Zulip realm. This is the Python mirror of the TS
 # `test:live` script: the default `scripts/test.sh` excludes `-m live`, this
 # one targets it explicitly.
 #

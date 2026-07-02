@@ -1,11 +1,11 @@
 """Tests for the deterministic per-topic bot name.
 
-The name is the ``COMMY_BOT_NAME`` for a per-topic connection. It MUST
+The name is the ``COMMY_BOT_NAME`` for a per-topic connection. It must
 satisfy the substrate's ``BotName`` brand invariant — lowercase ASCII, digits,
 dashes, underscores; starts with a letter; max 40 chars (the regex
 ``/^[a-z][a-z0-9_-]*$/`` at ``packages/mcp/bootstrap.ts:85``/``:96``) — because
-the substrate rejects a non-conforming name at boot. It MUST also be a pure,
-stable function of ``(channel, topic)`` so a respawn re-acquires the SAME Zulip
+the substrate rejects a non-conforming name at boot. It must also be a pure,
+stable function of ``(channel, topic)`` so a respawn re-acquires the same Zulip
 user_id (the minter is idempotent by name).
 """
 
@@ -23,18 +23,18 @@ def _assert_brand_safe(name: str) -> None:
 
 
 def test_name_is_brand_safe():
-    _assert_brand_safe(deterministic_bot_name("epr-backend", "standup"))
+    _assert_brand_safe(deterministic_bot_name("myproject", "standup"))
 
 
 def test_name_is_stable_across_calls():
-    a = deterministic_bot_name("epr-backend", "standup")
-    b = deterministic_bot_name("epr-backend", "standup")
+    a = deterministic_bot_name("myproject", "standup")
+    b = deterministic_bot_name("myproject", "standup")
     assert a == b
 
 
 def test_distinct_topics_yield_distinct_names():
-    a = deterministic_bot_name("epr-backend", "topic-one")
-    b = deterministic_bot_name("epr-backend", "topic-two")
+    a = deterministic_bot_name("myproject", "topic-one")
+    b = deterministic_bot_name("myproject", "topic-two")
     assert a != b
 
 
@@ -50,8 +50,8 @@ def test_channel_topic_order_is_not_symmetric():
 
 
 def test_readable_slug_is_embedded_for_simple_inputs():
-    name = deterministic_bot_name("epr-backend", "standup")
-    assert "epr-backend" in name
+    name = deterministic_bot_name("myproject", "standup")
+    assert "myproject" in name
     assert "standup" in name
 
 

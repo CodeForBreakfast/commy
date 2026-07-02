@@ -156,7 +156,7 @@ class CommyAdapter(BasePlatformAdapter):
         With nothing injected, the manager and the boot listener are built from
         the environment (``SpawnConfig.from_env``) wired to the real MCP
         transport, sinking inbound frames into ``receive_channel_notification``.
-        The boot listener is the ONE connection started here — subscribed
+        The boot listener is the one connection started here — subscribed
         ``channel:<name>`` + ``mentions`` under a persistent identity — and it
         cold-starts per-topic connections by calling ``ensure_topic_connection``
         for any ``(channel, topic)`` the manager doesn't already own. No per-topic

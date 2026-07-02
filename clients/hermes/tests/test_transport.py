@@ -1,7 +1,7 @@
 """Real-subprocess + real-SDK tests for the per-topic transport.
 
-No mocks and no Zulip: the manager drives the REAL ``McpTopicTransport`` against
-a REAL stub MCP server subprocess (``_stub_mcp_server.py``). This proves the
+No mocks and no Zulip: the manager drives the real ``McpTopicTransport`` against
+a real stub MCP server subprocess (``_stub_mcp_server.py``). This proves the
 whole I/O path the unit tests stub out — subprocess spawn, MCP initialize, env
 wiring, the ``notifications/message`` -> ``params.data`` -> sink routing, idle
 reap tearing the subprocess down, and respawn — end to end.
@@ -97,7 +97,7 @@ def test_manager_spawns_real_subprocess_routes_frame_and_reaps():
         )
 
         async def scenario():
-            await manager.ensure("epr-backend", "standup")
+            await manager.ensure("myproject", "standup")
             got = await _wait_for(lambda: len(received) >= 1)
             assert got, "no inbound frame routed from the real subprocess"
 
@@ -106,9 +106,9 @@ def test_manager_spawns_real_subprocess_routes_frame_and_reaps():
             assert frame["content"] == "stub inbound frame"
             # ...carrying the env the manager computed -> proves real env wiring.
             assert frame["meta"]["echo_bot_name"] == deterministic_bot_name(
-                "epr-backend", "standup"
+                "myproject", "standup"
             )
-            assert frame["meta"]["echo_subscribe"] == "thread:epr-backend/standup,mentions"
+            assert frame["meta"]["echo_subscribe"] == "thread:myproject/standup,mentions"
 
             pid = int(Path(pidfile).read_text())
             assert _process_alive(pid)
@@ -116,7 +116,7 @@ def test_manager_spawns_real_subprocess_routes_frame_and_reaps():
             # Idle reap tears the real subprocess down.
             clock.advance(301)
             reaped = await manager.reap_idle()
-            assert reaped == [("epr-backend", "standup")]
+            assert reaped == [("myproject", "standup")]
             gone = await _wait_for(lambda: not _process_alive(pid))
             assert gone, "subprocess survived idle reap"
             assert manager.active_keys() == set()
@@ -196,7 +196,7 @@ def test_shutdown_stops_real_subprocess():
 
 def _post_stub_spec(record_path: str) -> ConnectionSpec:
     return ConnectionSpec(
-        channel="epr-backend",
+        channel="myproject",
         topic="standup",
         bot_name="stub-bot",
         command=sys.executable,
@@ -220,7 +220,7 @@ def test_transport_post_calls_the_commy_post_tool_over_real_mcp():
             await transport.start()
             try:
                 message_id = await transport.post(
-                    "here is my reply", "epr-backend", "standup"
+                    "here is my reply", "myproject", "standup"
                 )
             finally:
                 await transport.stop()
@@ -231,7 +231,7 @@ def test_transport_post_calls_the_commy_post_tool_over_real_mcp():
         assert message_id == "stub-msg-1"
         recorded = json.loads(Path(record).read_text())
         assert recorded == {
-            "channel_name": "epr-backend",
+            "channel_name": "myproject",
             "thread": "standup",
             "body": "here is my reply",
         }

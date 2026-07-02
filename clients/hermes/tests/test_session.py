@@ -54,8 +54,8 @@ def test_stock_sdk_union_rejects_the_claude_channel_frame():
     dump = _notification_dump(NOTIFICATION_METHOD, _CLAUDE_CHANNEL_FRAME)
     with pytest.raises(pydantic.ValidationError) as exc_info:
         ServerNotification.model_validate(dump)
-    # The "v/missing" seen in the homelab log is pydantic's error-doc URL path
-    # (errors.pydantic.dev/2.13/v/missing), NOT a field named "v": no union
+    # The "v/missing" seen in the pod log is pydantic's error-doc URL path
+    # (errors.pydantic.dev/2.13/v/missing), not a field named "v": no union
     # member matched, surfaced as missing required fields on the closest members.
     assert "missing" in str(exc_info.value)
 
@@ -83,10 +83,10 @@ def test_channel_aware_union_still_resolves_the_consumed_message_carrier():
 
 
 def test_receive_loop_handles_both_carriers_without_a_validation_warning(caplog):
-    """End-to-end against the REAL SDK receive loop: feed both dual-emitted
+    """End-to-end against the real SDK receive loop: feed both dual-emitted
     carriers through a ``ChannelAwareClientSession`` and assert the consumed
     ``notifications/message`` carrier reaches ``logging_callback`` while the
-    ungated ``notifications/claude/channel`` carrier produces NO validation
+    ungated ``notifications/claude/channel`` carrier produces no validation
     warning (the defect was one warning per inbound frame)."""
     logged_frames: list = []
 

@@ -16,9 +16,9 @@ and is delivered to ``logging_callback``, carrying the full machine frame (incl.
 under ``params.data`` (the MCP logging envelope requires ``level`` at the params
 root), so we forward ``params.data`` — the same shape the receive path consumes.
 
-The Python MCP SDK validates EVERY incoming notification against its typed
+The Python MCP SDK validates every incoming notification against its typed
 ``ServerNotification`` union *before* any handler runs, and
-``notifications/claude/channel`` has no slot in that union — so the SDK does NOT
+``notifications/claude/channel`` has no slot in that union — so the SDK does not
 silently drop it, it logs a ``"Failed to validate notification"`` warning on
 every inbound frame. ``ChannelAwareClientSession`` extends the union
 to recognise the ungated display carrier, so the SDK validates and discards it
