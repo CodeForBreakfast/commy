@@ -1,0 +1,53 @@
+name: Pages
+
+# Deploy the static site under `site/` to GitHub Pages. There is no build step:
+# the site is hand-authored HTML/assets, so the deploy artifact is the `site/`
+# directory verbatim (see docs/superpowers/specs/2026-07-03-commy-site-design.md).
+#
+# Enabling Pages itself (Settings → Pages → source "GitHub Actions", the custom
+# domain, enforce HTTPS) is a one-time operator action, not part of this
+# workflow. Until `site/` exists on `main` this workflow never fires — the path
+# filter below gates it.
+
+on:
+  push:
+    branches: [main]
+    # Only republish when the site or this workflow changes; ordinary pushes to
+    # `main` don't spin a Pages deploy.
+    paths:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+# Least privilege at the top; the deploy job widens to exactly what Pages needs.
+permissions:
+  contents: read
+
+# One Pages deploy at a time. Don't cancel an in-progress run — let a production
+# deploy finish rather than leaving the live site half-published.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Pinned to a specific runner image, not `ubuntu-latest`, so a GitHub
+    # `-latest` migration can't silently change the environment (matches ci.yml).
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write # publish the Pages deployment
+      id-token: write # mint the OIDC token deploy-pages verifies
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      # Actions pinned to commit-SHA digests, not mutable tags, to close the
+      # supply-chain hole a force-pushed tag would open. The trailing comment
+      # tracks the human-readable version; Renovate (.github/renovate.json5)
+      # bumps the SHAs so the pins don't rot.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
