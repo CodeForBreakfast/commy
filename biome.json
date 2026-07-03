@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!.beads", "!**/*.workflow.js", "!**/.venv"]
+    "includes": ["**", "!.beads", "!**/*.workflow.js", "!**/.venv", "!site"]
   },
   "formatter": {
     "enabled": true,
