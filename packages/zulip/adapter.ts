@@ -1067,7 +1067,7 @@ export const zulipAdapter = (
                     type: 'channel',
                     to: effective.name,
                     content: body,
-                    topic: thread === undefined ? '(no topic)' : thread,
+                    topic: thread ?? '(no topic)',
                   })
                   .pipe(
                     Effect.flatMap((sent) =>
