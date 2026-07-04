@@ -128,7 +128,10 @@ test('withChannelPermalink decorates a channel ref with its permalink', () => {
 
 test('buildMessageRef decorates message, channel and topic for a threaded message', () => {
   expect(
-    buildMessageRef(base, decodeMessageIdSync('42'), channel, decodeThreadNameSync('lobby')),
+    buildMessageRef(base, decodeMessageIdSync('42'), channel, {
+      name: decodeThreadNameSync('lobby'),
+      resolved: false,
+    }),
   ).toEqual({
     id: decodeMessageIdSync('42'),
     channel: {
@@ -138,6 +141,7 @@ test('buildMessageRef decorates message, channel and topic for a threaded messag
     },
     thread: Option.some({
       name: decodeThreadNameSync('lobby'),
+      resolved: false,
       permalink: ThreadPermalinkSchema.make(
         'https://zulip.example.com/#narrow/channel/9-general/topic/lobby/with/42',
       ),

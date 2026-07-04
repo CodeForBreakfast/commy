@@ -86,6 +86,8 @@ const EXPECTED_TOOL_NAMES = [
   'presence',
   'read_channel',
   'read_thread',
+  'resolve_thread',
+  'unresolve_thread',
   'message_link',
   'subscribe',
   'unsubscribe',

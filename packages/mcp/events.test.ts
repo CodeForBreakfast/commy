@@ -27,6 +27,7 @@ const BOT_ID: IdentityIdType = decodeIdentityIdSync('bot-42')
 
 const paymentsThread = Option.some({
   name: decodeThreadNameSync('payments'),
+  resolved: false,
   permalink: ThreadPermalinkSchema.make(
     'https://zulip.example.com/#narrow/channel/9-home/topic/payments',
   ),

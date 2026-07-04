@@ -86,6 +86,7 @@ import { ApiKey, BotEmail, makeZulipHttp, ZulipApiError } from './http.ts'
 import type { ReconcileReport } from './minter-reconciler.ts'
 import { reconcileMinterSubscriptions } from './minter-reconciler.ts'
 import { buildMessageRef, permalinkBase, withChannelPermalink } from './permalink.ts'
+import { applyResolvedPrefix, splitTopic } from './resolved-topic.ts'
 import { senderNarrow, userPresencePath, ZulipUserRef } from './user-ref.ts'
 
 export interface ZulipAdapterConfig {
@@ -228,6 +229,7 @@ interface HistoricalMessage {
   readonly senderId: ZulipUserRef
   readonly senderFullName: string
   readonly subject: ThreadName
+  readonly resolved: boolean
   readonly content: string
   readonly ts: TimestampType
   readonly reactions: ReadonlyArray<HistoricalReaction>
@@ -256,12 +258,15 @@ const toHistoricalReaction = (
 
 const toHistoricalMessage = (
   m: Schema.Schema.Type<typeof historicalMessageRawSchema>,
-): Effect.Effect<HistoricalMessage, ParseResult.ParseError> =>
-  Effect.all({
+): Effect.Effect<HistoricalMessage, ParseResult.ParseError> => {
+  // A resolved topic reaches us as a ✔-prefixed subject; split the marker off
+  // here so the port only ever sees the clean name plus the resolved flag.
+  const { name, resolved } = splitTopic(m.subject)
+  return Effect.all({
     id: decodeMessageId(String(m.id)),
     channelId: decodeChannelId(String(m.stream_id)),
     channelName: decodeChannelName(m.display_recipient),
-    subject: decodeThreadName(m.subject),
+    subject: decodeThreadName(name),
     ts: decodeTimestamp(m.timestamp),
   }).pipe(
     Effect.map(
@@ -272,12 +277,14 @@ const toHistoricalMessage = (
         senderId: ZulipUserRef(m.sender_id),
         senderFullName: m.sender_full_name,
         subject,
+        resolved,
         content: m.content,
         ts,
         reactions: (m.reactions ?? []).map(toHistoricalReaction),
       }),
     ),
   )
+}
 
 const messagesResponseSchema = Schema.Struct({
   result: Schema.Literal('success'),
@@ -318,7 +325,10 @@ const toPresence = (status: ZulipPresenceStatus): Presence => {
 
 type NarrowFilter =
   | { readonly operator: 'channel'; readonly operand: ChannelName }
-  | { readonly operator: 'topic'; readonly operand: ThreadName }
+  // A topic narrow matches the raw substrate topic, which resolution decorates
+  // with the ✔ prefix — so the operand is a raw topic string, not a clean
+  // port-facing ThreadName.
+  | { readonly operator: 'topic'; readonly operand: string }
 
 const inRange =
   (range: Range) =>
@@ -558,7 +568,7 @@ export const zulipAdapter = (
         const body = yield* decodeMessageBody(m.content)
         const reactions = yield* mapHistoricalReactions(m.reactions, directory)
         return {
-          ref: decorateMessageRef(m.id, channel, m.subject),
+          ref: decorateMessageRef(m.id, channel, { name: m.subject, resolved: m.resolved }),
           sender,
           body,
           ts: m.ts,
@@ -614,8 +624,8 @@ export const zulipAdapter = (
     const decorateMessageRef = (
       id: MessageId,
       channel: ChannelRef,
-      threadName: ThreadName | undefined,
-    ): MessageRef => buildMessageRef(base, id, channel, threadName)
+      thread: { readonly name: ThreadName; readonly resolved: boolean } | undefined,
+    ): MessageRef => buildMessageRef(base, id, channel, thread)
 
     const buildBotEmail = (
       shortName: string,
@@ -1055,6 +1065,90 @@ export const zulipAdapter = (
       ZulipApiError | ParseResult.ParseError
     > => refreshKnownStreams().pipe(Effect.map((map) => [...map.values()]))
 
+    // The newest message id in a raw topic, or None when the topic holds no
+    // messages. Resolution edits target any message in the topic (change_all
+    // fans out to the rest), so the setter uses this to find one to PATCH.
+    const findNewestInTopic = (
+      channel: ChannelName,
+      topic: string,
+    ): Effect.Effect<Option.Option<MessageId>, ZulipApiError | ParseResult.ParseError> =>
+      minterHttp
+        .get('/messages', messagesResponseSchema, {
+          anchor: 'newest',
+          num_before: 1,
+          num_after: 0,
+          narrow: JSON.stringify([
+            { operator: 'channel', operand: channel },
+            { operator: 'topic', operand: topic },
+          ]),
+          apply_markdown: false,
+        })
+        .pipe(
+          Effect.flatMap((res) =>
+            Arr.last(res.messages).pipe(
+              Option.match({
+                onNone: () => Effect.succeed(Option.none<MessageId>()),
+                onSome: (m) => decodeMessageId(String(m.id)).pipe(Effect.map(Option.some)),
+              }),
+            ),
+          ),
+        )
+
+    // Resolution renames the topic (✔ prefix) via change_all, so we PATCH any
+    // message in it. `thread` is the plain name; find the source-state topic
+    // and flip it to the target state, treating an absent source whose target
+    // already exists as an idempotent no-op, and both absent as a thread that
+    // isn't there to (un)resolve. Reads route through the minter; the
+    // attributed edit goes through the bound identity.
+    const setThreadResolved = (
+      channel: ChannelName,
+      thread: ThreadName,
+      resolved: boolean,
+    ): Effect.Effect<void, PublisherError> => {
+      const operation = resolved ? 'resolveThread' : 'unresolveThread'
+      const sourceTopic = applyResolvedPrefix(thread, !resolved)
+      const targetTopic = applyResolvedPrefix(thread, resolved)
+      return boundHttp().pipe(
+        Effect.flatMap((http) =>
+          findNewestInTopic(channel, sourceTopic).pipe(
+            Effect.flatMap(
+              Option.match({
+                onSome: (id) =>
+                  http
+                    .patch(`/messages/${encodeURIComponent(id)}`, successSchema, {
+                      topic: targetTopic,
+                      propagate_mode: 'change_all',
+                    })
+                    .pipe(Effect.asVoid),
+                onNone: () =>
+                  findNewestInTopic(channel, targetTopic).pipe(
+                    Effect.flatMap(
+                      Option.match({
+                        onSome: () => Effect.void,
+                        onNone: () =>
+                          Effect.fail(
+                            new PublisherError({
+                              operation,
+                              cause: new Error(
+                                `no thread '${thread}' in ${channel} to ${
+                                  resolved ? 'resolve' : 'unresolve'
+                                }`,
+                              ),
+                            }),
+                          ),
+                      }),
+                    ),
+                  ),
+              }),
+            ),
+          ),
+        ),
+        Effect.mapError((cause) =>
+          cause instanceof PublisherError ? cause : new PublisherError({ operation, cause }),
+        ),
+      )
+    }
+
     const publisher: MessagePublisher = {
       post: (channel, body, opts?: PostOpts) => {
         const thread = opts?.thread
@@ -1086,7 +1180,16 @@ export const zulipAdapter = (
                   .pipe(
                     Effect.flatMap((sent) =>
                       decodeMessageId(String(sent.id)).pipe(
-                        Effect.map((id): MessageRef => decorateMessageRef(id, effective, thread)),
+                        Effect.map(
+                          (id): MessageRef =>
+                            // A just-posted thread is unresolved (post returns
+                            // only an id; the topic is the plain name).
+                            decorateMessageRef(
+                              id,
+                              effective,
+                              thread === undefined ? undefined : { name: thread, resolved: false },
+                            ),
+                        ),
                       ),
                     ),
                   ),
@@ -1130,6 +1233,8 @@ export const zulipAdapter = (
           Effect.asVoid,
           Effect.mapError((cause) => new PublisherError({ operation: 'unreact', cause })),
         ),
+      resolveThread: (channel, thread) => setThreadResolved(channel, thread, true),
+      unresolveThread: (channel, thread) => setThreadResolved(channel, thread, false),
     }
 
     // The inbox subscription spine — mentions flag, the channel/new-topic
@@ -1398,11 +1503,26 @@ export const zulipAdapter = (
         readMessages(range, [{ operator: 'channel', operand: channel }]).pipe(
           Effect.mapError((cause) => new HistoryError({ operation: 'readChannel', cause })),
         ),
-      readThread: (channel, threadName, range) =>
-        readMessages(range ?? {}, [
-          { operator: 'channel', operand: channel },
-          { operator: 'topic', operand: threadName },
-        ]).pipe(Effect.mapError((cause) => new HistoryError({ operation: 'readThread', cause }))),
+      // A thread is addressed by its plain name, but resolution renames the
+      // underlying topic (✔ prefix). Read the plain topic first; when it holds
+      // nothing, fall back to the resolved form so read_thread keeps working
+      // after a thread is resolved. The common (unresolved) case stays one
+      // fetch; only a resolved-or-absent thread pays for the second.
+      readThread: (channel, threadName, range) => {
+        const readTopic = (topic: string) =>
+          readMessages(range ?? {}, [
+            { operator: 'channel', operand: channel },
+            { operator: 'topic', operand: topic },
+          ])
+        return readTopic(threadName).pipe(
+          Effect.flatMap((messages) =>
+            messages.length > 0
+              ? Effect.succeed(messages)
+              : readTopic(applyResolvedPrefix(threadName, true)),
+          ),
+          Effect.mapError((cause) => new HistoryError({ operation: 'readThread', cause })),
+        )
+      },
       recentThreads: (sender, opts) => {
         const limit = opts?.limit ?? RECENT_THREADS_DEFAULT_LIMIT
         // The `sender` narrow operand must be a ZulipUserRef (integer user id) —
@@ -1431,7 +1551,9 @@ export const zulipAdapter = (
                     let seen = HashMap.empty<ReturnType<typeof threadKey>, RecentThread>()
                     for (const m of res.messages) {
                       const channel = yield* decodeChannelName(m.display_recipient)
-                      const thread = yield* decodeThreadName(m.subject)
+                      // Surface the clean thread name — a resolved topic's ✔
+                      // prefix is a substrate detail, never crosses the port.
+                      const thread = yield* decodeThreadName(splitTopic(m.subject).name)
                       const key = threadKey(channel, thread)
                       if (!HashMap.has(seen, key)) {
                         seen = HashMap.set(seen, key, {
@@ -1469,7 +1591,19 @@ export const zulipAdapter = (
             // build the link directly — no need to locate the message itself.
             lookupChannel(hint.channel).pipe(
               Effect.map(
-                Option.map((channel) => buildMessageRef(base, id, channel, hint.thread).permalink),
+                Option.map(
+                  (channel) =>
+                    buildMessageRef(
+                      base,
+                      id,
+                      channel,
+                      // A hint addresses a thread by its plain name; resolution
+                      // is unknown here and irrelevant to the link, so unset.
+                      hint.thread === undefined
+                        ? undefined
+                        : { name: hint.thread, resolved: false },
+                    ).permalink,
+                ),
               ),
             )
         ).pipe(

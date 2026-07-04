@@ -78,7 +78,10 @@ export const channelPermalink = (base: string, channel: ChannelLike): ChannelPer
  * Zulip's own `by_stream_topic_url` (`web/src/internal_url.ts`); requires realm
  * feature level ≥271 (Zulip 9.0). The anchor is any member message of the
  * thread — every `ObservedThread` is the thread facet of an observed message,
- * so that message's id is always the anchor.
+ * so that message's id is always the anchor. The topic operand is the clean
+ * port-facing name: a resolved thread's ✔ prefix is a substrate detail that
+ * never reaches the URL, and the anchor keeps the link valid across the resolve
+ * regardless — resolution is surfaced via `ObservedThread.resolved`, not here.
  */
 export const topicPermalink = (
   base: string,
@@ -116,11 +119,14 @@ export const buildMessageRef = (
   base: string,
   id: MessageId,
   channel: { readonly id: ChannelId; readonly name: ChannelName },
-  threadName?: ThreadName,
+  thread?: { readonly name: ThreadName; readonly resolved: boolean },
 ): MessageRef => {
   const decoratedChannel = withChannelPermalink(base, channel)
   const permalink = messagePermalink(base, id)
-  return threadName === undefined
+  // Resolution rides on the ObservedThread as a flag; the ✔ prefix stays a
+  // substrate detail and never reaches the URL (the anchor keeps the topic
+  // link valid across a resolve regardless).
+  return thread === undefined
     ? {
         id,
         channel: decoratedChannel,
@@ -131,8 +137,9 @@ export const buildMessageRef = (
         id,
         channel: decoratedChannel,
         thread: Option.some({
-          name: threadName,
-          permalink: topicPermalink(base, decoratedChannel, threadName, id),
+          name: thread.name,
+          resolved: thread.resolved,
+          permalink: topicPermalink(base, decoratedChannel, thread.name, id),
         }),
         permalink,
       }

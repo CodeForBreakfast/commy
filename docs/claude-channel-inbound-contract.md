@@ -17,6 +17,17 @@ auto-correlated by the SDK. Inbound is the asymmetric half: a notification has n
 correlation id, so a runtime that does not explicitly handle it silently drops
 the frame. That asymmetry is the entire reason this document exists.
 
+**Not every substrate mutation is an inbound event.** A message *edit* emits no
+frame — the new body is observable only by re-reading the message via
+`history.readChannel`. **Thread resolution** follows the same precedent: marking
+a thread resolved / unresolved (the `resolve_thread` / `unresolve_thread` tools)
+emits no inbound event. A consumer observes the current state as
+`ObservedThread.resolved` on the thread facet of any message it reads
+(`Option<ObservedThread>.resolved` on `MessageRef.thread`) — the clean thread
+name never encodes resolution, and no substrate-specific marker (Zulip's
+✔-prefixed topic) crosses the port. Only new posts, reactions, and mentions are
+pushed as inbound frames; derived state changes are pull-only.
+
 ## Transport: a JSON-RPC notification
 
 An inbound event is delivered as a single server→client JSON-RPC **notification**

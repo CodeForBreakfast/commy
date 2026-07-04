@@ -155,13 +155,22 @@ export type ChannelRef = typeof ChannelRefSchema.Type
 
 /**
  * The thread facet of an observed message: a topic name paired with a
- * ready-to-click permalink. Only ever produced as `MessageRef.thread` for a
- * message the substrate handed back, so its permalink is always available —
- * hence required, not optional. An address target (a message reconstructed
- * from an id with no observation) carries `MessageRef.thread: Option.none()`.
+ * ready-to-click permalink and its resolution status. Only ever produced as
+ * `MessageRef.thread` for a message the substrate handed back, so its permalink
+ * is always available — hence required, not optional. An address target (a
+ * message reconstructed from an id with no observation) carries
+ * `MessageRef.thread: Option.none()`.
+ *
+ * `resolved` is observable state, not an address input: whether the substrate
+ * reports this thread resolved (mark it via `MessagePublisher.resolveThread`,
+ * clear it via `unresolveThread`). The `name` never encodes resolution — any
+ * substrate-side marker (Zulip's ✔-prefixed topic) is stripped behind the
+ * adapter seam so the port sees a clean name plus this flag. Required so every
+ * producer states it explicitly rather than defaulting an absent value.
  */
 export const ObservedThreadSchema = Schema.Struct({
   name: ThreadNameSchema,
+  resolved: Schema.Boolean,
   permalink: ThreadPermalinkSchema,
 })
 export type ObservedThread = typeof ObservedThreadSchema.Type
@@ -407,6 +416,19 @@ export interface MessagePublisher {
   edit(message: MessageRef, body: MessageBody): Effect.Effect<void, PublisherError>
   react(message: MessageRef, emoji: Emoji): Effect.Effect<void, PublisherError>
   unreact(message: MessageRef, emoji: Emoji): Effect.Effect<void, PublisherError>
+  /**
+   * Mark a thread resolved / clear its resolved status across the whole thread,
+   * addressed by `channel` + plain thread `name` (never a resolution-encoded
+   * form — the paired verbs, mirroring `react`/`unreact`, carry the direction).
+   * Idempotent: a thread already in the requested state is a no-op with no
+   * substrate write. Like `edit`, this mutates substrate state and emits no
+   * InboundEvent — a consumer observes the new status via `ObservedThread.resolved`
+   * when it next reads the thread. A substrate failure (including a thread the
+   * substrate has no messages for) surfaces as a typed `PublisherError`;
+   * calling before `identity.acquire` is a defect, not a typed failure.
+   */
+  resolveThread(channel: ChannelName, thread: ThreadName): Effect.Effect<void, PublisherError>
+  unresolveThread(channel: ChannelName, thread: ThreadName): Effect.Effect<void, PublisherError>
 }
 
 export interface MessageInbox {
@@ -581,7 +603,7 @@ export class UnknownChannel extends Data.TaggedError('UnknownChannel')<{
  * that failed. Mirrors `DirectoryError` so core stays substrate-agnostic.
  */
 export class PublisherError extends Data.TaggedError('PublisherError')<{
-  readonly operation: 'post' | 'edit' | 'react' | 'unreact'
+  readonly operation: 'post' | 'edit' | 'react' | 'unreact' | 'resolveThread' | 'unresolveThread'
   readonly cause: unknown
 }> {
   override get message(): string {
