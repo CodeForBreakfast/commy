@@ -16,6 +16,7 @@ import {
   decodeMessageBodySync,
   decodeMessageIdSync,
   decodeTimestampSync,
+  MessagePermalinkSchema,
   ThreadPermalinkSchema,
 } from '@commy/core/ports'
 import { Effect, Option, TestClock, TestContext } from 'effect'
@@ -66,6 +67,9 @@ const buildMessage = (
             ),
           })
         : Option.none(),
+    permalink: MessagePermalinkSchema.make(
+      `https://zulip.example.com/#narrow/channel/${opts.channel ?? 'general'}/near/${ts}`,
+    ),
   },
   sender: human,
   body: decodeMessageBodySync(body),

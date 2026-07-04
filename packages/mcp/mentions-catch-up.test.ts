@@ -9,6 +9,7 @@ import {
   decodeMessageBodySync,
   decodeMessageIdSync,
   decodeTimestampSync,
+  MessagePermalinkSchema,
   type Timestamp,
 } from '@commy/core/ports'
 import { Effect, Option, TestClock, TestContext } from 'effect'
@@ -54,6 +55,9 @@ const buildMention = (ts: number, body: string): InboundEvent => ({
       id: decodeMessageIdSync(`msg-${ts}`),
       channel: channelRef,
       thread: Option.none(),
+      permalink: MessagePermalinkSchema.make(
+        `https://zulip.example.com/#narrow/channel/chan-1-general/near/${ts}`,
+      ),
     },
     sender: otherSender,
     body: decodeMessageBodySync(body),
@@ -71,6 +75,9 @@ const buildMessagePosted = (ts: number, body: string): InboundEvent => ({
       id: decodeMessageIdSync(`msg-${ts}`),
       channel: channelRef,
       thread: Option.none(),
+      permalink: MessagePermalinkSchema.make(
+        `https://zulip.example.com/#narrow/channel/chan-1-general/near/${ts}`,
+      ),
     },
     sender: otherSender,
     body: decodeMessageBodySync(body),

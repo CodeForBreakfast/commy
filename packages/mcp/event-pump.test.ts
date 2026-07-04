@@ -19,6 +19,7 @@ import {
   decodeMessageIdSync,
   decodeThreadNameSync,
   decodeTimestampSync,
+  MessagePermalinkSchema,
   ThreadPermalinkSchema,
 } from '@commy/core/ports'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -52,6 +53,9 @@ const msg = (overrides: Partial<Message> = {}): Message => ({
       permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/home'),
     },
     thread: paymentsThread,
+    permalink: MessagePermalinkSchema.make(
+      'https://zulip.example.com/#narrow/channel/home/topic/payments/near/1',
+    ),
   },
   sender,
   body: decodeMessageBodySync('hello'),
@@ -69,6 +73,7 @@ const ref: MessageRef = {
     permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/home'),
   },
   thread: Option.none(),
+  permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/channel/home/near/1'),
 }
 
 interface QueueInboxOptions {
@@ -177,6 +182,9 @@ test('pump filters out events that fail the narrow predicate', () =>
                 ),
               },
               thread: Option.none(),
+              permalink: MessagePermalinkSchema.make(
+                'https://zulip.example.com/#narrow/channel/other/near/2',
+              ),
             },
           }),
         },
@@ -609,6 +617,9 @@ test('pump does NOT call rememberIdentity for events filtered out by the narrow 
                   ),
                 },
                 thread: Option.none(),
+                permalink: MessagePermalinkSchema.make(
+                  'https://zulip.example.com/#narrow/channel/other/near/x',
+                ),
               },
             }),
           },
@@ -709,6 +720,9 @@ test('pump calls onMention with the ts of each delivered mention-received event'
                   ),
                 },
                 thread: Option.none(),
+                permalink: MessagePermalinkSchema.make(
+                  'https://zulip.example.com/#narrow/channel/home/near/2',
+                ),
               },
             }),
             mentions: [bot],
@@ -911,6 +925,9 @@ test('pump dedup is keyed per message id — distinct ids each fire', () =>
                   ),
                 },
                 thread: paymentsThread,
+                permalink: MessagePermalinkSchema.make(
+                  'https://zulip.example.com/#narrow/channel/home/topic/payments/near/2',
+                ),
               },
             }),
           },

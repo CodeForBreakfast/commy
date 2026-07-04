@@ -35,6 +35,7 @@ import {
   decodeMessageIdSync,
   decodeThreadNameSync,
   decodeTimestampSync,
+  MessagePermalinkSchema,
   PublisherError,
   UnknownChannel,
   UnknownIdentity,
@@ -437,6 +438,10 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             id: decodeMessageIdSync('999999999'),
             channel,
             thread: Option.none(),
+            // An address target rebuilt from a bare id carries the id itself as
+            // a placeholder permalink (never observed, never surfaced) — the
+            // same transient the MCP edge's reconstructMessageRef mints.
+            permalink: MessagePermalinkSchema.make('999999999'),
           }
           const error = yield* Effect.flip(
             env.comms.publisher.edit(phantom, decodeMessageBodySync('nope')),
