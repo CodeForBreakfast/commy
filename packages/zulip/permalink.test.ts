@@ -83,28 +83,39 @@ test('channelPermalink replaces spaces in the channel name with hyphens', () => 
   )
 })
 
-test('topicPermalink appends an encoded topic segment', () => {
-  expect(topicPermalink(base, channel, decodeThreadNameSync('my topic'))).toBe(
-    ThreadPermalinkSchema.make(
-      'https://zulip.example.com/#narrow/channel/9-general/topic/my.20topic',
-    ),
-  )
-})
-
-test('messagePermalink appends a near/<id> segment under the topic', () => {
+test('topicPermalink appends an encoded topic segment with the anchor via the with operator', () => {
   expect(
-    messagePermalink(base, channel, decodeMessageIdSync('42'), decodeThreadNameSync('my topic')),
+    topicPermalink(base, channel, decodeThreadNameSync('my topic'), decodeMessageIdSync('42')),
   ).toBe(
-    MessagePermalinkSchema.make(
-      'https://zulip.example.com/#narrow/channel/9-general/topic/my.20topic/near/42',
+    ThreadPermalinkSchema.make(
+      'https://zulip.example.com/#narrow/channel/9-general/topic/my.20topic/with/42',
     ),
   )
 })
 
-test('messagePermalink omits the topic segment for a thread-less message', () => {
-  expect(messagePermalink(base, channel, decodeMessageIdSync('42'))).toBe(
-    MessagePermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-general/near/42'),
+test('messagePermalink points at the message by id alone via the id operator', () => {
+  expect(messagePermalink(base, decodeMessageIdSync('42'))).toBe(
+    MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
   )
+})
+
+// The rename-stable contract: a topic permalink minted before a topic is
+// renamed or resolved still resolves afterwards. The `with/<anchor>` locator
+// is the only part identifying the conversation, and the anchor id is
+// invariant across the rename; only the (stale-tolerant) topic hint changes.
+test('topicPermalink survives a topic rename/resolve: the with/<anchor> locator is invariant', () => {
+  const anchor = decodeMessageIdSync('42')
+  const beforeResolve = topicPermalink(base, channel, decodeThreadNameSync('planning'), anchor)
+  const afterResolve = topicPermalink(base, channel, decodeThreadNameSync('✔ planning'), anchor)
+
+  expect(beforeResolve.endsWith('/with/42')).toBe(true)
+  expect(afterResolve.endsWith('/with/42')).toBe(true)
+})
+
+// The message permalink carries no topic operand at all, so it is trivially
+// invariant across any topic rename/move/resolve.
+test('messagePermalink is topic-independent', () => {
+  expect(messagePermalink(base, decodeMessageIdSync('42'))).not.toContain('/topic/')
 })
 
 test('withChannelPermalink decorates a channel ref with its permalink', () => {
@@ -128,12 +139,10 @@ test('buildMessageRef decorates message, channel and topic for a threaded messag
     thread: Option.some({
       name: decodeThreadNameSync('lobby'),
       permalink: ThreadPermalinkSchema.make(
-        'https://zulip.example.com/#narrow/channel/9-general/topic/lobby',
+        'https://zulip.example.com/#narrow/channel/9-general/topic/lobby/with/42',
       ),
     }),
-    permalink: MessagePermalinkSchema.make(
-      'https://zulip.example.com/#narrow/channel/9-general/topic/lobby/near/42',
-    ),
+    permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
   })
 })
 
@@ -146,8 +155,6 @@ test('buildMessageRef omits the thread for a thread-less message', () => {
       permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-general'),
     },
     thread: Option.none(),
-    permalink: MessagePermalinkSchema.make(
-      'https://zulip.example.com/#narrow/channel/9-general/near/42',
-    ),
+    permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
   })
 })

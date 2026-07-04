@@ -69,26 +69,37 @@ const channelSlug = (channel: ChannelLike): string =>
 export const channelPermalink = (base: string, channel: ChannelLike): ChannelPermalink =>
   ChannelPermalinkSchema.make(`${base}/#narrow/channel/${channelSlug(channel)}`)
 
+/**
+ * A thread/topic permalink built with Zulip's `with` operator
+ * (`.../topic/<name>/with/<anchor>`). The `with` operator locates the
+ * conversation by the anchor message's id and treats the topic operand as a
+ * stale-tolerant hint, so the link follows the conversation across a topic
+ * rename, move, or resolve — where a `topic`-name narrow would 404. Mirrors
+ * Zulip's own `by_stream_topic_url` (`web/src/internal_url.ts`); requires realm
+ * feature level ≥271 (Zulip 9.0). The anchor is any member message of the
+ * thread — every `ObservedThread` is the thread facet of an observed message,
+ * so that message's id is always the anchor.
+ */
 export const topicPermalink = (
   base: string,
   channel: ChannelLike,
   topic: ThreadName,
+  anchor: MessageId,
 ): ThreadPermalink =>
   ThreadPermalinkSchema.make(
-    `${channelPermalink(base, channel)}/topic/${encodeHashComponent(topic)}`,
+    `${channelPermalink(base, channel)}/topic/${encodeHashComponent(topic)}/with/${anchor}`,
   )
 
-export const messagePermalink = (
-  base: string,
-  channel: ChannelLike,
-  id: MessageId,
-  topic?: ThreadName,
-): MessagePermalink =>
-  MessagePermalinkSchema.make(
-    topic === undefined
-      ? `${channelPermalink(base, channel)}/near/${id}`
-      : `${topicPermalink(base, channel, topic)}/near/${id}`,
-  )
+/**
+ * A single-message permalink built with Zulip's `id` operator
+ * (`#narrow/id/<id>`). It resolves the message by its immutable id alone — no
+ * channel or topic operand — so it never goes stale, and renders a
+ * single-message view rather than the surrounding conversation (a deliberate
+ * consequence: it is a precise pointer to one message, not to its thread). For
+ * a rename-stable link to the conversation, use `topicPermalink`.
+ */
+export const messagePermalink = (base: string, id: MessageId): MessagePermalink =>
+  MessagePermalinkSchema.make(`${base}/#narrow/id/${id}`)
 
 /** A channel ref carrying its narrow permalink. */
 export const withChannelPermalink = (
@@ -108,20 +119,21 @@ export const buildMessageRef = (
   threadName?: ThreadName,
 ): MessageRef => {
   const decoratedChannel = withChannelPermalink(base, channel)
+  const permalink = messagePermalink(base, id)
   return threadName === undefined
     ? {
         id,
         channel: decoratedChannel,
         thread: Option.none(),
-        permalink: messagePermalink(base, decoratedChannel, id),
+        permalink,
       }
     : {
         id,
         channel: decoratedChannel,
         thread: Option.some({
           name: threadName,
-          permalink: topicPermalink(base, decoratedChannel, threadName),
+          permalink: topicPermalink(base, decoratedChannel, threadName, id),
         }),
-        permalink: messagePermalink(base, decoratedChannel, id, threadName),
+        permalink,
       }
 }
