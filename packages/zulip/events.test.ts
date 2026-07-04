@@ -102,9 +102,7 @@ test('decorates the inbound message ref with message, channel and topic permalin
   if (posted !== undefined && posted.kind === 'message-posted') {
     const ref = posted.message.ref
     expect(ref.permalink).toBe(
-      MessagePermalinkSchema.make(
-        'https://zulip.example.com/#narrow/channel/1-general/topic/topic/near/100',
-      ),
+      MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/100'),
     )
     expect(ref.channel.permalink).toBe(
       ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/1-general'),
@@ -112,7 +110,7 @@ test('decorates the inbound message ref with message, channel and topic permalin
     expect(Option.map(ref.thread, (t) => t.permalink)).toEqual(
       Option.some(
         ThreadPermalinkSchema.make(
-          'https://zulip.example.com/#narrow/channel/1-general/topic/topic',
+          'https://zulip.example.com/#narrow/channel/1-general/topic/topic/with/100',
         ),
       ),
     )
