@@ -579,6 +579,7 @@ test(
               },
               thread: Option.some({
                 name: decodeThreadNameSync('topic'),
+                resolved: false,
                 permalink: ThreadPermalinkSchema.make(
                   'https://zulip.example.com/#narrow/channel/1-general/topic/topic',
                 ),

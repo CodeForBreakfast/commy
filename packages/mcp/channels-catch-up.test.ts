@@ -62,6 +62,7 @@ const buildMessage = (
       opts.thread !== undefined
         ? Option.some({
             name: opts.thread as ThreadName,
+            resolved: false,
             permalink: ThreadPermalinkSchema.make(
               `https://zulip.example.com/#narrow/channel/1-general/topic/${opts.thread}`,
             ),

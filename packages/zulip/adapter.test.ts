@@ -869,6 +869,7 @@ effectTest(
         channel: generalChannel,
         thread: Option.some({
           name: decodeThreadNameSync('planning'),
+          resolved: false,
           permalink: ThreadPermalinkSchema.make(
             'https://zulip.example.com/#narrow/channel/1234-general/topic/planning/with/1',
           ),
@@ -1113,6 +1114,7 @@ effectTest('history.readChannel narrows by channel and maps each message to the 
         channel: generalChannel,
         thread: Option.some({
           name: decodeThreadNameSync('lobby'),
+          resolved: false,
           permalink: ThreadPermalinkSchema.make(
             'https://zulip.example.com/#narrow/channel/1234-general/topic/lobby/with/555',
           ),
@@ -1130,6 +1132,94 @@ effectTest('history.readChannel narrows by channel and maps each message to the 
       reactions: [],
     })
   }),
+)
+
+effectTest(
+  'publisher.resolveThread renames the topic with the ✔ prefix via propagate_mode=change_all',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* seedMessages(stub, [
+        {
+          id: 700,
+          sender_id: 5,
+          sender_full_name: 'Robin Reyes',
+          stream_id: 1234,
+          display_recipient: 'general',
+          subject: 'planning',
+          content: 'to resolve',
+          timestamp: 1715000000,
+        },
+      ])
+      yield* stub.respond('PATCH', '/api/v1/messages/700', { body: { result: 'success' } })
+      const adapter = yield* buildAdapter(stub)
+      yield* adapter.publisher.resolveThread(generalChannel.name, decodeThreadNameSync('planning'))
+      const params = new URLSearchParams(
+        (yield* findRequest(stub, 'PATCH', '/api/v1/messages/700')).body,
+      )
+      expect(params.get('topic')).toBe('✔ planning')
+      expect(params.get('propagate_mode')).toBe('change_all')
+    }),
+)
+
+effectTest('publisher.unresolveThread renames the ✔-prefixed topic back to the bare name', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedMessages(stub, [
+      {
+        id: 701,
+        sender_id: 5,
+        sender_full_name: 'Robin Reyes',
+        stream_id: 1234,
+        display_recipient: 'general',
+        subject: '✔ planning',
+        content: 'to unresolve',
+        timestamp: 1715000000,
+      },
+    ])
+    yield* stub.respond('PATCH', '/api/v1/messages/701', { body: { result: 'success' } })
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.publisher.unresolveThread(generalChannel.name, decodeThreadNameSync('planning'))
+    const params = new URLSearchParams(
+      (yield* findRequest(stub, 'PATCH', '/api/v1/messages/701')).body,
+    )
+    expect(params.get('topic')).toBe('planning')
+    expect(params.get('propagate_mode')).toBe('change_all')
+  }),
+)
+
+effectTest(
+  'history.readThread strips the ✔ prefix off a resolved topic and surfaces resolved=true with the clean name',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* seedUsers(stub, [HERMES, MAINTAINER])
+      yield* seedMessages(stub, [
+        {
+          id: 808,
+          sender_id: 5,
+          sender_full_name: 'Robin Reyes',
+          stream_id: 1234,
+          display_recipient: 'general',
+          subject: '✔ lobby',
+          content: 'resolved chat',
+          timestamp: 1715000000,
+        },
+      ])
+      const adapter = yield* buildAdapter(stub)
+      const messages = yield* adapter.history.readThread(
+        generalChannel.name,
+        decodeThreadNameSync('lobby'),
+        {},
+      )
+      const found = messages.find((m) => m.body === 'resolved chat')
+      if (found === undefined)
+        throw new Error('expected the resolved thread readable by clean name')
+      expect(Option.map(found.ref.thread, (t) => t.name)).toEqual(
+        Option.some(decodeThreadNameSync('lobby')),
+      )
+      expect(Option.map(found.ref.thread, (t) => t.resolved)).toEqual(Option.some(true))
+    }),
 )
 
 effectTest(

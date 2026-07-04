@@ -389,6 +389,10 @@ const ReadThreadArgs = Schema.Struct({
   thread: Schema.String,
   ...RangeArgs,
 })
+const ThreadResolutionArgs = Schema.Struct({
+  channel_name: Schema.String,
+  thread: Schema.String,
+})
 const MessageLinkArgs = Schema.Struct({
   message_id: Schema.String,
   channel_name: Schema.optional(Schema.String),
@@ -884,6 +888,58 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           cache.rememberIdentity(m.sender)
         }
         return { messages: await runEdge(Effect.forEach(messages, messageShape)) }
+      },
+    },
+    {
+      name: 'resolve_thread',
+      description:
+        "Mark a thread resolved (channel_name + thread, like read_thread). Idempotent — resolving an already-resolved thread is a no-op. Resolution is a status kept separate from the thread name; read it back as a message's thread.resolved via read_thread / read_channel. Use unresolve_thread to clear it.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          channel_name: { type: 'string', description: 'Channel the thread lives in' },
+          thread: { type: 'string', description: 'Thread / topic name within the channel' },
+        },
+        required: ['channel_name', 'thread'],
+        additionalProperties: false,
+      },
+      handler: async (args) => {
+        await runEdge(
+          Effect.gen(function* () {
+            const parsed = yield* Schema.decodeUnknown(ThreadResolutionArgs)(args)
+            yield* adapter.publisher.resolveThread(
+              yield* decodeChannelName(parsed.channel_name),
+              yield* decodeThreadName(parsed.thread),
+            )
+          }),
+        )
+        return {}
+      },
+    },
+    {
+      name: 'unresolve_thread',
+      description:
+        "Clear a thread's resolved status (channel_name + thread, like read_thread). Idempotent — unresolving a thread that is not resolved is a no-op. The inverse of resolve_thread.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          channel_name: { type: 'string', description: 'Channel the thread lives in' },
+          thread: { type: 'string', description: 'Thread / topic name within the channel' },
+        },
+        required: ['channel_name', 'thread'],
+        additionalProperties: false,
+      },
+      handler: async (args) => {
+        await runEdge(
+          Effect.gen(function* () {
+            const parsed = yield* Schema.decodeUnknown(ThreadResolutionArgs)(args)
+            yield* adapter.publisher.unresolveThread(
+              yield* decodeChannelName(parsed.channel_name),
+              yield* decodeThreadName(parsed.thread),
+            )
+          }),
+        )
+        return {}
       },
     },
     {

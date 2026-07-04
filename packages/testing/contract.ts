@@ -296,6 +296,94 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         }),
       ))
 
+    // Resolution is a status distinct from the thread name: the name a consumer
+    // addresses stays stable, and the flag surfaces on read as
+    // ObservedThread.resolved. These hold on both substrates — memory tracks the
+    // flag directly, Zulip renames the topic behind the adapter seam and strips
+    // it back off on read.
+    test('publisher.resolveThread marks a thread resolved, observable via history.readThread', () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const channel = yield* env.seedChannel('lobby')
+          const thread = decodeThreadNameSync('design')
+          yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('to resolve'), {
+            thread,
+          })
+          yield* env.comms.publisher.resolveThread(channel.name, thread)
+          const messages = yield* env.comms.history.readThread(channel.name, thread, {})
+          const found = messages.find((m) => m.body === 'to resolve')
+          if (found === undefined)
+            throw new Error('expected the resolved thread still readable by its plain name')
+          // The name is unchanged; the resolved status rides alongside it.
+          expect(Option.map(found.ref.thread, (t) => t.name)).toEqual(Option.some(thread))
+          expect(Option.map(found.ref.thread, (t) => t.resolved)).toEqual(Option.some(true))
+        }),
+      ))
+
+    test("publisher.unresolveThread clears a thread's resolved status", () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const channel = yield* env.seedChannel('lobby')
+          const thread = decodeThreadNameSync('design')
+          yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('round trip'), {
+            thread,
+          })
+          yield* env.comms.publisher.resolveThread(channel.name, thread)
+          yield* env.comms.publisher.unresolveThread(channel.name, thread)
+          const messages = yield* env.comms.history.readThread(channel.name, thread, {})
+          const found = messages.find((m) => m.body === 'round trip')
+          if (found === undefined) throw new Error('expected the thread readable after unresolve')
+          expect(Option.map(found.ref.thread, (t) => t.resolved)).toEqual(Option.some(false))
+        }),
+      ))
+
+    test('publisher.resolveThread is idempotent when the thread is already resolved', () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const channel = yield* env.seedChannel('lobby')
+          const thread = decodeThreadNameSync('design')
+          yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('twice resolved'), {
+            thread,
+          })
+          yield* env.comms.publisher.resolveThread(channel.name, thread)
+          // Second resolve is a no-op, not an error.
+          yield* env.comms.publisher.resolveThread(channel.name, thread)
+          const messages = yield* env.comms.history.readThread(channel.name, thread, {})
+          const found = messages.find((m) => m.body === 'twice resolved')
+          if (found === undefined) throw new Error('expected the thread readable after re-resolve')
+          expect(Option.map(found.ref.thread, (t) => t.resolved)).toEqual(Option.some(true))
+        }),
+      ))
+
+    test('publisher.unresolveThread is idempotent when the thread is not resolved', () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const channel = yield* env.seedChannel('lobby')
+          const thread = decodeThreadNameSync('design')
+          yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('never resolved'), {
+            thread,
+          })
+          // Unresolving an unresolved thread is a no-op, not an error.
+          yield* env.comms.publisher.unresolveThread(channel.name, thread)
+          const messages = yield* env.comms.history.readThread(channel.name, thread, {})
+          const found = messages.find((m) => m.body === 'never resolved')
+          if (found === undefined)
+            throw new Error('expected the thread readable after no-op unresolve')
+          expect(Option.map(found.ref.thread, (t) => t.resolved)).toEqual(Option.some(false))
+        }),
+      ))
+
+    test('publisher.resolveThread on a thread with no messages fails with PublisherError', () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const channel = yield* env.seedChannel('lobby')
+          const error = yield* Effect.flip(
+            env.comms.publisher.resolveThread(channel.name, decodeThreadNameSync('ghost')),
+          )
+          expect(error).toBeInstanceOf(PublisherError)
+        }),
+      ))
+
     test('publisher.post with thread is also visible via history.readChannel (channel reads include all topics)', () =>
       Effect.runPromise(
         Effect.gen(function* () {

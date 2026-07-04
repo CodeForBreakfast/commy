@@ -51,6 +51,7 @@ const buildMessageRef = (channelName: string, threadName?: string): MessageRef =
         channel,
         thread: Option.some({
           name: decodeThreadNameSync(threadName),
+          resolved: false,
           permalink: ThreadPermalinkSchema.make(
             `https://zulip.example.com/#narrow/channel/${channelName}/topic/${threadName}`,
           ),

@@ -610,6 +610,56 @@ test('read_channel honours the limit argument', () =>
     ),
   ))
 
+test('resolve_thread then unresolve_thread flip a thread’s resolved status, surfaced via read_thread', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* ensureBound()
+            const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+            cache.rememberChannel(channelRef)
+            yield* adapter.publisher.post(channelRef.name, decodeMessageBodySync('in design'), {
+              thread: decodeThreadNameSync('design'),
+            })
+          }),
+        )
+        const readResolved = (): Promise<{ thread: { resolved: boolean } | null }> =>
+          rig.client
+            .callTool({
+              name: 'read_thread',
+              arguments: { channel_name: 'home', thread: 'design' },
+            })
+            .then((r) => {
+              const sc = r.structuredContent as {
+                messages: Array<{ thread: { resolved: boolean } | null }>
+              }
+              const message = sc.messages[0]
+              if (message === undefined) throw new Error('expected the design thread readable')
+              return message
+            })
+
+        const resolveResult = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'resolve_thread',
+            arguments: { channel_name: 'home', thread: 'design' },
+          }),
+        )
+        expect(resolveResult.isError).toBeFalsy()
+        expect((yield* Effect.promise(readResolved)).thread?.resolved).toBe(true)
+
+        const unresolveResult = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'unresolve_thread',
+            arguments: { channel_name: 'home', thread: 'design' },
+          }),
+        )
+        expect(unresolveResult.isError).toBeFalsy()
+        expect((yield* Effect.promise(readResolved)).thread?.resolved).toBe(false)
+      }),
+    ),
+  ))
+
 test('post returns a clickable permalink for the new message', () =>
   Effect.runPromise(
     Effect.scoped(

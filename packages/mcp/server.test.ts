@@ -175,6 +175,8 @@ const buildFakeAdapter = (
     edit: () => Effect.void,
     react: () => Effect.void,
     unreact: () => Effect.void,
+    resolveThread: () => Effect.void,
+    unresolveThread: () => Effect.void,
   }
   const inbox: MessageInbox = {
     subscribe: (target: SubscriptionTarget) =>
