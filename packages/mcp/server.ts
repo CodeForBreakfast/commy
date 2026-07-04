@@ -46,7 +46,11 @@ import { createNarrowSet } from './narrow-set.ts'
 import { raceReleaseAgainstTimeout } from './release-shutdown.ts'
 import type { SubscribeIntent, SubscribeTokenError } from './subscribe-parser.ts'
 import { intentToTarget } from './subscribe-parser.ts'
-import { persistSubscriptions, restoreOrSeedSubscriptions } from './subscription-restore.ts'
+import {
+  persistSubscriptions,
+  restoreOrSeedSubscriptions,
+  restoreSubscriptions,
+} from './subscription-restore.ts'
 import { FileSubscriptionStoreLive, SubscriptionStoreTag } from './subscription-store.ts'
 import { registerTools } from './tools.ts'
 
@@ -448,6 +452,32 @@ export const makeProgram = (
                     Effect.as(HashSet.add(seen, sessionId)),
                   ),
             )
+      // Restore-only path for the passive `current_identity` read: rehydrate a
+      // resuming session's narrow set so a block-and-sleep seat isn't deaf while
+      // parked, WITHOUT seeding the acquire-gated Type-2 defaults a fresh session
+      // must not get from a passive read. Shares `restoredSessions` with
+      // `ensureSessionSubscriptions`, but marks the session seen only when a
+      // restore actually happened (store present) — a fresh session stays
+      // unmarked so its later acquire still seeds.
+      const restoreSessionSubscriptionsOnRead = (sessionId: SessionId): Effect.Effect<void> =>
+        parsed.botName !== undefined
+          ? Effect.void
+          : SynchronizedRef.updateEffect(restoredSessions, (seen) =>
+              HashSet.has(seen, sessionId)
+                ? Effect.succeed(seen)
+                : restoreSubscriptions(
+                    { subscriptionStore, narrowSet, inbox: adapter.inbox },
+                    sessionId,
+                  ).pipe(
+                    Effect.catchAll((err) =>
+                      Effect.logError(
+                        `commy plugin: subscription restore-on-read failed for ${sessionId}: ${Predicate.isError(err) ? err.message : String(err)}`,
+                      ).pipe(Effect.as(false)),
+                    ),
+                    Effect.map((restored) => (restored ? HashSet.add(seen, sessionId) : seen)),
+                    Effect.provide(loggerLayer),
+                  ),
+            )
       // Persisting is best-effort: a disk hiccup logs but never fails the
       // user's subscribe/unsubscribe call.
       const persistSessionSubscriptions = (sessionId: SessionId): Effect.Effect<void> =>
@@ -552,6 +582,7 @@ export const makeProgram = (
         narrowSet,
         projectForCwd,
         ensureSessionSubscriptions,
+        restoreSessionSubscriptions: restoreSessionSubscriptionsOnRead,
         persistSessionSubscriptions,
         downloadFile: (urlPath) =>
           Effect.gen(function* () {

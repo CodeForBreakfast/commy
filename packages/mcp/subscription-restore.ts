@@ -55,6 +55,34 @@ export const restoreOrSeedSubscriptions = (
   )
 
 /**
+ * Restore a resuming session's narrow set — the resume half of
+ * {@link restoreOrSeedSubscriptions} with the fresh-session seed deliberately
+ * omitted. A passive `current_identity` reachability check (the natural, and
+ * often only, first move of a resumed block-and-sleep seat) routes through
+ * this so the narrow set is live before the seat parks — without registering
+ * the acquire-gated Type-2 defaults a fresh ephemeral session must not get
+ * until it actually attributes something.
+ *
+ * Returns whether a restore happened: `true` when the store was present (a
+ * true resume, now rehydrated), `false` when absent (a fresh session — left
+ * untouched for the post-acquire seed to handle). The caller keys its
+ * once-per-session memo on this, so a fresh session's later acquire still
+ * seeds rather than being pre-empted by this no-op read.
+ */
+export const restoreSubscriptions = (
+  deps: Pick<SubscriptionRestoreDeps, 'subscriptionStore' | 'narrowSet' | 'inbox'>,
+  sessionId: SessionId,
+): Effect.Effect<boolean, PlatformError | ParseResult.ParseError | InboxError> =>
+  deps.subscriptionStore.read(sessionId).pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.succeed(false),
+        onSome: (intents) => applyRestored(deps, intents).pipe(Effect.as(true)),
+      }),
+    ),
+  )
+
+/**
  * Persist the current narrow-set snapshot under the session_id. Called after
  * every runtime `subscribe`/`unsubscribe` mutation so a later resume restores
  * the exact set — defaults included, unsubscribes included.

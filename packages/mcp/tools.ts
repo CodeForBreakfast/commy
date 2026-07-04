@@ -146,6 +146,15 @@ export interface RegisterToolsDeps {
     project: ProjectSlug | undefined,
   ) => Effect.Effect<void>
   /**
+   * Restore (but never seed) a resuming session's narrow set on the passive
+   * `current_identity` read — so a block-and-sleep seat that resumes, checks its
+   * binding, and parks isn't left deaf with an empty narrow set (comms-k7cv).
+   * The fresh-session Type-2 seed stays on the acquire hook; a passive read of a
+   * never-seen session registers nothing. Omitted in tests that don't exercise
+   * persistence.
+   */
+  readonly restoreSessionSubscriptions?: (sessionId: SessionId) => Effect.Effect<void>
+  /**
    * Persist the current narrow set under the session_id after a
    * `subscribe`/`unsubscribe` mutation. Best-effort — never
    * fails the tool call. Omitted in tests that don't exercise persistence.
@@ -457,6 +466,16 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
       },
       handler: async (args): Promise<CurrentIdentityResult> => {
         const sessionId = readSessionId(args)
+        // A resumed seat's first move is typically this passive reachability
+        // check, and a block-and-sleep seat then parks on it — so rehydrate the
+        // persisted narrow set here too, not only on acquire / subscribe /
+        // unsubscribe. Otherwise the event pump matches an empty set and
+        // silently drops inbound, including a human's decision reaction on a
+        // subscribed thread (comms-k7cv). Restore-only, never seed: this stays
+        // passive (no acquire, no fresh-session default registration).
+        if (sessionId !== undefined && deps.restoreSessionSubscriptions !== undefined) {
+          await runEdge(deps.restoreSessionSubscriptions(sessionId))
+        }
         const ensureBound = await runEdge(
           Effect.flatMap(projectForArgs(args), (project) =>
             identityCache.ensureBoundFor(sessionId, project),
