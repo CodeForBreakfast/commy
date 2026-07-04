@@ -34,11 +34,9 @@ const applyRestored = (
 ): Effect.Effect<void, InboxError> =>
   Effect.sync(() => deps.narrowSet.replace(intents)).pipe(
     Effect.zipRight(
-      Effect.forEach(
-        intents,
-        (intent) => intentToTarget(intent).pipe(Effect.flatMap(deps.inbox.subscribe)),
-        { discard: true },
-      ),
+      Effect.forEach(intents, (intent) => deps.inbox.subscribe(intentToTarget(intent)), {
+        discard: true,
+      }),
     ),
   )
 

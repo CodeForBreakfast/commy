@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { Effect, Either } from 'effect'
 
-import type { ChannelRef, MessagePublisher } from './ports.ts'
+import type { ChannelName, MessagePublisher } from './ports.ts'
 import {
   decodeBotName,
   decodeChannelId,
@@ -147,7 +147,7 @@ test('MessagePublisher.post rejects an unbranded body at the type level', () => 
   // check — so the brand bites even though `post` is declared with method
   // shorthand. If it stops firing, the MessageBody brand has genuinely been
   // weakened.
-  const proof = (publisher: MessagePublisher, channel: ChannelRef): void => {
+  const proof = (publisher: MessagePublisher, channel: ChannelName): void => {
     // @ts-expect-error — body must be MessageBody, not string
     void publisher.post(channel, 'raw-unbranded-body')
     void publisher.post(channel, decodeMessageBodySync('branded-ok'))

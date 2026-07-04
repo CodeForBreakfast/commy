@@ -2,6 +2,7 @@ import type {
   AcquiredIdentity,
   AgentComms,
   BotName,
+  ChannelId,
   ChannelName,
   ChannelRef,
   Credentials,
@@ -222,6 +223,8 @@ interface HistoricalReaction {
 
 interface HistoricalMessage {
   readonly id: MessageId
+  readonly channelId: ChannelId
+  readonly channelName: ChannelName
   readonly senderId: ZulipUserRef
   readonly senderFullName: string
   readonly subject: ThreadName
@@ -237,6 +240,8 @@ const historicalReactionSchema = Schema.Struct({
 
 const historicalMessageRawSchema = Schema.Struct({
   id: Schema.Int,
+  stream_id: Schema.Int,
+  display_recipient: Schema.String,
   sender_id: Schema.Int,
   sender_full_name: Schema.String,
   subject: Schema.NonEmptyString,
@@ -254,12 +259,16 @@ const toHistoricalMessage = (
 ): Effect.Effect<HistoricalMessage, ParseResult.ParseError> =>
   Effect.all({
     id: decodeMessageId(String(m.id)),
+    channelId: decodeChannelId(String(m.stream_id)),
+    channelName: decodeChannelName(m.display_recipient),
     subject: decodeThreadName(m.subject),
     ts: decodeTimestamp(m.timestamp),
   }).pipe(
     Effect.map(
-      ({ id, subject, ts }): HistoricalMessage => ({
+      ({ id, channelId, channelName, subject, ts }): HistoricalMessage => ({
         id,
+        channelId,
+        channelName,
         senderId: ZulipUserRef(m.sender_id),
         senderFullName: m.sender_full_name,
         subject,
@@ -346,20 +355,23 @@ interface BoundState {
   readonly http: BotHttp
 }
 
+// Channels are addressed by name, so the narrow sets and the per-channel
+// seen-topics ledger key on `ChannelName` — the same address the subscription
+// target carries and that inbound messages expose as `ref.channel.name`.
 interface InboxState {
   readonly mentionsSubscribed: boolean
-  readonly subscribedChannels: HashSet.HashSet<string>
-  readonly newTopicsChannels: HashSet.HashSet<string>
-  readonly seenTopicsByChannel: HashMap.HashMap<string, HashSet.HashSet<string>>
+  readonly subscribedChannels: HashSet.HashSet<ChannelName>
+  readonly newTopicsChannels: HashSet.HashSet<ChannelName>
+  readonly seenTopicsByChannel: HashMap.HashMap<ChannelName, HashSet.HashSet<ThreadName>>
   readonly registration: Option.Option<{
     readonly queue: QueueState
     readonly mode: 'all' | 'mentions'
   }>
 }
 
-const streamIsListening = (state: InboxState, channelId: string): boolean =>
-  HashSet.has(state.subscribedChannels, channelId) ||
-  HashSet.has(state.newTopicsChannels, channelId)
+const streamIsListening = (state: InboxState, channelName: ChannelName): boolean =>
+  HashSet.has(state.subscribedChannels, channelName) ||
+  HashSet.has(state.newTopicsChannels, channelName)
 
 const currentMode = (state: InboxState): 'all' | 'mentions' =>
   state.mentionsSubscribed &&
@@ -368,15 +380,15 @@ const currentMode = (state: InboxState): 'all' | 'mentions' =>
     ? 'mentions'
     : 'all'
 
-// Record (channelId, threadName) in the per-channel seen set, returning
+// Record (channelName, threadName) in the per-channel seen set, returning
 // whether this is the first observation of the topic and the next state.
 const observeNewTopic = (
   state: InboxState,
-  channelId: string,
-  threadName: string,
+  channelName: ChannelName,
+  threadName: ThreadName,
 ): readonly [boolean, InboxState] => {
-  const seen = HashMap.get(state.seenTopicsByChannel, channelId).pipe(
-    Option.getOrElse(() => HashSet.empty<string>()),
+  const seen = HashMap.get(state.seenTopicsByChannel, channelName).pipe(
+    Option.getOrElse(() => HashSet.empty<ThreadName>()),
   )
   if (HashSet.has(seen, threadName)) return [false, state]
   return [
@@ -385,7 +397,7 @@ const observeNewTopic = (
       ...state,
       seenTopicsByChannel: HashMap.set(
         state.seenTopicsByChannel,
-        channelId,
+        channelName,
         HashSet.add(seen, threadName),
       ),
     },
@@ -532,10 +544,10 @@ export const zulipAdapter = (
 
     const mapHistoricalMessage = (
       m: HistoricalMessage,
-      channel: ChannelRef,
       directory: DirectoryLookup,
     ): Effect.Effect<Message, ParseResult.ParseError> =>
       Effect.gen(function* () {
+        const channel = decorateChannel({ id: m.channelId, name: m.channelName })
         const cached = directory.byId.get(m.senderId)
         const sender: Identity =
           cached ??
@@ -556,7 +568,6 @@ export const zulipAdapter = (
       })
 
     const readMessages = (
-      channel: ChannelRef,
       range: Range,
       narrow: ReadonlyArray<NarrowFilter>,
     ): Effect.Effect<ReadonlyArray<Message>, ZulipApiError | ParseResult.ParseError> =>
@@ -577,7 +588,7 @@ export const zulipAdapter = (
           Effect.forEach(res.messages, toHistoricalMessage).pipe(
             Effect.map((historical) => historical.filter(inRange(range))),
             Effect.flatMap((inRangeMessages) =>
-              Effect.forEach(inRangeMessages, (m) => mapHistoricalMessage(m, channel, directory)),
+              Effect.forEach(inRangeMessages, (m) => mapHistoricalMessage(m, directory)),
             ),
           ),
         ),
@@ -596,7 +607,10 @@ export const zulipAdapter = (
     // override is in play). Every ref this adapter hands back is decorated with
     // its narrow URL so callers can quote a clickable link.
     const base = permalinkBase(config)
-    const decorateChannel = (channel: ChannelRef): ChannelRef => withChannelPermalink(base, channel)
+    const decorateChannel = (channel: {
+      readonly id: ChannelId
+      readonly name: ChannelName
+    }): ChannelRef => withChannelPermalink(base, channel)
     const decorateMessageRef = (
       id: MessageId,
       channel: ChannelRef,
@@ -910,7 +924,7 @@ export const zulipAdapter = (
             ),
     }
 
-    const channelOf = (target: SubscriptionTarget): ChannelRef | undefined => {
+    const channelOf = (target: SubscriptionTarget): ChannelName | undefined => {
       if (target === 'mentions') return undefined
       if (Predicate.hasProperty(target, 'kind')) return target.channel
       if (Predicate.hasProperty(target, 'thread')) return target.channel
@@ -1020,13 +1034,13 @@ export const zulipAdapter = (
     // UnknownChannel instead of being silently routed by Zulip to Notification
     // Bot DMs.
     const resolvePublishChannel = (
-      requested: ChannelRef,
+      requested: ChannelName,
     ): Effect.Effect<ChannelRef, UnknownChannel | ZulipApiError | ParseResult.ParseError> =>
-      lookupChannel(requested.name).pipe(
+      lookupChannel(requested).pipe(
         Effect.flatMap(
           Option.match({
             onNone: () =>
-              Effect.fail(new UnknownChannel({ channel: requested.name, substrate: 'zulip' })),
+              Effect.fail(new UnknownChannel({ channel: requested, substrate: 'zulip' })),
             onSome: Effect.succeed,
           }),
         ),
@@ -1125,9 +1139,9 @@ export const zulipAdapter = (
     // (currentMode, streamIsListening, shouldDeliver) snapshot the record.
     const inboxRef = yield* SynchronizedRef.make<InboxState>({
       mentionsSubscribed: false,
-      subscribedChannels: HashSet.empty<string>(),
-      newTopicsChannels: HashSet.empty<string>(),
-      seenTopicsByChannel: HashMap.empty<string, HashSet.HashSet<string>>(),
+      subscribedChannels: HashSet.empty<ChannelName>(),
+      newTopicsChannels: HashSet.empty<ChannelName>(),
+      seenTopicsByChannel: HashMap.empty<ChannelName, HashSet.HashSet<ThreadName>>(),
       registration: Option.none(),
     })
     // Adapter-scoped so the cache outlives any single `events()`
@@ -1158,21 +1172,21 @@ export const zulipAdapter = (
     const shouldDeliver = (event: InboundEvent): Effect.Effect<boolean> => {
       if (event.kind !== 'message-posted') return Effect.succeed(true)
       const message = event.message
-      const cid = message.ref.channel.id
+      const cname = message.ref.channel.name
       const thread = message.ref.thread
       return SynchronizedRef.get(boundRef).pipe(
         Effect.flatMap((current) => {
           const me = Option.getOrUndefined(current)?.identity
           return SynchronizedRef.modify(inboxRef, (state) => {
-            if (!HashSet.has(state.newTopicsChannels, cid)) return [true, state]
+            if (!HashSet.has(state.newTopicsChannels, cname)) return [true, state]
             // Tick the seen state regardless of whether another narrow also
             // covers this channel — so unsubscribing the broader narrow later
             // does not re-fire topics already observed.
             const [isFirstOfTopic, ticked] = Option.match(thread, {
               onNone: () => [false, state] as const,
-              onSome: (t) => observeNewTopic(state, cid, t.name),
+              onSome: (t) => observeNewTopic(state, cname, t.name),
             })
-            if (HashSet.has(state.subscribedChannels, cid)) return [true, ticked]
+            if (HashSet.has(state.subscribedChannels, cname)) return [true, ticked]
             if (
               state.mentionsSubscribed &&
               me !== undefined &&
@@ -1234,15 +1248,15 @@ export const zulipAdapter = (
           // already listened to under any narrow — that decides whether the
           // remote /users/me/subscriptions call is needed.
           return SynchronizedRef.modify(inboxRef, (state) => {
-            const wasListening = streamIsListening(state, channel.id)
+            const wasListening = streamIsListening(state, channel)
             const next: InboxState = Predicate.hasProperty(target, 'kind')
               ? {
                   ...state,
-                  newTopicsChannels: HashSet.add(state.newTopicsChannels, channel.id),
+                  newTopicsChannels: HashSet.add(state.newTopicsChannels, channel),
                 }
               : {
                   ...state,
-                  subscribedChannels: HashSet.add(state.subscribedChannels, channel.id),
+                  subscribedChannels: HashSet.add(state.subscribedChannels, channel),
                 }
             return [wasListening, next]
           }).pipe(
@@ -1251,7 +1265,7 @@ export const zulipAdapter = (
                 ? Effect.void
                 : minterHttp
                     .post('/users/me/subscriptions', subscriptionsResponseSchema, {
-                      subscriptions: JSON.stringify([{ name: channel.name }]),
+                      subscriptions: JSON.stringify([{ name: channel }]),
                     })
                     .pipe(Effect.asVoid)
               // /users/me/subscriptions is "me" = minter. The
@@ -1278,21 +1292,21 @@ export const zulipAdapter = (
             const next: InboxState = Predicate.hasProperty(target, 'kind')
               ? {
                   ...state,
-                  newTopicsChannels: HashSet.remove(state.newTopicsChannels, channel.id),
-                  seenTopicsByChannel: HashMap.remove(state.seenTopicsByChannel, channel.id),
+                  newTopicsChannels: HashSet.remove(state.newTopicsChannels, channel),
+                  seenTopicsByChannel: HashMap.remove(state.seenTopicsByChannel, channel),
                 }
               : {
                   ...state,
-                  subscribedChannels: HashSet.remove(state.subscribedChannels, channel.id),
+                  subscribedChannels: HashSet.remove(state.subscribedChannels, channel),
                 }
-            return [streamIsListening(next, channel.id), next]
+            return [streamIsListening(next, channel), next]
           }).pipe(
             Effect.flatMap((stillListening) =>
               stillListening
                 ? Effect.void
                 : minterHttp
                     .delete('/users/me/subscriptions', subscriptionsResponseSchema, {
-                      subscriptions: JSON.stringify([channel.name]),
+                      subscriptions: JSON.stringify([channel]),
                     })
                     .pipe(Effect.asVoid),
             ),
@@ -1381,12 +1395,12 @@ export const zulipAdapter = (
 
     const history: HistoryReader = {
       readChannel: (channel, range) =>
-        readMessages(channel, range, [{ operator: 'channel', operand: channel.name }]).pipe(
+        readMessages(range, [{ operator: 'channel', operand: channel }]).pipe(
           Effect.mapError((cause) => new HistoryError({ operation: 'readChannel', cause })),
         ),
       readThread: (channel, threadName, range) =>
-        readMessages(channel, range ?? {}, [
-          { operator: 'channel', operand: channel.name },
+        readMessages(range ?? {}, [
+          { operator: 'channel', operand: channel },
           { operator: 'topic', operand: threadName },
         ]).pipe(Effect.mapError((cause) => new HistoryError({ operation: 'readThread', cause }))),
       recentThreads: (sender, opts) => {

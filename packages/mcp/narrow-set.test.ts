@@ -6,6 +6,7 @@ import type {
   MessageRef,
 } from '@commy/core/ports'
 import {
+  ChannelPermalinkSchema,
   decodeChannelIdSync,
   decodeChannelNameSync,
   decodeDisplayNameSync,
@@ -31,6 +32,9 @@ const buildMessageRef = (channelName: string, threadName?: string): MessageRef =
   const channel = {
     id: decodeChannelIdSync(channelName),
     name: decodeChannelNameSync(channelName),
+    permalink: ChannelPermalinkSchema.make(
+      `https://zulip.example.com/#narrow/channel/${channelName}`,
+    ),
   }
   return threadName === undefined
     ? { id: decodeMessageIdSync(`msg-${channelName}`), channel, thread: Option.none() }

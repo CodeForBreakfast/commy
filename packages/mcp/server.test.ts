@@ -3,7 +3,6 @@ import { EventEmitter } from 'node:events'
 import { captureLogger, stderrLoggerLayer } from '@commy/core/logging'
 import type {
   AcquiredIdentity,
-  ChannelRef,
   Directory,
   HistoryReader,
   Identity,
@@ -18,7 +17,6 @@ import type {
 } from '@commy/core/ports'
 import {
   type ChannelName,
-  decodeChannelIdSync,
   decodeChannelNameSync,
   decodeDisplayNameSync,
   decodeIdentityIdSync,
@@ -189,8 +187,8 @@ const buildFakeAdapter = (
     replay: (_since: TimestampType) => Effect.succeed([]),
   }
   const history: HistoryReader = {
-    readChannel: (_channel: ChannelRef, _range: Range) => Effect.succeed([]),
-    readThread: (_channel: ChannelRef, _threadName, _range?: Range) => Effect.succeed([]),
+    readChannel: (_channel: ChannelName, _range: Range) => Effect.succeed([]),
+    readThread: (_channel: ChannelName, _threadName, _range?: Range) => Effect.succeed([]),
     recentThreads: () => Effect.succeed([]),
     messagePermalink: () => Effect.succeed(Option.none()),
   }
@@ -288,10 +286,7 @@ test('lazy mode still applies COMMY_SUBSCRIBE at boot (pre-acquire subscriptions
   }
   await runProgram(env, fake.adapter)
   expect(fake.calls.acquired).toEqual([])
-  expect(fake.calls.subscribed).toEqual([
-    { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
-    'mentions',
-  ])
+  expect(fake.calls.subscribed).toEqual([decodeChannelNameSync('home'), 'mentions'])
   expect(fake.calls.closes.count).toBe(1)
 })
 
@@ -357,9 +352,9 @@ test('main drives a real memory adapter through acquire + env subscribe + close'
   // Type-1 default `mentions` lands first (post-acquire); the env tokens follow.
   expect(subscribed).toEqual([
     'mentions',
-    { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
+    decodeChannelNameSync('home'),
     {
-      channel: { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
+      channel: decodeChannelNameSync('home'),
       thread: decodeThreadNameSync('payments'),
     },
     'mentions',
@@ -382,10 +377,7 @@ test('main aborts non-zero when COMMY_SUBSCRIBE contains a malformed token', asy
   )
   // Type-1 default (`mentions`) lands first, then the env channel sub,
   // then the parser aborts on the malformed token before reaching `channel:llm-feed`.
-  expect(fake.calls.subscribed).toEqual([
-    'mentions',
-    { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
-  ])
+  expect(fake.calls.subscribed).toEqual(['mentions', decodeChannelNameSync('home')])
   expect(fake.calls.closes.count).toBe(1)
 })
 
@@ -400,9 +392,9 @@ test('main applies env-driven subscriptions in order after acquire and Type-1 de
   // Type-1 default `mentions` (no project) comes first; env tokens follow.
   expect(fake.calls.subscribed).toEqual([
     'mentions',
-    { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
+    decodeChannelNameSync('home'),
     {
-      channel: { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
+      channel: decodeChannelNameSync('home'),
       thread: decodeThreadNameSync('payments'),
     },
     'mentions',
@@ -457,10 +449,10 @@ test('persistent mode + project registers Type-1 defaults (mentions + new-topics
     'mentions',
     {
       kind: 'new-topics-in-channel',
-      channel: { id: decodeChannelIdSync('foo'), name: decodeChannelNameSync('foo') },
+      channel: decodeChannelNameSync('foo'),
     },
     {
-      channel: { id: decodeChannelIdSync('foo'), name: decodeChannelNameSync('foo') },
+      channel: decodeChannelNameSync('foo'),
       thread: decodeThreadNameSync('general'),
     },
   ])
@@ -489,13 +481,13 @@ test('Type-1 defaults register after acquire and before COMMY_SUBSCRIBE entries'
     'mentions',
     {
       kind: 'new-topics-in-channel',
-      channel: { id: decodeChannelIdSync('foo'), name: decodeChannelNameSync('foo') },
+      channel: decodeChannelNameSync('foo'),
     },
     {
-      channel: { id: decodeChannelIdSync('foo'), name: decodeChannelNameSync('foo') },
+      channel: decodeChannelNameSync('foo'),
       thread: decodeThreadNameSync('general'),
     },
-    { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
+    decodeChannelNameSync('home'),
   ])
 })
 

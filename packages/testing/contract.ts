@@ -18,6 +18,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import type {
   AgentComms,
+  ChannelName,
   ChannelRef,
   Identity,
   InboundEvent,
@@ -27,7 +28,6 @@ import type {
 } from '@commy/core/ports'
 import {
   decodeBotNameSync,
-  decodeChannelIdSync,
   decodeChannelNameSync,
   decodeDisplayNameSync,
   decodeEmojiSync,
@@ -100,7 +100,7 @@ export interface ContractEnv {
    */
   readonly peerPost?: (
     peer: Identity,
-    channel: ChannelRef,
+    channel: ChannelName,
     body: MessageBody,
     opts?: PostOpts,
   ) => Effect.Effect<void>
@@ -180,7 +180,7 @@ const awaitEvent = (
  */
 const postSpaced = (
   comms: AgentComms,
-  channel: ChannelRef,
+  channel: ChannelName,
   bodies: ReadonlyArray<MessageBody>,
 ): Effect.Effect<void, UnknownChannel | PublisherError> =>
   Effect.forEach(
@@ -225,7 +225,10 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
       Effect.runPromise(
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
-          const ref = yield* env.comms.publisher.post(channel, decodeMessageBodySync('hello world'))
+          const ref = yield* env.comms.publisher.post(
+            channel.name,
+            decodeMessageBodySync('hello world'),
+          )
           // Channel identity, not the whole ref: a substrate may decorate the
           // returned ChannelRef (e.g. Zulip hangs a permalink off it)
           // beyond the bare {id,name} the seed factory hands back.
@@ -241,10 +244,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
     test('publisher.post on an unknown channel fails with UnknownChannel', () =>
       Effect.runPromise(
         Effect.gen(function* () {
-          const phantom: ChannelRef = {
-            id: decodeChannelIdSync('999999999'),
-            name: decodeChannelNameSync('phantom-channel-never-seeded'),
-          }
+          const phantom = decodeChannelNameSync('phantom-channel-never-seeded')
           const error = yield* Effect.flip(
             env.comms.publisher.post(phantom, decodeMessageBodySync('should fail')),
           )
@@ -273,8 +273,8 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
           const me = yield* env.comms.identity.currentIdentity()
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('round-trip'))
-          const messages = yield* env.comms.history.readChannel(channel, {})
+          yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('round-trip'))
+          const messages = yield* env.comms.history.readChannel(channel.name, {})
           const found = messages.find((m) => m.body === 'round-trip')
           expect(found).toBeDefined()
           expect(found?.sender.id).toEqual(me.id)
@@ -286,10 +286,10 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
           const thread = decodeThreadNameSync('design')
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('in thread'), {
+          yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('in thread'), {
             thread,
           })
-          const messages = yield* env.comms.history.readThread(channel, thread, {})
+          const messages = yield* env.comms.history.readThread(channel.name, thread, {})
           const found = findByBody(messages, 'in thread')
           expect(found).toBeDefined()
         }),
@@ -299,13 +299,13 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
       Effect.runPromise(
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('topic-a'), {
+          yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('topic-a'), {
             thread: decodeThreadNameSync('alpha'),
           })
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('topic-b'), {
+          yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('topic-b'), {
             thread: decodeThreadNameSync('bravo'),
           })
-          const messages = yield* env.comms.history.readChannel(channel, {})
+          const messages = yield* env.comms.history.readChannel(channel.name, {})
           const bodies = messages.map((m) => m.body)
           expect(bodies).toContain(decodeMessageBodySync('topic-a'))
           expect(bodies).toContain(decodeMessageBodySync('topic-b'))
@@ -318,13 +318,13 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
           const channel = yield* env.seedChannel('lobby')
           const alice = yield* env.seedAgent('alice')
           yield* env.comms.publisher.post(
-            channel,
+            channel.name,
             decodeMessageBodySync(`@**${alice.name}** wake up`),
             {
               mentions: [alice],
             },
           )
-          const messages = yield* env.comms.history.readChannel(channel, {})
+          const messages = yield* env.comms.history.readChannel(channel.name, {})
           const found = messages.find((m) => m.body.includes('wake up'))
           expect(found).toBeDefined()
           expect(found?.mentions.map((m) => m.id)).toEqual([alice.id])
@@ -340,10 +340,10 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
           const alice = yield* env.seedAgent('alice')
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('oi look here'), {
+          yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('oi look here'), {
             mentions: [alice],
           })
-          const messages = yield* env.comms.history.readChannel(channel, {})
+          const messages = yield* env.comms.history.readChannel(channel.name, {})
           const found = messages.find((m) => m.body === 'oi look here')
           expect(found).toBeDefined()
         }),
@@ -358,8 +358,8 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
           const channel = yield* env.seedChannel('lobby')
           const alice = yield* env.seedAgent('alice')
           const body = decodeMessageBodySync(`@**${alice.name}** look at this`)
-          yield* env.comms.publisher.post(channel, body, { mentions: [alice] })
-          const messages = yield* env.comms.history.readChannel(channel, {})
+          yield* env.comms.publisher.post(channel.name, body, { mentions: [alice] })
+          const messages = yield* env.comms.history.readChannel(channel.name, {})
           const found = messages.find((m) => m.body === body)
           if (found === undefined) throw new Error('expected posted message in channel history')
           const occurrences = found.body.split(`@**${alice.name}**`).length - 1
@@ -372,11 +372,11 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
           const parentRef = yield* env.comms.publisher.post(
-            channel,
+            channel.name,
             decodeMessageBodySync('parent'),
           )
           const followUp: MessageRef = yield* env.comms.publisher.post(
-            channel,
+            channel.name,
             decodeMessageBodySync('child'),
             { replyTo: parentRef },
           )
@@ -390,11 +390,11 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
           const ref = yield* env.comms.publisher.post(
-            channel,
+            channel.name,
             decodeMessageBodySync('original body'),
           )
           yield* env.comms.publisher.edit(ref, decodeMessageBodySync('replacement body'))
-          const messages = yield* env.comms.history.readChannel(channel, {})
+          const messages = yield* env.comms.history.readChannel(channel.name, {})
           const found = messages.find((m) => String(m.ref.id) === String(ref.id))
           if (found === undefined) throw new Error('expected edited message in channel history')
           expect(found.body).toBe(decodeMessageBodySync('replacement body'))
@@ -409,11 +409,15 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
           const thread = decodeThreadNameSync('design')
-          const ref = yield* env.comms.publisher.post(channel, decodeMessageBodySync('first cut'), {
-            thread,
-          })
+          const ref = yield* env.comms.publisher.post(
+            channel.name,
+            decodeMessageBodySync('first cut'),
+            {
+              thread,
+            },
+          )
           yield* env.comms.publisher.edit(ref, decodeMessageBodySync('second cut'))
-          const messages = yield* env.comms.history.readThread(channel, thread, {})
+          const messages = yield* env.comms.history.readThread(channel.name, thread, {})
           const found = messages.find((m) => String(m.ref.id) === String(ref.id))
           if (found === undefined) throw new Error('expected edited message in thread history')
           expect(found.body).toBe(decodeMessageBodySync('second cut'))
@@ -446,7 +450,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
           const ref = yield* env.comms.publisher.post(
-            channel,
+            channel.name,
             decodeMessageBodySync('react target'),
           )
           yield* env.comms.publisher.react(ref, decodeEmojiSync('thumbs_up'))
@@ -460,11 +464,11 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
           const channel = yield* env.seedChannel('lobby')
           const me = yield* env.comms.identity.currentIdentity()
           const ref = yield* env.comms.publisher.post(
-            channel,
+            channel.name,
             decodeMessageBodySync('reaction round-trip'),
           )
           yield* env.comms.publisher.react(ref, decodeEmojiSync('thumbs_up'))
-          const messages = yield* env.comms.history.readChannel(channel, {})
+          const messages = yield* env.comms.history.readChannel(channel.name, {})
           const found = messages.find((m) => m.body === 'reaction round-trip')
           if (found === undefined) throw new Error('expected reaction target in channel history')
           const thumbs = found.reactions.find((r) => r.emoji === 'thumbs_up')
@@ -478,12 +482,12 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
           const ref = yield* env.comms.publisher.post(
-            channel,
+            channel.name,
             decodeMessageBodySync('reaction removal'),
           )
           yield* env.comms.publisher.react(ref, decodeEmojiSync('thumbs_up'))
           yield* env.comms.publisher.unreact(ref, decodeEmojiSync('thumbs_up'))
-          const messages = yield* env.comms.history.readChannel(channel, {})
+          const messages = yield* env.comms.history.readChannel(channel.name, {})
           const found = messages.find((m) => m.body === 'reaction removal')
           if (found === undefined)
             throw new Error('expected reaction-removal target in channel history')
@@ -495,8 +499,8 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
       Effect.runPromise(
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('plain message'))
-          const messages = yield* env.comms.history.readChannel(channel, {})
+          yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('plain message'))
+          const messages = yield* env.comms.history.readChannel(channel.name, {})
           const found = messages.find((m) => m.body === 'plain message')
           if (found === undefined) throw new Error('expected plain message in channel history')
           expect(found.reactions).toEqual([])
@@ -507,15 +511,15 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
       Effect.runPromise(
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
-          yield* postSpaced(env.comms, channel, [
+          yield* postSpaced(env.comms, channel.name, [
             decodeMessageBodySync('before'),
             decodeMessageBodySync('pivot'),
             decodeMessageBodySync('after'),
           ])
-          const everything = yield* env.comms.history.readChannel(channel, {})
+          const everything = yield* env.comms.history.readChannel(channel.name, {})
           const pivot = everything.find((m) => m.body === 'pivot')
           if (pivot === undefined) throw new Error('expected pivot message in channel history')
-          const filtered = yield* env.comms.history.readChannel(channel, { since: pivot.ts })
+          const filtered = yield* env.comms.history.readChannel(channel.name, { since: pivot.ts })
           const bodies = filtered.map((m) => m.body)
           expect(bodies).toContain(decodeMessageBodySync('pivot'))
           expect(bodies).not.toContain(decodeMessageBodySync('before'))
@@ -526,15 +530,15 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
       Effect.runPromise(
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
-          yield* postSpaced(env.comms, channel, [
+          yield* postSpaced(env.comms, channel.name, [
             decodeMessageBodySync('before'),
             decodeMessageBodySync('pivot'),
             decodeMessageBodySync('after'),
           ])
-          const everything = yield* env.comms.history.readChannel(channel, {})
+          const everything = yield* env.comms.history.readChannel(channel.name, {})
           const pivot = everything.find((m) => m.body === 'pivot')
           if (pivot === undefined) throw new Error('expected pivot message in channel history')
-          const filtered = yield* env.comms.history.readChannel(channel, { until: pivot.ts })
+          const filtered = yield* env.comms.history.readChannel(channel.name, { until: pivot.ts })
           const bodies = filtered.map((m) => m.body)
           expect(bodies).toContain(decodeMessageBodySync('pivot'))
           expect(bodies).not.toContain(decodeMessageBodySync('after'))
@@ -545,15 +549,15 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
       Effect.runPromise(
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
-          yield* postSpaced(env.comms, channel, [
+          yield* postSpaced(env.comms, channel.name, [
             decodeMessageBodySync('before'),
             decodeMessageBodySync('pivot'),
             decodeMessageBodySync('after'),
           ])
-          const everything = yield* env.comms.history.readChannel(channel, {})
+          const everything = yield* env.comms.history.readChannel(channel.name, {})
           const pivot = everything.find((m) => m.body === 'pivot')
           if (pivot === undefined) throw new Error('expected pivot message in channel history')
-          const filtered = yield* env.comms.history.readChannel(channel, {
+          const filtered = yield* env.comms.history.readChannel(channel.name, {
             since: pivot.ts,
             until: pivot.ts,
           })
@@ -654,13 +658,13 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
       Effect.runPromise(
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('only'))
-          const everything = yield* env.comms.history.readChannel(channel, {})
+          yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('only'))
+          const everything = yield* env.comms.history.readChannel(channel.name, {})
           const last = everything[everything.length - 1]
           if (last === undefined)
             throw new Error('expected at least one message in channel history')
           const future = decodeTimestampSync(last.ts + 3600)
-          const filtered = yield* env.comms.history.readChannel(channel, { since: future })
+          const filtered = yield* env.comms.history.readChannel(channel.name, { since: future })
           expect(filtered).toEqual([])
         }),
       ))
@@ -682,9 +686,9 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
           Effect.gen(function* () {
             const channel = yield* env.seedChannel('lobby')
             const me = yield* env.comms.identity.currentIdentity()
-            yield* env.comms.inbox.subscribe(channel)
+            yield* env.comms.inbox.subscribe(channel.name)
             const queue = yield* eventQueue(env.comms)
-            yield* env.comms.publisher.post(channel, decodeMessageBodySync('event-target'))
+            yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('event-target'))
             const event = yield* awaitEvent(
               queue,
               'message-posted for the post',
@@ -706,8 +710,8 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         Effect.scoped(
           Effect.gen(function* () {
             const channel = yield* env.seedChannel('lobby')
-            yield* env.comms.inbox.subscribe(channel)
-            yield* env.comms.publisher.post(channel, decodeMessageBodySync('pre-iterate'))
+            yield* env.comms.inbox.subscribe(channel.name)
+            yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('pre-iterate'))
             const queue = yield* eventQueue(env.comms)
             const event = yield* awaitEvent(
               queue,
@@ -741,9 +745,9 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             const channel = yield* env.seedChannel('lobby')
             const me = yield* env.comms.identity.currentIdentity()
             const peer = yield* env.seedAgent('alice')
-            yield* env.comms.inbox.subscribe(channel)
+            yield* env.comms.inbox.subscribe(channel.name)
             const queue = yield* eventQueue(env.comms)
-            yield* peerPost(peer, channel, decodeMessageBodySync(`@**${me.name}** wake up`), {
+            yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** wake up`), {
               mentions: [me],
             })
             const event = yield* awaitEvent(
@@ -770,10 +774,10 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             const channel = yield* env.seedChannel('lobby')
             const me = yield* env.comms.identity.currentIdentity()
             const peer = yield* env.seedAgent('alice')
-            yield* env.comms.inbox.subscribe(channel)
+            yield* env.comms.inbox.subscribe(channel.name)
             yield* env.comms.inbox.subscribe('mentions')
             const queue = yield* eventQueue(env.comms)
-            yield* peerPost(peer, channel, decodeMessageBodySync(`@**${me.name}** wake up`), {
+            yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** wake up`), {
               mentions: [me],
             })
             const event = yield* awaitEvent(
@@ -796,7 +800,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             const alice = yield* env.seedAgent('alice')
             yield* env.comms.inbox.subscribe('mentions')
             const queue = yield* eventQueue(env.comms)
-            yield* env.comms.publisher.post(channel, decodeMessageBodySync('hello alice'), {
+            yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('hello alice'), {
               mentions: [alice],
             })
             const result = yield* Queue.take(queue).pipe(Effect.timeoutOption(Duration.millis(100)))
@@ -811,10 +815,10 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
           Effect.gen(function* () {
             const channel = yield* env.seedChannel('lobby')
             const me = yield* env.comms.identity.currentIdentity()
-            yield* env.comms.inbox.subscribe(channel)
+            yield* env.comms.inbox.subscribe(channel.name)
             const queue = yield* eventQueue(env.comms)
             const ref = yield* env.comms.publisher.post(
-              channel,
+              channel.name,
               decodeMessageBodySync('react target'),
             )
             // Drain message-posted first so the cache that backs reaction
@@ -853,10 +857,10 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             const channel = yield* env.seedChannel('lobby')
             const me = yield* env.comms.identity.currentIdentity()
             const ref = yield* env.comms.publisher.post(
-              channel,
+              channel.name,
               decodeMessageBodySync('pre-subscribe target'),
             )
-            yield* env.comms.inbox.subscribe(channel)
+            yield* env.comms.inbox.subscribe(channel.name)
             const queue = yield* eventQueue(env.comms)
             yield* env.comms.publisher.react(ref, decodeEmojiSync('thumbs_up'))
             const reacted = yield* awaitEvent(
@@ -880,10 +884,10 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
           Effect.gen(function* () {
             const channel = yield* env.seedChannel('lobby')
             const me = yield* env.comms.identity.currentIdentity()
-            yield* env.comms.inbox.subscribe(channel)
+            yield* env.comms.inbox.subscribe(channel.name)
             const queue = yield* eventQueue(env.comms)
             const ref = yield* env.comms.publisher.post(
-              channel,
+              channel.name,
               decodeMessageBodySync('react then unreact'),
             )
             yield* awaitEvent(
@@ -915,10 +919,13 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         Effect.scoped(
           Effect.gen(function* () {
             const channel = yield* env.seedChannel('lobby')
-            yield* env.comms.inbox.subscribe(channel)
-            yield* env.comms.inbox.unsubscribe(channel)
+            yield* env.comms.inbox.subscribe(channel.name)
+            yield* env.comms.inbox.unsubscribe(channel.name)
             const queue = yield* eventQueue(env.comms)
-            yield* env.comms.publisher.post(channel, decodeMessageBodySync('should-not-arrive'))
+            yield* env.comms.publisher.post(
+              channel.name,
+              decodeMessageBodySync('should-not-arrive'),
+            )
             const result = yield* Queue.take(queue).pipe(Effect.timeoutOption(Duration.millis(100)))
             expect(Option.isNone(result)).toBe(true)
           }),
@@ -929,12 +936,12 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
       Effect.runPromise(
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
-          yield* postSpaced(env.comms, channel, [
+          yield* postSpaced(env.comms, channel.name, [
             decodeMessageBodySync('before-pivot'),
             decodeMessageBodySync('pivot'),
             decodeMessageBodySync('after-pivot'),
           ])
-          const everything = yield* env.comms.history.readChannel(channel, {})
+          const everything = yield* env.comms.history.readChannel(channel.name, {})
           const pivot = everything.find((m) => m.body === 'pivot')
           if (pivot === undefined) throw new Error('expected pivot message in channel history')
           const events = yield* env.comms.inbox.replay(pivot.ts)
@@ -955,9 +962,12 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         Effect.scoped(
           Effect.gen(function* () {
             const channel = yield* env.seedChannel('lobby')
-            yield* env.comms.inbox.subscribe({ kind: 'new-topics-in-channel', channel })
+            yield* env.comms.inbox.subscribe({
+              kind: 'new-topics-in-channel',
+              channel: channel.name,
+            })
             const queue = yield* eventQueue(env.comms)
-            yield* env.comms.publisher.post(channel, decodeMessageBodySync('first in alpha'), {
+            yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('first in alpha'), {
               thread: decodeThreadNameSync('alpha'),
             })
             const event = yield* awaitEvent(
@@ -979,9 +989,12 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         Effect.scoped(
           Effect.gen(function* () {
             const channel = yield* env.seedChannel('lobby')
-            yield* env.comms.inbox.subscribe({ kind: 'new-topics-in-channel', channel })
+            yield* env.comms.inbox.subscribe({
+              kind: 'new-topics-in-channel',
+              channel: channel.name,
+            })
             const queue = yield* eventQueue(env.comms)
-            yield* env.comms.publisher.post(channel, decodeMessageBodySync('first in alpha'), {
+            yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('first in alpha'), {
               thread: decodeThreadNameSync('alpha'),
             })
             yield* awaitEvent(
@@ -990,9 +1003,13 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
               (e) => e.kind === 'message-posted' && e.message.body.includes('first in alpha'),
             )
 
-            yield* env.comms.publisher.post(channel, decodeMessageBodySync('second in alpha'), {
-              thread: decodeThreadNameSync('alpha'),
-            })
+            yield* env.comms.publisher.post(
+              channel.name,
+              decodeMessageBodySync('second in alpha'),
+              {
+                thread: decodeThreadNameSync('alpha'),
+              },
+            )
             const result = yield* Queue.take(queue).pipe(Effect.timeoutOption(Duration.millis(200)))
             expect(Option.isNone(result)).toBe(true)
           }),
@@ -1004,9 +1021,12 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         Effect.scoped(
           Effect.gen(function* () {
             const channel = yield* env.seedChannel('lobby')
-            yield* env.comms.inbox.subscribe({ kind: 'new-topics-in-channel', channel })
+            yield* env.comms.inbox.subscribe({
+              kind: 'new-topics-in-channel',
+              channel: channel.name,
+            })
             const queue = yield* eventQueue(env.comms)
-            yield* env.comms.publisher.post(channel, decodeMessageBodySync('first in alpha'), {
+            yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('first in alpha'), {
               thread: decodeThreadNameSync('alpha'),
             })
             yield* awaitEvent(
@@ -1015,10 +1035,14 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
               (e) => e.kind === 'message-posted' && e.message.body.includes('first in alpha'),
             )
 
-            yield* env.comms.publisher.post(channel, decodeMessageBodySync('second in alpha'), {
-              thread: decodeThreadNameSync('alpha'),
-            })
-            yield* env.comms.publisher.post(channel, decodeMessageBodySync('first in bravo'), {
+            yield* env.comms.publisher.post(
+              channel.name,
+              decodeMessageBodySync('second in alpha'),
+              {
+                thread: decodeThreadNameSync('alpha'),
+              },
+            )
+            yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('first in bravo'), {
               thread: decodeThreadNameSync('bravo'),
             })
             const next = yield* awaitEvent(
@@ -1039,13 +1063,17 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         Effect.scoped(
           Effect.gen(function* () {
             const channel = yield* env.seedChannel('lobby')
-            const target = { kind: 'new-topics-in-channel' as const, channel }
+            const target = { kind: 'new-topics-in-channel' as const, channel: channel.name }
             yield* env.comms.inbox.subscribe(target)
             yield* env.comms.inbox.unsubscribe(target)
             const queue = yield* eventQueue(env.comms)
-            yield* env.comms.publisher.post(channel, decodeMessageBodySync('should-not-arrive'), {
-              thread: decodeThreadNameSync('alpha'),
-            })
+            yield* env.comms.publisher.post(
+              channel.name,
+              decodeMessageBodySync('should-not-arrive'),
+              {
+                thread: decodeThreadNameSync('alpha'),
+              },
+            )
             const result = yield* Queue.take(queue).pipe(Effect.timeoutOption(Duration.millis(200)))
             expect(Option.isNone(result)).toBe(true)
           }),
@@ -1056,8 +1084,8 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
       Effect.runPromise(
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
-          yield* env.comms.publisher.post(channel, decodeMessageBodySync('only'))
-          const everything = yield* env.comms.history.readChannel(channel, {})
+          yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('only'))
+          const everything = yield* env.comms.history.readChannel(channel.name, {})
           const last = everything[everything.length - 1]
           if (last === undefined)
             throw new Error('expected at least one message in channel history')

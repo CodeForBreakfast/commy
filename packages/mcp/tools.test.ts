@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   decodeBotNameSync,
-  decodeChannelIdSync,
   decodeChannelNameSync,
   decodeMessageBodySync,
   decodeThreadNameSync,
@@ -236,12 +235,12 @@ test('current_identity includes recent_threads showing where the bot posted', ()
             cache.rememberChannel(yield* adapter.seedChannel('project-x').pipe(Effect.orDie))
             yield* ensureBound()
             yield* adapter.publisher.post(
-              { id: decodeChannelIdSync('1'), name: decodeChannelNameSync('project-x') },
+              decodeChannelNameSync('project-x'),
               decodeMessageBodySync('first response'),
               { thread: decodeThreadNameSync('bug-report') },
             )
             yield* adapter.publisher.post(
-              { id: decodeChannelIdSync('1'), name: decodeChannelNameSync('project-x') },
+              decodeChannelNameSync('project-x'),
               decodeMessageBodySync('second response'),
               { thread: decodeThreadNameSync('feature-request') },
             )
@@ -567,8 +566,8 @@ test('read_channel returns posted messages within the given range', () =>
             yield* ensureBound()
             const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
             cache.rememberChannel(channelRef)
-            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('hello one'))
-            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('hello two'))
+            yield* adapter.publisher.post(channelRef.name, decodeMessageBodySync('hello one'))
+            yield* adapter.publisher.post(channelRef.name, decodeMessageBodySync('hello two'))
           }),
         )
         const result = yield* Effect.promise(() =>
@@ -594,9 +593,9 @@ test('read_channel honours the limit argument', () =>
             yield* ensureBound()
             const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
             cache.rememberChannel(channelRef)
-            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('one'))
-            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('two'))
-            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('three'))
+            yield* adapter.publisher.post(channelRef.name, decodeMessageBodySync('one'))
+            yield* adapter.publisher.post(channelRef.name, decodeMessageBodySync('two'))
+            yield* adapter.publisher.post(channelRef.name, decodeMessageBodySync('three'))
           }),
         )
         const result = yield* Effect.promise(() =>
@@ -649,7 +648,7 @@ test('read_channel decorates each message with message and channel permalinks', 
             yield* ensureBound()
             const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
             cache.rememberChannel(channelRef)
-            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('hello one'))
+            yield* adapter.publisher.post(channelRef.name, decodeMessageBodySync('hello one'))
           }),
         )
         const result = yield* Effect.promise(() =>
@@ -757,7 +756,7 @@ test('message_link builds a permalink from a channel hint for an uncached id', (
     ),
   ))
 
-test('subscribe with channel:<name> calls inbox.subscribe with a matching ChannelRef', () =>
+test('subscribe with channel:<name> calls inbox.subscribe with a matching ChannelName', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -781,7 +780,7 @@ test('subscribe with channel:<name> calls inbox.subscribe with a matching Channe
         )
         expect(result.isError).toBeFalsy()
         expect(subscribed).toHaveLength(1)
-        expect(subscribed[0]).toMatchObject({ name: channelRef.name })
+        expect(subscribed[0]).toBe(channelRef.name)
         // narrowSet is updated alongside the substrate call.
         expect(rig.narrowSet.size()).toBe(1)
       }),
@@ -862,7 +861,7 @@ test('post returns message_id + channel_name and posts via the adapter', () =>
         expect(sc.channel_name).toBe('home')
         expect(sc.thread).toBeNull()
         const channelRef = yield* rig.adapter.seedChannel('home').pipe(Effect.orDie)
-        const history = yield* rig.adapter.history.readChannel(channelRef, {})
+        const history = yield* rig.adapter.history.readChannel(channelRef.name, {})
         expect(history.map((m) => m.body)).toContain(decodeMessageBodySync('hello from tool'))
       }),
     ),
@@ -915,7 +914,7 @@ test('post to a thread auto-subscribes the poster to that thread', () =>
         expect(result.isError).toBeFalsy()
         expect(subscribed).toEqual([
           expect.objectContaining({
-            channel: expect.objectContaining({ name: 'home' }),
+            channel: 'home',
             thread: 'topic-X',
           }),
         ])
@@ -1025,12 +1024,15 @@ test('react with explicit channel_name works on a cache-miss id', () =>
             const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
             cache.rememberChannel(channelRef)
             // post directly via adapter — bypasses the plugin's MessageRef cache
-            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('pre-existing message'))
+            yield* adapter.publisher.post(
+              channelRef.name,
+              decodeMessageBodySync('pre-existing message'),
+            )
           }),
         )
         // We don't know the adapter-allocated message id externally, so reach in.
         const homeRef = yield* rig.adapter.seedChannel('home').pipe(Effect.orDie)
-        const history = yield* rig.adapter.history.readChannel(homeRef, {})
+        const history = yield* rig.adapter.history.readChannel(homeRef.name, {})
         const messageId = history[0]?.ref.id
         expect(messageId).toBeDefined()
         const reacted = yield* Effect.promise(() =>
@@ -1124,7 +1126,7 @@ test('edit_message rewrites the body, visible via history.readChannel', () =>
         )
         expect(edited.isError).toBeFalsy()
         const homeRef = yield* rig.adapter.seedChannel('home').pipe(Effect.orDie)
-        const history = yield* rig.adapter.history.readChannel(homeRef, {})
+        const history = yield* rig.adapter.history.readChannel(homeRef.name, {})
         expect(history.map((m) => m.body)).toContain(decodeMessageBodySync('replacement'))
         expect(history.map((m) => m.body)).not.toContain(decodeMessageBodySync('original'))
       }),
@@ -1140,11 +1142,11 @@ test('edit_message with explicit channel_name works on a cache-miss id', () =>
             yield* ensureBound()
             const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
             cache.rememberChannel(channelRef)
-            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('pre-existing'))
+            yield* adapter.publisher.post(channelRef.name, decodeMessageBodySync('pre-existing'))
           }),
         )
         const homeRef = yield* rig.adapter.seedChannel('home').pipe(Effect.orDie)
-        const history = yield* rig.adapter.history.readChannel(homeRef, {})
+        const history = yield* rig.adapter.history.readChannel(homeRef.name, {})
         const messageId = history[0]?.ref.id
         expect(messageId).toBeDefined()
         const edited = yield* Effect.promise(() =>
@@ -1155,7 +1157,7 @@ test('edit_message with explicit channel_name works on a cache-miss id', () =>
         )
         expect(edited.isError).toBeFalsy()
         const afterRef = yield* rig.adapter.seedChannel('home').pipe(Effect.orDie)
-        const after = yield* rig.adapter.history.readChannel(afterRef, {})
+        const after = yield* rig.adapter.history.readChannel(afterRef.name, {})
         expect(after[0]?.body).toBe(decodeMessageBodySync('amended'))
       }),
     ),
@@ -1231,9 +1233,13 @@ test('post into an existing thread (other agent posted first) auto-subscribes th
         // exists before our agent participates. ensureBound below acquires a
         // separate name ("test-bot") — we acquire-then-release a peer first.
         yield* adapter.identity.acquire(decodeBotNameSync('peer-bot'))
-        yield* adapter.publisher.post(channelRef, decodeMessageBodySync('opening line from peer'), {
-          thread: decodeThreadNameSync('joint-topic'),
-        })
+        yield* adapter.publisher.post(
+          channelRef.name,
+          decodeMessageBodySync('opening line from peer'),
+          {
+            thread: decodeThreadNameSync('joint-topic'),
+          },
+        )
         yield* adapter.identity.release()
 
         const deps = yield* buildDeps(adapter)
@@ -1253,7 +1259,7 @@ test('post into an existing thread (other agent posted first) auto-subscribes th
         expect(result.isError).toBeFalsy()
         expect(subscribed).toEqual([
           expect.objectContaining({
-            channel: expect.objectContaining({ name: 'home' }),
+            channel: 'home',
             thread: 'joint-topic',
           }),
         ])
@@ -1278,7 +1284,7 @@ test('react to a message in a thread auto-subscribes the reactor', () =>
         // no post-side auto-sub fires before the react under test.
         yield* adapter.identity.acquire(decodeBotNameSync('peer-bot'))
         const targetRef = yield* adapter.publisher.post(
-          channelRef,
+          channelRef.name,
           decodeMessageBodySync('reactable in thread'),
           {
             thread: decodeThreadNameSync('payments'),
@@ -1304,7 +1310,7 @@ test('react to a message in a thread auto-subscribes the reactor', () =>
         expect(reacted.isError).toBeFalsy()
         expect(subscribed).toEqual([
           expect.objectContaining({
-            channel: expect.objectContaining({ name: 'home' }),
+            channel: 'home',
             thread: 'payments',
           }),
         ])
@@ -1327,7 +1333,7 @@ test('react to a top-level (no-thread) message does NOT auto-subscribe', () =>
         const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
         yield* adapter.identity.acquire(decodeBotNameSync('peer-bot'))
         const targetRef = yield* adapter.publisher.post(
-          channelRef,
+          channelRef.name,
           decodeMessageBodySync('top-level reactable'),
         )
         yield* adapter.identity.release()
@@ -1366,10 +1372,10 @@ test('reacting to the same thread twice subscribes only once (idempotency)', () 
           }).pipe(Effect.flatMap(() => originalSubscribe(target)))
         const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
         yield* adapter.identity.acquire(decodeBotNameSync('peer-bot'))
-        const a = yield* adapter.publisher.post(channelRef, decodeMessageBodySync('one'), {
+        const a = yield* adapter.publisher.post(channelRef.name, decodeMessageBodySync('one'), {
           thread: decodeThreadNameSync('payments'),
         })
-        const b = yield* adapter.publisher.post(channelRef, decodeMessageBodySync('two'), {
+        const b = yield* adapter.publisher.post(channelRef.name, decodeMessageBodySync('two'), {
           thread: decodeThreadNameSync('payments'),
         })
         yield* adapter.identity.release()
@@ -1426,7 +1432,7 @@ test('unreact does not change subscription state (no unsub-on-disengage)', () =>
         const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
         yield* adapter.identity.acquire(decodeBotNameSync('peer-bot'))
         const targetRef = yield* adapter.publisher.post(
-          channelRef,
+          channelRef.name,
           decodeMessageBodySync('reactable'),
           {
             thread: decodeThreadNameSync('payments'),
@@ -1477,10 +1483,17 @@ test('read_thread returns only messages in the given thread', () =>
             yield* ensureBound()
             const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
             cache.rememberChannel(channelRef)
-            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('top-level message'))
-            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('thread message'), {
-              thread: decodeThreadNameSync('payments'),
-            })
+            yield* adapter.publisher.post(
+              channelRef.name,
+              decodeMessageBodySync('top-level message'),
+            )
+            yield* adapter.publisher.post(
+              channelRef.name,
+              decodeMessageBodySync('thread message'),
+              {
+                thread: decodeThreadNameSync('payments'),
+              },
+            )
           }),
         )
         const result = yield* Effect.promise(() =>
@@ -1609,12 +1622,12 @@ test('react with unknown argument rejects', () =>
             yield* ensureBound()
             cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
             const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
-            const ref = yield* adapter.publisher.post(channelRef, decodeMessageBodySync('msg'))
+            const ref = yield* adapter.publisher.post(channelRef.name, decodeMessageBodySync('msg'))
             cache.rememberMessage(ref)
           }),
         )
         const homeRef = yield* rig.adapter.seedChannel('home').pipe(Effect.orDie)
-        const history = yield* rig.adapter.history.readChannel(homeRef, {})
+        const history = yield* rig.adapter.history.readChannel(homeRef.name, {})
         const messageId = history[0]?.ref.id
         const error = yield* Effect.flip(
           Effect.tryPromise({

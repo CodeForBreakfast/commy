@@ -26,6 +26,7 @@
 import { expect } from 'bun:test'
 import type { ChannelRef, InboundEvent } from '@commy/core/ports'
 import {
+  ChannelPermalinkSchema,
   decodeBotNameSync,
   decodeChannelIdSync,
   decodeChannelNameSync,
@@ -133,6 +134,7 @@ const buildAttachAdapter = (
 const homeChannel: ChannelRef = {
   id: decodeChannelIdSync('1234'),
   name: decodeChannelNameSync('general'),
+  permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/1234-general'),
 }
 
 const seedSubscribeOk = (stub: StubHttpClient): Effect.Effect<void> =>
@@ -287,7 +289,7 @@ effectTest(
       const adapter = yield* buildAttachAdapter(stub)
       yield* seedSubscribeOk(stub)
       yield* seedRegister(stub)
-      yield* adapter.inbox.subscribe(homeChannel)
+      yield* adapter.inbox.subscribe(homeChannel.name)
       yield* adapter.inbox.subscribe('mentions')
       yield* stub.respondSequence('GET', '/api/v1/events', [
         {

@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { ChannelRef } from '@commy/core/ports'
 import {
+  ChannelPermalinkSchema,
   decodeBotNameSync,
   decodeChannelIdSync,
   decodeChannelNameSync,
@@ -32,9 +33,14 @@ const acquired = async () => {
   return adapter
 }
 
-const phantomChannel: ChannelRef = {
+const phantomChannel = decodeChannelNameSync('phantom-channel-never-seeded')
+// An observation ChannelRef for the never-seeded channel — only needed to fill
+// the vestigial `channel` facet of an edit *address* target (edit resolves by
+// message id and never reads it).
+const phantomChannelRef: ChannelRef = {
   id: decodeChannelIdSync('999999999'),
-  name: decodeChannelNameSync('phantom-channel-never-seeded'),
+  name: phantomChannel,
+  permalink: ChannelPermalinkSchema.make('memory://commy/channel/999999999'),
 }
 
 // The port types these reads as
@@ -83,7 +89,7 @@ test('publisher.edit on an unknown message fails with a typed PublisherError, no
   const adapter = await acquired()
   const exit = await Effect.runPromiseExit(
     adapter.publisher.edit(
-      { id: decodeMessageIdSync('999999999'), channel: phantomChannel, thread: Option.none() },
+      { id: decodeMessageIdSync('999999999'), channel: phantomChannelRef, thread: Option.none() },
       decodeMessageBodySync('nope'),
     ),
   )
@@ -112,7 +118,7 @@ test('concurrent posts allocate distinct, monotonic message ids under Effect.all
   const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
   const refs = await Effect.runPromise(
     Effect.all(
-      Arr.makeBy(25, (i) => adapter.publisher.post(channel, decodeMessageBodySync(`m${i}`))),
+      Arr.makeBy(25, (i) => adapter.publisher.post(channel.name, decodeMessageBodySync(`m${i}`))),
       { concurrency: 'unbounded' },
     ),
   )
@@ -142,9 +148,11 @@ test('concurrent acquire on a fresh adapter binds exactly one name', async () =>
 test('counter state persists across operations within one constructed adapter', async () => {
   const adapter = await acquired()
   const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
-  const first = await Effect.runPromise(adapter.publisher.post(channel, decodeMessageBodySync('a')))
+  const first = await Effect.runPromise(
+    adapter.publisher.post(channel.name, decodeMessageBodySync('a')),
+  )
   const second = await Effect.runPromise(
-    adapter.publisher.post(channel, decodeMessageBodySync('b')),
+    adapter.publisher.post(channel.name, decodeMessageBodySync('b')),
   )
   expect(Number(second.id)).toBe(Number(first.id) + 1)
 })
@@ -159,8 +167,8 @@ test("the timestamp seed reads from Effect's Clock (first post ts = floor(clockM
       const adapter = yield* memoryAdapter()
       yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
       const channel = yield* adapter.seedChannel('lobby').pipe(Effect.orDie)
-      const ref = yield* adapter.publisher.post(channel, decodeMessageBodySync('a'))
-      const [message] = yield* adapter.history.readChannel(channel, {})
+      const ref = yield* adapter.publisher.post(channel.name, decodeMessageBodySync('a'))
+      const [message] = yield* adapter.history.readChannel(channel.name, {})
       expect(message?.ref.id).toBe(ref.id)
       expect(message?.ts).toBe(decodeTimestampSync(1_700_000_000))
     }).pipe(Effect.provide(TestContext.TestContext)),
@@ -173,8 +181,12 @@ test("the timestamp seed reads from Effect's Clock (first post ts = floor(clockM
 test('publisher.post synthesises stable message and channel permalinks', async () => {
   const adapter = await acquired()
   const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
-  const ref = await Effect.runPromise(adapter.publisher.post(channel, decodeMessageBodySync('hi')))
-  expect(ref.channel.permalink).toBe(`memory://commy/channel/${channel.id}`)
+  const ref = await Effect.runPromise(
+    adapter.publisher.post(channel.name, decodeMessageBodySync('hi')),
+  )
+  expect(ref.channel.permalink).toBe(
+    ChannelPermalinkSchema.make(`memory://commy/channel/${channel.id}`),
+  )
   expect(ref.permalink).toBe(`memory://commy/channel/${channel.id}/near/${ref.id}`)
 })
 
@@ -182,7 +194,7 @@ test('publisher.post threads the synthesised permalink through the topic', async
   const adapter = await acquired()
   const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
   const ref = await Effect.runPromise(
-    adapter.publisher.post(channel, decodeMessageBodySync('hi'), {
+    adapter.publisher.post(channel.name, decodeMessageBodySync('hi'), {
       thread: decodeThreadNameSync('topic-a'),
     }),
   )
@@ -196,13 +208,17 @@ test('directory.listChannels exposes a synthesised channel permalink', async () 
   const adapter = await acquired()
   const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
   const channels = await Effect.runPromise(adapter.directory.listChannels())
-  expect(channels[0]?.permalink).toBe(`memory://commy/channel/${channel.id}`)
+  expect(channels[0]?.permalink).toBe(
+    ChannelPermalinkSchema.make(`memory://commy/channel/${channel.id}`),
+  )
 })
 
 test('history.messagePermalink resolves a stored message by id without a hint', async () => {
   const adapter = await acquired()
   const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
-  const ref = await Effect.runPromise(adapter.publisher.post(channel, decodeMessageBodySync('hi')))
+  const ref = await Effect.runPromise(
+    adapter.publisher.post(channel.name, decodeMessageBodySync('hi')),
+  )
   const link = await Effect.runPromise(adapter.history.messagePermalink(ref.id))
   expect(link).toEqual(Option.some(`memory://commy/channel/${channel.id}/near/${ref.id}`))
 })
@@ -253,8 +269,8 @@ test('separate constructed adapters hold independent counter state', async () =>
   await Effect.runPromise(b.identity.acquire(decodeBotNameSync('hermes-agent')))
   const channelA = await Effect.runPromise(a.seedChannel('lobby').pipe(Effect.orDie))
   const channelB = await Effect.runPromise(b.seedChannel('lobby').pipe(Effect.orDie))
-  const refA = await Effect.runPromise(a.publisher.post(channelA, decodeMessageBodySync('a')))
-  const refB = await Effect.runPromise(b.publisher.post(channelB, decodeMessageBodySync('b')))
+  const refA = await Effect.runPromise(a.publisher.post(channelA.name, decodeMessageBodySync('a')))
+  const refB = await Effect.runPromise(b.publisher.post(channelB.name, decodeMessageBodySync('b')))
   // Each adapter starts its own message-id counter at 1 — state is
   // per-construction, not shared across the module.
   expect(Number(refA.id)).toBe(1)
@@ -271,11 +287,11 @@ test('events() drains posts accumulated before subscription in FIFO order', asyn
   const adapter = await acquired()
   const program = Effect.gen(function* () {
     const channel = yield* adapter.seedChannel('lobby').pipe(Effect.orDie)
-    yield* adapter.inbox.subscribe(channel)
+    yield* adapter.inbox.subscribe(channel.name)
     // No `events()` subscriber is active yet, so these accumulate in the buffer.
     yield* Effect.forEach(
       Arr.makeBy(5, (i) => `e${i}`),
-      (body) => adapter.publisher.post(channel, decodeMessageBodySync(body)),
+      (body) => adapter.publisher.post(channel.name, decodeMessageBodySync(body)),
     )
     const drained = yield* adapter.inbox
       .events()

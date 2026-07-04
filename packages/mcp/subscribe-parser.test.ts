@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { decodeChannelIdSync, decodeChannelNameSync, decodeThreadNameSync } from '@commy/core/ports'
+import { decodeChannelNameSync, decodeThreadNameSync } from '@commy/core/ports'
 import { Effect } from 'effect'
 import { intentToTarget, parseSubscribeTarget, SubscribeTokenError } from './subscribe-parser.ts'
 
@@ -94,9 +94,9 @@ test('parseSubscribeTarget rejects new-topics: with empty channel name', () => {
 
 test('intentToTarget maps new-topics intent to port-shaped NewTopicsInChannelSubscription', () => {
   const intent = Effect.runSync(parseSubscribeTarget('new-topics:home'))
-  const target = Effect.runSync(intentToTarget(intent))
+  const target = intentToTarget(intent)
   expect(target).toEqual({
     kind: 'new-topics-in-channel',
-    channel: { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
+    channel: decodeChannelNameSync('home'),
   })
 })

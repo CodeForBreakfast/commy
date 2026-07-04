@@ -9,6 +9,7 @@ import type {
   MessageRef,
 } from '@commy/core/ports'
 import {
+  ChannelPermalinkSchema,
   decodeChannelIdSync,
   decodeChannelNameSync,
   decodeDisplayNameSync,
@@ -45,7 +46,11 @@ const sender: Identity = {
 const msg = (overrides: Partial<Message> = {}): Message => ({
   ref: {
     id: decodeMessageIdSync('msg-1'),
-    channel: { id: decodeChannelIdSync('chan-9'), name: decodeChannelNameSync('home') },
+    channel: {
+      id: decodeChannelIdSync('chan-9'),
+      name: decodeChannelNameSync('home'),
+      permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/home'),
+    },
     thread: paymentsThread,
   },
   sender,
@@ -58,7 +63,11 @@ const msg = (overrides: Partial<Message> = {}): Message => ({
 
 const ref: MessageRef = {
   id: decodeMessageIdSync('msg-1'),
-  channel: { id: decodeChannelIdSync('chan-9'), name: decodeChannelNameSync('home') },
+  channel: {
+    id: decodeChannelIdSync('chan-9'),
+    name: decodeChannelNameSync('home'),
+    permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/home'),
+  },
   thread: Option.none(),
 }
 
@@ -163,6 +172,9 @@ test('pump filters out events that fail the narrow predicate', () =>
               channel: {
                 id: decodeChannelIdSync('chan-other'),
                 name: decodeChannelNameSync('other'),
+                permalink: ChannelPermalinkSchema.make(
+                  'https://zulip.example.com/#narrow/channel/other',
+                ),
               },
               thread: Option.none(),
             },
@@ -592,6 +604,9 @@ test('pump does NOT call rememberIdentity for events filtered out by the narrow 
                 channel: {
                   id: decodeChannelIdSync('chan-other'),
                   name: decodeChannelNameSync('other'),
+                  permalink: ChannelPermalinkSchema.make(
+                    'https://zulip.example.com/#narrow/channel/other',
+                  ),
                 },
                 thread: Option.none(),
               },
@@ -686,7 +701,13 @@ test('pump calls onMention with the ts of each delivered mention-received event'
               mentions: [bot],
               ref: {
                 id: decodeMessageIdSync('msg-2'),
-                channel: { id: decodeChannelIdSync('chan-9'), name: decodeChannelNameSync('home') },
+                channel: {
+                  id: decodeChannelIdSync('chan-9'),
+                  name: decodeChannelNameSync('home'),
+                  permalink: ChannelPermalinkSchema.make(
+                    'https://zulip.example.com/#narrow/channel/home',
+                  ),
+                },
                 thread: Option.none(),
               },
             }),
@@ -882,7 +903,13 @@ test('pump dedup is keyed per message id — distinct ids each fire', () =>
               body: decodeMessageBodySync('second'),
               ref: {
                 id: decodeMessageIdSync('msg-2'),
-                channel: { id: decodeChannelIdSync('chan-9'), name: decodeChannelNameSync('home') },
+                channel: {
+                  id: decodeChannelIdSync('chan-9'),
+                  name: decodeChannelNameSync('home'),
+                  permalink: ChannelPermalinkSchema.make(
+                    'https://zulip.example.com/#narrow/channel/home',
+                  ),
+                },
                 thread: paymentsThread,
               },
             }),
