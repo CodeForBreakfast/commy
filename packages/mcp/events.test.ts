@@ -16,10 +16,19 @@ import {
   decodeMessageIdSync,
   decodeThreadNameSync,
   decodeTimestampSync,
+  ThreadPermalinkSchema,
 } from '@commy/core/ports'
+import { Option } from 'effect'
 import { formatError, formatMessage, formatReaction } from './events.ts'
 
 const BOT_ID: IdentityIdType = decodeIdentityIdSync('bot-42')
+
+const paymentsThread = Option.some({
+  name: decodeThreadNameSync('payments'),
+  permalink: ThreadPermalinkSchema.make(
+    'https://zulip.example.com/#narrow/channel/9-home/topic/payments',
+  ),
+})
 
 const sender: Identity = {
   id: decodeIdentityIdSync('user-7'),
@@ -42,7 +51,7 @@ const baseMessage = (overrides: Partial<Message> = {}): Message => ({
   ref: {
     id: decodeMessageIdSync('msg-1'),
     channel: { id: decodeChannelIdSync('chan-9'), name: decodeChannelNameSync('home') },
-    thread: { name: decodeThreadNameSync('payments') },
+    thread: paymentsThread,
   },
   sender,
   body: decodeMessageBodySync('hello world'),
@@ -108,10 +117,7 @@ const messageWithPermalinks = (): Message =>
         name: decodeChannelNameSync('home'),
         permalink: 'https://zulip.example.com/#narrow/channel/9-home',
       },
-      thread: {
-        name: decodeThreadNameSync('payments'),
-        permalink: 'https://zulip.example.com/#narrow/channel/9-home/topic/payments',
-      },
+      thread: paymentsThread,
       permalink: 'https://zulip.example.com/#narrow/channel/9-home/topic/payments/near/1',
     },
   })
@@ -191,7 +197,7 @@ test('formatMessage — thread meta present when message lives in a thread', () 
 test('formatMessage — thread meta absent when message has no thread', () => {
   const noThread = baseMessage()
   const msg: Message = {
-    ref: { id: noThread.ref.id, channel: noThread.ref.channel },
+    ref: { id: noThread.ref.id, channel: noThread.ref.channel, thread: Option.none() },
     sender: noThread.sender,
     body: noThread.body,
     ts: noThread.ts,
@@ -259,12 +265,13 @@ const REACTION_TS = decodeTimestampSync(1715450010)
 const threadedRef: MessageRef = {
   id: decodeMessageIdSync('msg-1'),
   channel: { id: decodeChannelIdSync('chan-9'), name: decodeChannelNameSync('home') },
-  thread: { name: decodeThreadNameSync('payments') },
+  thread: paymentsThread,
 }
 
 const rootRef: MessageRef = {
   id: decodeMessageIdSync('msg-2'),
   channel: { id: decodeChannelIdSync('chan-9'), name: decodeChannelNameSync('home') },
+  thread: Option.none(),
 }
 
 const reactionAdded = (

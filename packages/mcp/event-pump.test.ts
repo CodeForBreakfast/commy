@@ -18,15 +18,23 @@ import {
   decodeMessageIdSync,
   decodeThreadNameSync,
   decodeTimestampSync,
+  ThreadPermalinkSchema,
 } from '@commy/core/ports'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { Effect, Ref, Schema, Stream, TestClock, TestContext } from 'effect'
+import { Effect, Option, Ref, Schema, Stream, TestClock, TestContext } from 'effect'
 import { channelNotifier, startEventPump } from './event-pump.ts'
 import type { ChannelEventPayload } from './events.ts'
 import { buildMcpServer } from './mcp-server.ts'
 
 const BOT_ID: IdentityIdType = decodeIdentityIdSync('bot-42')
+
+const paymentsThread = Option.some({
+  name: decodeThreadNameSync('payments'),
+  permalink: ThreadPermalinkSchema.make(
+    'https://zulip.example.com/#narrow/channel/9-home/topic/payments',
+  ),
+})
 
 const sender: Identity = {
   id: decodeIdentityIdSync('user-7'),
@@ -38,7 +46,7 @@ const msg = (overrides: Partial<Message> = {}): Message => ({
   ref: {
     id: decodeMessageIdSync('msg-1'),
     channel: { id: decodeChannelIdSync('chan-9'), name: decodeChannelNameSync('home') },
-    thread: { name: decodeThreadNameSync('payments') },
+    thread: paymentsThread,
   },
   sender,
   body: decodeMessageBodySync('hello'),
@@ -51,6 +59,7 @@ const msg = (overrides: Partial<Message> = {}): Message => ({
 const ref: MessageRef = {
   id: decodeMessageIdSync('msg-1'),
   channel: { id: decodeChannelIdSync('chan-9'), name: decodeChannelNameSync('home') },
+  thread: Option.none(),
 }
 
 interface QueueInboxOptions {
@@ -155,6 +164,7 @@ test('pump filters out events that fail the narrow predicate', () =>
                 id: decodeChannelIdSync('chan-other'),
                 name: decodeChannelNameSync('other'),
               },
+              thread: Option.none(),
             },
           }),
         },
@@ -583,6 +593,7 @@ test('pump does NOT call rememberIdentity for events filtered out by the narrow 
                   id: decodeChannelIdSync('chan-other'),
                   name: decodeChannelNameSync('other'),
                 },
+                thread: Option.none(),
               },
             }),
           },
@@ -676,6 +687,7 @@ test('pump calls onMention with the ts of each delivered mention-received event'
               ref: {
                 id: decodeMessageIdSync('msg-2'),
                 channel: { id: decodeChannelIdSync('chan-9'), name: decodeChannelNameSync('home') },
+                thread: Option.none(),
               },
             }),
             mentions: [bot],
@@ -871,7 +883,7 @@ test('pump dedup is keyed per message id — distinct ids each fire', () =>
               ref: {
                 id: decodeMessageIdSync('msg-2'),
                 channel: { id: decodeChannelIdSync('chan-9'), name: decodeChannelNameSync('home') },
-                thread: { name: decodeThreadNameSync('payments') },
+                thread: paymentsThread,
               },
             }),
           },

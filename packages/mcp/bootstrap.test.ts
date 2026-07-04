@@ -816,7 +816,7 @@ test('subscribeFromEnv subscribes to each comma-separated token in order', () =>
         { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
         {
           channel: { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
-          thread: { name: decodeThreadNameSync('payments') },
+          thread: decodeThreadNameSync('payments'),
         },
         'mentions',
       ])

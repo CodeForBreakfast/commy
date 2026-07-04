@@ -10,6 +10,7 @@ import {
   decodeTimestampSync,
   HistoryError,
   PublisherError,
+  ThreadPermalinkSchema,
 } from '@commy/core/ports'
 import {
   Array as Arr,
@@ -82,7 +83,7 @@ test('publisher.edit on an unknown message fails with a typed PublisherError, no
   const adapter = await acquired()
   const exit = await Effect.runPromiseExit(
     adapter.publisher.edit(
-      { id: decodeMessageIdSync('999999999'), channel: phantomChannel },
+      { id: decodeMessageIdSync('999999999'), channel: phantomChannel, thread: Option.none() },
       decodeMessageBodySync('nope'),
     ),
   )
@@ -182,10 +183,12 @@ test('publisher.post threads the synthesised permalink through the topic', async
   const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
   const ref = await Effect.runPromise(
     adapter.publisher.post(channel, decodeMessageBodySync('hi'), {
-      thread: { name: decodeThreadNameSync('topic-a') },
+      thread: decodeThreadNameSync('topic-a'),
     }),
   )
-  expect(ref.thread?.permalink).toBe(`memory://commy/channel/${channel.id}/topic/topic-a`)
+  expect(Option.map(ref.thread, (t) => t.permalink)).toEqual(
+    Option.some(ThreadPermalinkSchema.make(`memory://commy/channel/${channel.id}/topic/topic-a`)),
+  )
   expect(ref.permalink).toBe(`memory://commy/channel/${channel.id}/topic/topic-a/near/${ref.id}`)
 })
 

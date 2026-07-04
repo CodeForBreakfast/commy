@@ -15,7 +15,9 @@ import {
   decodeMessageIdSync,
   decodeThreadNameSync,
   decodeTimestampSync,
+  ThreadPermalinkSchema,
 } from '@commy/core/ports'
+import { Option } from 'effect'
 import { createNarrowSet } from './narrow-set.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 
@@ -31,11 +33,16 @@ const buildMessageRef = (channelName: string, threadName?: string): MessageRef =
     name: decodeChannelNameSync(channelName),
   }
   return threadName === undefined
-    ? { id: decodeMessageIdSync(`msg-${channelName}`), channel }
+    ? { id: decodeMessageIdSync(`msg-${channelName}`), channel, thread: Option.none() }
     : {
         id: decodeMessageIdSync(`msg-${channelName}-${threadName}`),
         channel,
-        thread: { name: decodeThreadNameSync(threadName) },
+        thread: Option.some({
+          name: decodeThreadNameSync(threadName),
+          permalink: ThreadPermalinkSchema.make(
+            `https://zulip.example.com/#narrow/channel/${channelName}/topic/${threadName}`,
+          ),
+        }),
       }
 }
 

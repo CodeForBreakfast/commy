@@ -14,6 +14,7 @@ import {
   decodeTimestampSync,
   IdentityError,
   PublisherError,
+  ThreadPermalinkSchema,
   UnknownChannel,
   type UnknownIdentity,
 } from '@commy/core/ports'
@@ -727,7 +728,7 @@ effectTest('publisher.post returns a MessageRef built from the response id', () 
     const ref = yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hello world'))
     expect(ref.id).toEqual(decodeMessageIdSync('99'))
     expect(ref.channel).toMatchObject(generalChannel)
-    expect(ref.thread).toBeUndefined()
+    expect(ref.thread).toEqual(Option.none())
   }),
 )
 
@@ -737,11 +738,13 @@ effectTest('publisher.post with thread sends topic and threads the returned Mess
     yield* seedSendMessage(stub, 100)
     const adapter = yield* buildAdapter(stub)
     const ref = yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hi'), {
-      thread: { name: decodeThreadNameSync('planning') },
+      thread: decodeThreadNameSync('planning'),
     })
     const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
     expect(params.get('topic')).toBe('planning')
-    expect(ref.thread).toMatchObject({ name: decodeThreadNameSync('planning') })
+    expect(Option.map(ref.thread, (t) => t.name)).toEqual(
+      Option.some(decodeThreadNameSync('planning')),
+    )
   }),
 )
 
@@ -762,13 +765,17 @@ effectTest('publisher.post threads the permalink through the topic when a thread
     yield* seedSendMessage(stub, 100)
     const adapter = yield* buildAdapter(stub)
     const ref = yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hi'), {
-      thread: { name: decodeThreadNameSync('planning') },
+      thread: decodeThreadNameSync('planning'),
     })
     expect(ref.permalink).toBe(
       'https://zulip.example.com/#narrow/channel/1234-general/topic/planning/near/100',
     )
-    expect(ref.thread?.permalink).toBe(
-      'https://zulip.example.com/#narrow/channel/1234-general/topic/planning',
+    expect(Option.map(ref.thread, (t) => t.permalink)).toEqual(
+      Option.some(
+        ThreadPermalinkSchema.make(
+          'https://zulip.example.com/#narrow/channel/1234-general/topic/planning',
+        ),
+      ),
     )
   }),
 )
@@ -837,7 +844,12 @@ effectTest(
       const parent: MessageRef = {
         id: decodeMessageIdSync('1'),
         channel: generalChannel,
-        thread: { name: decodeThreadNameSync('planning') },
+        thread: Option.some({
+          name: decodeThreadNameSync('planning'),
+          permalink: ThreadPermalinkSchema.make(
+            'https://zulip.example.com/#narrow/channel/1234-general/topic/planning',
+          ),
+        }),
       }
       yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('still here'), {
         replyTo: parent,
@@ -964,7 +976,11 @@ effectTest('publisher.edit PATCHes /messages/{id} with the new content', () =>
     const stub = yield* makeStubHttpClient
     yield* stub.respond('PATCH', '/api/v1/messages/42', { body: { result: 'success' } })
     const adapter = yield* buildAdapter(stub)
-    const target: MessageRef = { id: decodeMessageIdSync('42'), channel: generalChannel }
+    const target: MessageRef = {
+      id: decodeMessageIdSync('42'),
+      channel: generalChannel,
+      thread: Option.none(),
+    }
     yield* adapter.publisher.edit(target, decodeMessageBodySync('replacement body'))
     const req = yield* findRequest(stub, 'PATCH', '/api/v1/messages/42')
     expect(req.method).toBe('PATCH')
@@ -981,7 +997,11 @@ effectTest('publisher.edit propagates ZulipApiError on permission failure', () =
       status: 400,
     })
     const adapter = yield* buildAdapter(stub)
-    const target: MessageRef = { id: decodeMessageIdSync('42'), channel: generalChannel }
+    const target: MessageRef = {
+      id: decodeMessageIdSync('42'),
+      channel: generalChannel,
+      thread: Option.none(),
+    }
     const err = yield* Effect.flip(adapter.publisher.edit(target, decodeMessageBodySync('nope')))
     expect(err).toBeInstanceOf(PublisherError)
     expect((err as { cause: unknown }).cause).toBeInstanceOf(ZulipApiError)
@@ -993,7 +1013,11 @@ effectTest('publisher.react POSTs /messages/{id}/reactions with emoji_name', () 
     const stub = yield* makeStubHttpClient
     yield* stub.respond('POST', '/api/v1/messages/42/reactions', { body: { result: 'success' } })
     const adapter = yield* buildAdapter(stub)
-    const target: MessageRef = { id: decodeMessageIdSync('42'), channel: generalChannel }
+    const target: MessageRef = {
+      id: decodeMessageIdSync('42'),
+      channel: generalChannel,
+      thread: Option.none(),
+    }
     yield* adapter.publisher.react(target, decodeEmojiSync('thumbs_up'))
     const params = new URLSearchParams(
       (yield* findRequest(stub, 'POST', '/api/v1/messages/42/reactions')).body,
@@ -1007,7 +1031,11 @@ effectTest('publisher.unreact DELETEs /messages/{id}/reactions with emoji_name',
     const stub = yield* makeStubHttpClient
     yield* stub.respond('DELETE', '/api/v1/messages/42/reactions', { body: { result: 'success' } })
     const adapter = yield* buildAdapter(stub)
-    const target: MessageRef = { id: decodeMessageIdSync('42'), channel: generalChannel }
+    const target: MessageRef = {
+      id: decodeMessageIdSync('42'),
+      channel: generalChannel,
+      thread: Option.none(),
+    }
     yield* adapter.publisher.unreact(target, decodeEmojiSync('thumbs_up'))
     const req = yield* findRequest(stub, 'DELETE', '/api/v1/messages/42/reactions')
     const params = new URLSearchParams(req.body)
@@ -1058,10 +1086,12 @@ effectTest('history.readChannel narrows by channel and maps each message to the 
           ...generalChannel,
           permalink: 'https://zulip.example.com/#narrow/channel/1234-general',
         },
-        thread: {
+        thread: Option.some({
           name: decodeThreadNameSync('lobby'),
-          permalink: 'https://zulip.example.com/#narrow/channel/1234-general/topic/lobby',
-        },
+          permalink: ThreadPermalinkSchema.make(
+            'https://zulip.example.com/#narrow/channel/1234-general/topic/lobby',
+          ),
+        }),
         permalink: 'https://zulip.example.com/#narrow/channel/1234-general/topic/lobby/near/555',
       },
       sender: {
@@ -1666,7 +1696,7 @@ effectTest('inbox.subscribe with thread subscribes to its underlying channel', (
     const adapter = yield* buildAdapter(stub)
     yield* adapter.inbox.subscribe({
       channel: generalChannel,
-      thread: { name: decodeThreadNameSync('design') },
+      thread: decodeThreadNameSync('design'),
     })
     const req = yield* findRequest(stub, 'POST', '/api/v1/users/me/subscriptions')
     const subs = JSON.parse(new URLSearchParams(req.body).get('subscriptions') ?? '[]') as unknown

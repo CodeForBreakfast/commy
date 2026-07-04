@@ -864,6 +864,7 @@ test('presence (happy): resolves an identity first seen only via an inbound noti
     ref: {
       id: decodeMessageIdSync('inbound-msg-1'),
       channel: { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
+      thread: Option.none(),
     },
     sender: stranger,
     body: decodeMessageBodySync('first contact'),
@@ -1175,6 +1176,7 @@ test('pump filter: event for a never-subscribed channel does NOT fire claude/cha
       ref: {
         id: decodeMessageIdSync('noise-msg-1'),
         channel: { id: decodeChannelIdSync('noise'), name: decodeChannelNameSync('noise') },
+        thread: Option.none(),
       },
       sender: {
         id: decodeIdentityIdSync('outsider'),
@@ -1295,6 +1297,7 @@ test('persistent boot with a prior cursor: replay fires, mention-received notifi
         ref: {
           id: decodeMessageIdSync('msg-replay-1'),
           channel: { id: decodeChannelIdSync('chan-home'), name: decodeChannelNameSync('home') },
+          thread: Option.none(),
         },
         sender: senderIdentity,
         body: decodeMessageBodySync('hey concierge, missed you'),
@@ -1312,6 +1315,7 @@ test('persistent boot with a prior cursor: replay fires, mention-received notifi
         ref: {
           id: decodeMessageIdSync('msg-replay-2'),
           channel: { id: decodeChannelIdSync('chan-home'), name: decodeChannelNameSync('home') },
+          thread: Option.none(),
         },
         sender: senderIdentity,
         body: decodeMessageBodySync('unrelated chatter'),
@@ -1437,6 +1441,7 @@ test('ephemeral lazy acquire with a prior cursor: replay fires, mention dispatch
         ref: {
           id: decodeMessageIdSync('msg-replay-1'),
           channel: { id: decodeChannelIdSync('chan-home'), name: decodeChannelNameSync('home') },
+          thread: Option.none(),
         },
         sender: senderIdentity,
         body: decodeMessageBodySync('hey ephemeral session, missed you'),
@@ -1541,7 +1546,7 @@ const captureSubscribes = (): {
   const renderTarget = (target: SubscriptionTarget): string => {
     if (target === 'mentions') return 'mentions'
     if ('kind' in target) return `new-topics:${target.channel.name}`
-    if ('thread' in target) return `thread:${target.channel.name}/${target.thread.name}`
+    if ('thread' in target) return `thread:${target.channel.name}/${target.thread}`
     return `channel:${target.name}`
   }
   return {
@@ -1769,6 +1774,7 @@ test('persistent boot surfaces recent channel messages within the catch-up windo
                 id: decodeChannelIdSync('chan-home'),
                 name: decodeChannelNameSync('home'),
               },
+              thread: Option.none(),
             },
             sender: {
               id: decodeIdentityIdSync('user-carol'),

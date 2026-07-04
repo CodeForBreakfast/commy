@@ -49,6 +49,7 @@ const buildMention = (ts: number, body: string): InboundEvent => ({
     ref: {
       id: decodeMessageIdSync(`msg-${ts}`),
       channel: channelRef,
+      thread: Option.none(),
     },
     sender: otherSender,
     body: decodeMessageBodySync(body),
@@ -65,6 +66,7 @@ const buildMessagePosted = (ts: number, body: string): InboundEvent => ({
     ref: {
       id: decodeMessageIdSync(`msg-${ts}`),
       channel: channelRef,
+      thread: Option.none(),
     },
     sender: otherSender,
     body: decodeMessageBodySync(body),

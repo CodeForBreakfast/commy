@@ -8,7 +8,7 @@ import type {
   Timestamp,
 } from '@commy/core/ports'
 import { decodeChannelId, decodeTimestamp } from '@commy/core/ports'
-import { Array as Arr, Clock, Effect, Match, Order } from 'effect'
+import { Array as Arr, Clock, Effect, Match, Option, Order } from 'effect'
 import type { Notifier } from './event-pump.ts'
 import { formatMessage } from './events.ts'
 import { CatchUpError, catchUpAt } from './mentions-catch-up.ts'
@@ -100,9 +100,9 @@ const firstMessagePerTopic = (messages: ReadonlyArray<Message>): ReadonlyArray<M
   )
   for (const m of ordered) {
     const thread = m.ref.thread
-    if (thread === undefined) continue
-    if (seen.has(thread.name)) continue
-    seen.add(thread.name)
+    if (Option.isNone(thread)) continue
+    if (seen.has(thread.value.name)) continue
+    seen.add(thread.value.name)
     out.push(m)
   }
   return out

@@ -39,6 +39,21 @@ export const ThreadNameSchema = Schema.NonEmptyString.pipe(Schema.brand('ThreadN
 export type ThreadName = typeof ThreadNameSchema.Type
 export const decodeThreadName = Schema.decodeUnknown(ThreadNameSchema)
 
+/**
+ * Ready-to-click substrate permalinks, one brand per ref granularity so a
+ * builder can't hand a message URL where a thread URL belongs. Branded at the
+ * single construction site — the adapter's permalink builders — from strings
+ * whose exact format is substrate-private.
+ */
+export const ChannelPermalinkSchema = Schema.NonEmptyString.pipe(Schema.brand('ChannelPermalink'))
+export type ChannelPermalink = typeof ChannelPermalinkSchema.Type
+
+export const ThreadPermalinkSchema = Schema.NonEmptyString.pipe(Schema.brand('ThreadPermalink'))
+export type ThreadPermalink = typeof ThreadPermalinkSchema.Type
+
+export const MessagePermalinkSchema = Schema.NonEmptyString.pipe(Schema.brand('MessagePermalink'))
+export type MessagePermalink = typeof MessagePermalinkSchema.Type
+
 /** Wall-clock timestamp in epoch seconds. Branded to keep counts/ids out. */
 export const TimestampSchema = Schema.NonNegative.pipe(Schema.brand('Timestamp'))
 export type Timestamp = typeof TimestampSchema.Type
@@ -136,16 +151,24 @@ export interface ChannelRef {
   readonly permalink?: string
 }
 
-export interface ThreadRef {
-  readonly name: ThreadName
-  readonly permalink?: string
-}
+/**
+ * The thread facet of an observed message: a topic name paired with a
+ * ready-to-click permalink. Only ever produced as `MessageRef.thread` for a
+ * message the substrate handed back, so its permalink is always available —
+ * hence required, not optional. An address target (a message reconstructed
+ * from an id with no observation) carries `MessageRef.thread: Option.none()`.
+ */
+export const ObservedThreadSchema = Schema.Struct({
+  name: ThreadNameSchema,
+  permalink: ThreadPermalinkSchema,
+})
+export type ObservedThread = typeof ObservedThreadSchema.Type
 
 export interface MessageRef {
   readonly id: MessageId
   readonly channel: ChannelRef
-  /** Present iff the message lives in a thread. */
-  readonly thread?: ThreadRef
+  /** The thread the message was observed in; `none` for top-level messages. */
+  readonly thread: Option.Option<ObservedThread>
   readonly permalink?: string
 }
 
@@ -193,7 +216,7 @@ export interface PostOpts {
    */
   readonly mentions?: ReadonlyArray<Identity>
   /** Named conversation slice; adapter does find-or-create. */
-  readonly thread?: ThreadRef
+  readonly thread?: ThreadName
   /** Best-effort in-thread reply. Adapters without an in-thread reply primitive may quote-block or drop. */
   readonly replyTo?: MessageRef
 }
@@ -214,7 +237,7 @@ export type SubscriptionTarget =
 
 export interface ThreadSubscription {
   readonly channel: ChannelRef
-  readonly thread: ThreadRef
+  readonly thread: ThreadName
 }
 
 /**

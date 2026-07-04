@@ -360,7 +360,7 @@ test('main drives a real memory adapter through acquire + env subscribe + close'
     { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
     {
       channel: { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
-      thread: { name: decodeThreadNameSync('payments') },
+      thread: decodeThreadNameSync('payments'),
     },
     'mentions',
   ])
@@ -403,7 +403,7 @@ test('main applies env-driven subscriptions in order after acquire and Type-1 de
     { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
     {
       channel: { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
-      thread: { name: decodeThreadNameSync('payments') },
+      thread: decodeThreadNameSync('payments'),
     },
     'mentions',
   ])
@@ -461,7 +461,7 @@ test('persistent mode + project registers Type-1 defaults (mentions + new-topics
     },
     {
       channel: { id: decodeChannelIdSync('foo'), name: decodeChannelNameSync('foo') },
-      thread: { name: decodeThreadNameSync('general') },
+      thread: decodeThreadNameSync('general'),
     },
   ])
 })
@@ -493,7 +493,7 @@ test('Type-1 defaults register after acquire and before COMMY_SUBSCRIBE entries'
     },
     {
       channel: { id: decodeChannelIdSync('foo'), name: decodeChannelNameSync('foo') },
-      thread: { name: decodeThreadNameSync('general') },
+      thread: decodeThreadNameSync('general'),
     },
     { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
   ])

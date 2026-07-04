@@ -238,12 +238,12 @@ test('current_identity includes recent_threads showing where the bot posted', ()
             yield* adapter.publisher.post(
               { id: decodeChannelIdSync('1'), name: decodeChannelNameSync('project-x') },
               decodeMessageBodySync('first response'),
-              { thread: { name: decodeThreadNameSync('bug-report') } },
+              { thread: decodeThreadNameSync('bug-report') },
             )
             yield* adapter.publisher.post(
               { id: decodeChannelIdSync('1'), name: decodeChannelNameSync('project-x') },
               decodeMessageBodySync('second response'),
-              { thread: { name: decodeThreadNameSync('feature-request') } },
+              { thread: decodeThreadNameSync('feature-request') },
             )
           }),
         )
@@ -916,7 +916,7 @@ test('post to a thread auto-subscribes the poster to that thread', () =>
         expect(subscribed).toEqual([
           expect.objectContaining({
             channel: expect.objectContaining({ name: 'home' }),
-            thread: expect.objectContaining({ name: 'topic-X' }),
+            thread: 'topic-X',
           }),
         ])
         expect(rig.narrowSet.size()).toBe(1)
@@ -1232,7 +1232,7 @@ test('post into an existing thread (other agent posted first) auto-subscribes th
         // separate name ("test-bot") — we acquire-then-release a peer first.
         yield* adapter.identity.acquire(decodeBotNameSync('peer-bot'))
         yield* adapter.publisher.post(channelRef, decodeMessageBodySync('opening line from peer'), {
-          thread: { name: decodeThreadNameSync('joint-topic') },
+          thread: decodeThreadNameSync('joint-topic'),
         })
         yield* adapter.identity.release()
 
@@ -1254,7 +1254,7 @@ test('post into an existing thread (other agent posted first) auto-subscribes th
         expect(subscribed).toEqual([
           expect.objectContaining({
             channel: expect.objectContaining({ name: 'home' }),
-            thread: expect.objectContaining({ name: 'joint-topic' }),
+            thread: 'joint-topic',
           }),
         ])
         expect(rig.narrowSet.size()).toBe(1)
@@ -1281,7 +1281,7 @@ test('react to a message in a thread auto-subscribes the reactor', () =>
           channelRef,
           decodeMessageBodySync('reactable in thread'),
           {
-            thread: { name: decodeThreadNameSync('payments') },
+            thread: decodeThreadNameSync('payments'),
           },
         )
         yield* adapter.identity.release()
@@ -1305,7 +1305,7 @@ test('react to a message in a thread auto-subscribes the reactor', () =>
         expect(subscribed).toEqual([
           expect.objectContaining({
             channel: expect.objectContaining({ name: 'home' }),
-            thread: expect.objectContaining({ name: 'payments' }),
+            thread: 'payments',
           }),
         ])
         expect(rig.narrowSet.size()).toBe(1)
@@ -1367,10 +1367,10 @@ test('reacting to the same thread twice subscribes only once (idempotency)', () 
         const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
         yield* adapter.identity.acquire(decodeBotNameSync('peer-bot'))
         const a = yield* adapter.publisher.post(channelRef, decodeMessageBodySync('one'), {
-          thread: { name: decodeThreadNameSync('payments') },
+          thread: decodeThreadNameSync('payments'),
         })
         const b = yield* adapter.publisher.post(channelRef, decodeMessageBodySync('two'), {
-          thread: { name: decodeThreadNameSync('payments') },
+          thread: decodeThreadNameSync('payments'),
         })
         yield* adapter.identity.release()
 
@@ -1429,7 +1429,7 @@ test('unreact does not change subscription state (no unsub-on-disengage)', () =>
           channelRef,
           decodeMessageBodySync('reactable'),
           {
-            thread: { name: decodeThreadNameSync('payments') },
+            thread: decodeThreadNameSync('payments'),
           },
         )
         yield* adapter.identity.release()
@@ -1479,7 +1479,7 @@ test('read_thread returns only messages in the given thread', () =>
             cache.rememberChannel(channelRef)
             yield* adapter.publisher.post(channelRef, decodeMessageBodySync('top-level message'))
             yield* adapter.publisher.post(channelRef, decodeMessageBodySync('thread message'), {
-              thread: { name: decodeThreadNameSync('payments') },
+              thread: decodeThreadNameSync('payments'),
             })
           }),
         )
