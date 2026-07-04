@@ -25,6 +25,7 @@ import {
   decodeMessageIdSync,
   decodeTimestampSync,
   InboxError,
+  MessagePermalinkSchema,
 } from '@commy/core/ports'
 import { memoryAdapter } from '@commy/memory/adapter'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -829,6 +830,9 @@ test('presence (happy): resolves an identity first seen only via an inbound noti
         permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/home'),
       },
       thread: Option.none(),
+      permalink: MessagePermalinkSchema.make(
+        'https://zulip.example.com/#narrow/channel/home/near/inbound-msg-1',
+      ),
     },
     sender: stranger,
     body: decodeMessageBodySync('first contact'),
@@ -1145,6 +1149,9 @@ test('pump filter: event for a never-subscribed channel does NOT fire claude/cha
           permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/noise'),
         },
         thread: Option.none(),
+        permalink: MessagePermalinkSchema.make(
+          'https://zulip.example.com/#narrow/channel/noise/near/noise-msg-1',
+        ),
       },
       sender: {
         id: decodeIdentityIdSync('outsider'),
@@ -1272,6 +1279,9 @@ test('persistent boot with a prior cursor: replay fires, mention-received notifi
             ),
           },
           thread: Option.none(),
+          permalink: MessagePermalinkSchema.make(
+            'https://zulip.example.com/#narrow/channel/home/near/msg-replay-1',
+          ),
         },
         sender: senderIdentity,
         body: decodeMessageBodySync('hey concierge, missed you'),
@@ -1296,6 +1306,9 @@ test('persistent boot with a prior cursor: replay fires, mention-received notifi
             ),
           },
           thread: Option.none(),
+          permalink: MessagePermalinkSchema.make(
+            'https://zulip.example.com/#narrow/channel/home/near/msg-replay-2',
+          ),
         },
         sender: senderIdentity,
         body: decodeMessageBodySync('unrelated chatter'),
@@ -1428,6 +1441,9 @@ test('ephemeral lazy acquire with a prior cursor: replay fires, mention dispatch
             ),
           },
           thread: Option.none(),
+          permalink: MessagePermalinkSchema.make(
+            'https://zulip.example.com/#narrow/channel/home/near/msg-replay-1',
+          ),
         },
         sender: senderIdentity,
         body: decodeMessageBodySync('hey ephemeral session, missed you'),
@@ -1764,6 +1780,9 @@ test('persistent boot surfaces recent channel messages within the catch-up windo
                 ),
               },
               thread: Option.none(),
+              permalink: MessagePermalinkSchema.make(
+                'https://zulip.example.com/#narrow/channel/chan-home-home/near/catchup-1',
+              ),
             },
             sender: {
               id: decodeIdentityIdSync('user-carol'),

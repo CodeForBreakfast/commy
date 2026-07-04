@@ -39,6 +39,7 @@ import type {
   MessageBody as MessageBodyType,
   MessageId,
   MessageInbox,
+  MessagePermalink,
   MessagePublisher,
   MessageRef,
   PostOpts,
@@ -62,6 +63,7 @@ import {
   decodeTimestamp,
   type Emoji,
   HistoryError,
+  MessagePermalinkSchema,
   PublisherError,
   ThreadPermalinkSchema,
   UnknownChannel,
@@ -94,10 +96,16 @@ const synthChannelPermalink = (id: ChannelId): ChannelPermalink =>
   ChannelPermalinkSchema.make(`${MEMORY_REALM}/channel/${id}`)
 const synthTopicPermalink = (id: ChannelId, topic: ThreadName): ThreadPermalink =>
   ThreadPermalinkSchema.make(`${synthChannelPermalink(id)}/topic/${topic}`)
-const synthMessagePermalink = (id: ChannelId, messageId: MessageId, topic?: ThreadName): string =>
-  topic === undefined
-    ? `${synthChannelPermalink(id)}/near/${messageId}`
-    : `${synthTopicPermalink(id, topic)}/near/${messageId}`
+const synthMessagePermalink = (
+  id: ChannelId,
+  messageId: MessageId,
+  topic?: ThreadName,
+): MessagePermalink =>
+  MessagePermalinkSchema.make(
+    topic === undefined
+      ? `${synthChannelPermalink(id)}/near/${messageId}`
+      : `${synthTopicPermalink(id, topic)}/near/${messageId}`,
+  )
 
 interface StoredMessage {
   readonly ref: MessageRef
@@ -713,8 +721,8 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
           }
           const stored = messagesById.get(id)
           return stored === undefined
-            ? Option.none<string>()
-            : Option.fromNullable(stored.ref.permalink)
+            ? Option.none<MessagePermalink>()
+            : Option.some(stored.ref.permalink)
         }),
     }
 

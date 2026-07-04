@@ -10,6 +10,7 @@ import {
   decodeThreadNameSync,
   decodeTimestampSync,
   HistoryError,
+  MessagePermalinkSchema,
   PublisherError,
   ThreadPermalinkSchema,
 } from '@commy/core/ports'
@@ -89,7 +90,12 @@ test('publisher.edit on an unknown message fails with a typed PublisherError, no
   const adapter = await acquired()
   const exit = await Effect.runPromiseExit(
     adapter.publisher.edit(
-      { id: decodeMessageIdSync('999999999'), channel: phantomChannelRef, thread: Option.none() },
+      {
+        id: decodeMessageIdSync('999999999'),
+        channel: phantomChannelRef,
+        thread: Option.none(),
+        permalink: MessagePermalinkSchema.make('999999999'),
+      },
       decodeMessageBodySync('nope'),
     ),
   )
@@ -187,7 +193,9 @@ test('publisher.post synthesises stable message and channel permalinks', async (
   expect(ref.channel.permalink).toBe(
     ChannelPermalinkSchema.make(`memory://commy/channel/${channel.id}`),
   )
-  expect(ref.permalink).toBe(`memory://commy/channel/${channel.id}/near/${ref.id}`)
+  expect(ref.permalink).toBe(
+    MessagePermalinkSchema.make(`memory://commy/channel/${channel.id}/near/${ref.id}`),
+  )
 })
 
 test('publisher.post threads the synthesised permalink through the topic', async () => {
@@ -201,7 +209,11 @@ test('publisher.post threads the synthesised permalink through the topic', async
   expect(Option.map(ref.thread, (t) => t.permalink)).toEqual(
     Option.some(ThreadPermalinkSchema.make(`memory://commy/channel/${channel.id}/topic/topic-a`)),
   )
-  expect(ref.permalink).toBe(`memory://commy/channel/${channel.id}/topic/topic-a/near/${ref.id}`)
+  expect(ref.permalink).toBe(
+    MessagePermalinkSchema.make(
+      `memory://commy/channel/${channel.id}/topic/topic-a/near/${ref.id}`,
+    ),
+  )
 })
 
 test('directory.listChannels exposes a synthesised channel permalink', async () => {
@@ -220,7 +232,9 @@ test('history.messagePermalink resolves a stored message by id without a hint', 
     adapter.publisher.post(channel.name, decodeMessageBodySync('hi')),
   )
   const link = await Effect.runPromise(adapter.history.messagePermalink(ref.id))
-  expect(link).toEqual(Option.some(`memory://commy/channel/${channel.id}/near/${ref.id}`))
+  expect(link).toEqual(
+    Option.some(MessagePermalinkSchema.make(`memory://commy/channel/${channel.id}/near/${ref.id}`)),
+  )
 })
 
 test('history.messagePermalink returns None for an unknown id with no hint', async () => {
@@ -236,7 +250,9 @@ test('history.messagePermalink synthesises a channel-near link from a hint', asy
   const link = await Effect.runPromise(
     adapter.history.messagePermalink(id, { channel: decodeChannelNameSync('lobby') }),
   )
-  expect(link).toEqual(Option.some(`memory://commy/channel/${channel.id}/near/${id}`))
+  expect(link).toEqual(
+    Option.some(MessagePermalinkSchema.make(`memory://commy/channel/${channel.id}/near/${id}`)),
+  )
 })
 
 test('history.messagePermalink synthesises a topic-near link from a hint with a thread', async () => {
@@ -249,7 +265,11 @@ test('history.messagePermalink synthesises a topic-near link from a hint with a 
       thread: decodeThreadNameSync('topic-a'),
     }),
   )
-  expect(link).toEqual(Option.some(`memory://commy/channel/${channel.id}/topic/topic-a/near/${id}`))
+  expect(link).toEqual(
+    Option.some(
+      MessagePermalinkSchema.make(`memory://commy/channel/${channel.id}/topic/topic-a/near/${id}`),
+    ),
+  )
 })
 
 test('history.messagePermalink returns None for a hint naming an unknown channel', async () => {

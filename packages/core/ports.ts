@@ -166,13 +166,23 @@ export const ObservedThreadSchema = Schema.Struct({
 })
 export type ObservedThread = typeof ObservedThreadSchema.Type
 
-export interface MessageRef {
-  readonly id: MessageId
-  readonly channel: ChannelRef
-  /** The thread the message was observed in; `none` for top-level messages. */
-  readonly thread: Option.Option<ObservedThread>
-  readonly permalink?: string
-}
+/**
+ * An observed message the substrate handed back: its stable id, its
+ * observation `ChannelRef`, the `ObservedThread` it was seen in (`none` for
+ * top-level messages), and a ready-to-click `MessagePermalink`. Only ever
+ * produced as an observation, so the permalink is always available — hence
+ * required, not optional. Addressing a message (react, edit, reply) is by a
+ * bare id; the address-reconstruction path fills the observation facets with
+ * transparent placeholders until the message-address split (comms-e6yi)
+ * drops them from an address entirely.
+ */
+export const MessageRefSchema = Schema.Struct({
+  id: MessageIdSchema,
+  channel: ChannelRefSchema,
+  thread: Schema.OptionFromSelf(ObservedThreadSchema),
+  permalink: MessagePermalinkSchema,
+})
+export type MessageRef = typeof MessageRefSchema.Type
 
 /**
  * Aggregated reaction state on a message, grouped by emoji. `by` lists
@@ -465,7 +475,7 @@ export interface HistoryReader {
   messagePermalink(
     id: MessageId,
     hint?: { readonly channel: ChannelName; readonly thread?: ThreadName },
-  ): Effect.Effect<Option.Option<string>, HistoryError>
+  ): Effect.Effect<Option.Option<MessagePermalink>, HistoryError>
 }
 
 /**

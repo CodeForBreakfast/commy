@@ -131,7 +131,9 @@ test('buildMessageRef decorates message, channel and topic for a threaded messag
         'https://zulip.example.com/#narrow/channel/9-general/topic/lobby',
       ),
     }),
-    permalink: 'https://zulip.example.com/#narrow/channel/9-general/topic/lobby/near/42',
+    permalink: MessagePermalinkSchema.make(
+      'https://zulip.example.com/#narrow/channel/9-general/topic/lobby/near/42',
+    ),
   })
 })
 
@@ -144,6 +146,8 @@ test('buildMessageRef omits the thread for a thread-less message', () => {
       permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-general'),
     },
     thread: Option.none(),
-    permalink: 'https://zulip.example.com/#narrow/channel/9-general/near/42',
+    permalink: MessagePermalinkSchema.make(
+      'https://zulip.example.com/#narrow/channel/9-general/near/42',
+    ),
   })
 })

@@ -22,6 +22,7 @@ import {
   decodeMessageId,
   decodeThreadName,
   decodeTimestamp,
+  MessagePermalinkSchema,
   ObservedThreadSchema,
 } from '@commy/core/ports'
 import type { UserUploadPath, ZulipApiError } from '@commy/zulip/http'
@@ -226,9 +227,14 @@ class UnknownMessageError extends Data.TaggedError('UnknownMessage')<{ readonly 
 }
 
 // A reconstructed ref is an *address* target (react/edit/unreact/reply): we
-// know its id and channel but observed no permalink, so `thread` is `none` —
-// the topic name, when needed for sticky engagement, travels as a separate
-// address argument rather than through this observation facet.
+// know its id and channel but observed no permalink, so `thread` is `none` and
+// `permalink` is a name-derived placeholder (the id itself) — transparently a
+// placeholder, never a plausible URL, and never surfaced (display permalinks
+// come from the adapter, not this rebuilt address). The topic name, when needed
+// for sticky engagement, travels as a separate address argument rather than
+// through this observation facet. The real fix is the message-address split
+// (comms-e6yi), which drops the observation facets from an address entirely;
+// this placeholder is an accepted transient owned by that bead.
 const reconstructMessageRef = (
   cache: InternalCache,
   rawId: string,
@@ -242,7 +248,7 @@ const reconstructMessageRef = (
       return yield* new UnknownMessageError({ id: rawId })
     }
     const channel = yield* addressChannel(cache, yield* decodeChannelName(channelNameArg))
-    return { id, channel, thread: Option.none() }
+    return { id, channel, thread: Option.none(), permalink: yield* decodeMessagePermalink(id) }
   })
 
 const resolveMentions = (
@@ -261,18 +267,21 @@ const resolveMentions = (
 
 const encodeThreadFacet = Schema.encode(Schema.OptionFromNullOr(ObservedThreadSchema))
 const encodeChannel = Schema.encode(ChannelRefSchema)
+const encodeMessagePermalink = Schema.encode(MessagePermalinkSchema)
 const decodeChannelPermalink = Schema.decode(ChannelPermalinkSchema)
+const decodeMessagePermalink = Schema.decode(MessagePermalinkSchema)
 
 const messageShape = (m: Message): Effect.Effect<Record<string, unknown>, ParseResult.ParseError> =>
   Effect.all({
     channel: encodeChannel(m.ref.channel),
     thread: encodeThreadFacet(m.ref.thread),
+    permalink: encodeMessagePermalink(m.ref.permalink),
   }).pipe(
-    Effect.map(({ channel, thread }) => ({
+    Effect.map(({ channel, thread, permalink }) => ({
       id: m.ref.id,
       channel,
       thread,
-      permalink: m.ref.permalink ?? null,
+      permalink,
       sender: identityShape(m.sender),
       body: m.body,
       ts: m.ts,
@@ -604,7 +613,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             onNone: () => null,
             onSome: (t) => ({ name: t.name }),
           }),
-          permalink: ref.permalink ?? null,
+          permalink: ref.permalink,
         }
       },
     },
@@ -903,7 +912,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             const parsed = yield* Schema.decodeUnknown(MessageLinkArgs)(args)
             const id = yield* decodeMessageId(parsed.message_id)
             const cached = cache.messageById.get(id)
-            if (cached?.permalink !== undefined) return cached.permalink
+            if (cached !== undefined) return cached.permalink
             const hint =
               parsed.channel_name === undefined
                 ? undefined

@@ -1463,15 +1463,13 @@ export const zulipAdapter = (
             // see any channel message) and hand back the permalink the decode
             // already built.
             fetchMessageRef(minterHttp, Number(id), base).pipe(
-              Effect.map(Option.flatMap((ref) => Option.fromNullable(ref.permalink))),
+              Effect.map(Option.map((ref) => ref.permalink)),
             )
           : // Channel hint supplied: resolve the name to its numeric stream and
             // build the link directly — no need to locate the message itself.
             lookupChannel(hint.channel).pipe(
               Effect.map(
-                Option.flatMap((channel) =>
-                  Option.fromNullable(buildMessageRef(base, id, channel, hint.thread).permalink),
-                ),
+                Option.map((channel) => buildMessageRef(base, id, channel, hint.thread).permalink),
               ),
             )
         ).pipe(

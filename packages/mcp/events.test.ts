@@ -17,6 +17,7 @@ import {
   decodeMessageIdSync,
   decodeThreadNameSync,
   decodeTimestampSync,
+  MessagePermalinkSchema,
   ThreadPermalinkSchema,
 } from '@commy/core/ports'
 import { Option } from 'effect'
@@ -57,6 +58,9 @@ const baseMessage = (overrides: Partial<Message> = {}): Message => ({
       permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-home'),
     },
     thread: paymentsThread,
+    permalink: MessagePermalinkSchema.make(
+      'https://zulip.example.com/#narrow/channel/9-home/topic/payments/near/1',
+    ),
   },
   sender,
   body: decodeMessageBodySync('hello world'),
@@ -123,7 +127,9 @@ const messageWithPermalinks = (): Message =>
         permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-home'),
       },
       thread: paymentsThread,
-      permalink: 'https://zulip.example.com/#narrow/channel/9-home/topic/payments/near/1',
+      permalink: MessagePermalinkSchema.make(
+        'https://zulip.example.com/#narrow/channel/9-home/topic/payments/near/1',
+      ),
     },
   })
 
@@ -138,12 +144,30 @@ test('formatMessage — meta carries message, channel and topic permalinks', () 
   )
 })
 
-test('formatMessage — message permalink meta omitted when the ref carries none', () => {
-  const out = formatMessage(messagePosted(baseMessage()), BOT_ID)
-  expect(out.meta).not.toHaveProperty('permalink')
-  // An observed channel always carries a permalink, so channel_permalink is
-  // always surfaced — only the message-level permalink is conditional.
+test('formatMessage — a top-level message still surfaces its message and channel permalinks', () => {
+  // An observed message always carries a message permalink (and its channel a
+  // channel permalink), so both are surfaced even for a threadless message —
+  // only thread_permalink is conditional on the message having a thread.
+  const noThread = baseMessage()
+  const msg: Message = {
+    ref: {
+      id: noThread.ref.id,
+      channel: noThread.ref.channel,
+      thread: Option.none(),
+      permalink: MessagePermalinkSchema.make(
+        'https://zulip.example.com/#narrow/channel/9-home/near/1',
+      ),
+    },
+    sender: noThread.sender,
+    body: noThread.body,
+    ts: noThread.ts,
+    mentions: noThread.mentions,
+    reactions: noThread.reactions,
+  }
+  const out = formatMessage(messagePosted(msg), BOT_ID)
+  expect(out.meta['permalink']).toBe('https://zulip.example.com/#narrow/channel/9-home/near/1')
   expect(out.meta['channel_permalink']).toBe('https://zulip.example.com/#narrow/channel/9-home')
+  expect(out.meta).not.toHaveProperty('thread_permalink')
 })
 
 test('formatMessage — bot_identity_id is never surfaced (self-echo is emitter-guaranteed)', () => {
@@ -204,7 +228,14 @@ test('formatMessage — thread meta present when message lives in a thread', () 
 test('formatMessage — thread meta absent when message has no thread', () => {
   const noThread = baseMessage()
   const msg: Message = {
-    ref: { id: noThread.ref.id, channel: noThread.ref.channel, thread: Option.none() },
+    ref: {
+      id: noThread.ref.id,
+      channel: noThread.ref.channel,
+      thread: Option.none(),
+      permalink: MessagePermalinkSchema.make(
+        'https://zulip.example.com/#narrow/channel/9-home/near/1',
+      ),
+    },
     sender: noThread.sender,
     body: noThread.body,
     ts: noThread.ts,
@@ -277,6 +308,9 @@ const threadedRef: MessageRef = {
     permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-home'),
   },
   thread: paymentsThread,
+  permalink: MessagePermalinkSchema.make(
+    'https://zulip.example.com/#narrow/channel/9-home/topic/payments/near/1',
+  ),
 }
 
 const rootRef: MessageRef = {
@@ -287,6 +321,7 @@ const rootRef: MessageRef = {
     permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-home'),
   },
   thread: Option.none(),
+  permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-home/near/2'),
 }
 
 const reactionAdded = (
@@ -336,20 +371,21 @@ test('formatReaction — reaction-removed renders reaction_action="remove"', () 
   expect(out.meta['reaction_action']).toBe('remove')
 })
 
-test('formatReaction — meta carries the target permalink when the ref has one', () => {
-  const target: MessageRef = {
-    ...threadedRef,
-    permalink: 'https://zulip.example.com/#narrow/channel/9-home/topic/payments/near/1',
-  }
-  const out = formatReaction(reactionAdded(target, 'check', sender), REACTION_TS)
+test('formatReaction — meta carries the target message permalink', () => {
+  const out = formatReaction(reactionAdded(threadedRef, 'check', sender), REACTION_TS)
   expect(out.meta['target_permalink']).toBe(
     'https://zulip.example.com/#narrow/channel/9-home/topic/payments/near/1',
   )
 })
 
-test('formatReaction — target_permalink omitted when the ref carries none', () => {
+test('formatReaction — a channel-root reaction target still surfaces its target_permalink', () => {
+  // An observed reaction target always carries a message permalink, so it is
+  // surfaced even for a threadless (channel-root) target — only target_thread
+  // is conditional on the target having a thread.
   const out = formatReaction(reactionAdded(rootRef, 'tada', sender), REACTION_TS)
-  expect(out.meta).not.toHaveProperty('target_permalink')
+  expect(out.meta['target_permalink']).toBe(
+    'https://zulip.example.com/#narrow/channel/9-home/near/2',
+  )
 })
 
 test('formatReaction — emoji name with control chars is sanitised in meta but raw in content', () => {

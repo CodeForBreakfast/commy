@@ -12,6 +12,7 @@ import {
   decodeThreadNameSync,
   decodeTimestampSync,
   InboxError,
+  MessagePermalinkSchema,
   ThreadPermalinkSchema,
 } from '@commy/core/ports'
 import {
@@ -101,7 +102,9 @@ test('decorates the inbound message ref with message, channel and topic permalin
   if (posted !== undefined && posted.kind === 'message-posted') {
     const ref = posted.message.ref
     expect(ref.permalink).toBe(
-      'https://zulip.example.com/#narrow/channel/1-general/topic/topic/near/100',
+      MessagePermalinkSchema.make(
+        'https://zulip.example.com/#narrow/channel/1-general/topic/topic/near/100',
+      ),
     )
     expect(ref.channel.permalink).toBe(
       ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/1-general'),
@@ -145,6 +148,9 @@ test('MessageRefCache.get is None on miss and Some on hit', () => {
       permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/1-general'),
     },
     thread: Option.none(),
+    permalink: MessagePermalinkSchema.make(
+      'https://zulip.example.com/#narrow/channel/1-general/near/4242',
+    ),
   }
 
   expect(cache.get(id)).toStrictEqual(Option.none())
@@ -579,6 +585,9 @@ test(
                   'https://zulip.example.com/#narrow/channel/1-general/topic/topic',
                 ),
               }),
+              permalink: MessagePermalinkSchema.make(
+                'https://zulip.example.com/#narrow/channel/1-general/topic/topic/near/150',
+              ),
             },
             sender: MAINTAINER,
             body: decodeMessageBodySync('posted while the queue was dead'),

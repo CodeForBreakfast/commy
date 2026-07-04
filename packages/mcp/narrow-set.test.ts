@@ -16,6 +16,7 @@ import {
   decodeMessageIdSync,
   decodeThreadNameSync,
   decodeTimestampSync,
+  MessagePermalinkSchema,
   ThreadPermalinkSchema,
 } from '@commy/core/ports'
 import { Option } from 'effect'
@@ -37,7 +38,14 @@ const buildMessageRef = (channelName: string, threadName?: string): MessageRef =
     ),
   }
   return threadName === undefined
-    ? { id: decodeMessageIdSync(`msg-${channelName}`), channel, thread: Option.none() }
+    ? {
+        id: decodeMessageIdSync(`msg-${channelName}`),
+        channel,
+        thread: Option.none(),
+        permalink: MessagePermalinkSchema.make(
+          `https://zulip.example.com/#narrow/channel/${channelName}/near/1`,
+        ),
+      }
     : {
         id: decodeMessageIdSync(`msg-${channelName}-${threadName}`),
         channel,
@@ -47,6 +55,9 @@ const buildMessageRef = (channelName: string, threadName?: string): MessageRef =
             `https://zulip.example.com/#narrow/channel/${channelName}/topic/${threadName}`,
           ),
         }),
+        permalink: MessagePermalinkSchema.make(
+          `https://zulip.example.com/#narrow/channel/${channelName}/topic/${threadName}/near/1`,
+        ),
       }
 }
 
