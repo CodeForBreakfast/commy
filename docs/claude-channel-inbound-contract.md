@@ -129,6 +129,21 @@ carrier omits it while the machine carrier keeps it for session keying.
 
 `content` carries the error message.
 
+**Thread resolution is not an inbound event.** Marking a thread resolved or
+unresolved (the `resolve_thread` / `unresolve_thread` tools) does **not** emit a
+frame on either carrier. This mirrors the existing precedent that message
+*edits* do not emit — the catalogue above has no edit event kind either. The
+substrate surfaces resolution as **observable state**, not as a notification: a
+thread's resolved status rides on the `ThreadRef.resolved` field of the refs the
+substrate hands back from a read (`read_thread`, `read_channel`), so a consumer
+that cares reads it off the thread ref it already has. There is deliberately
+**no** `thread_resolved` key added to the `meta` catalogue, and no synthesised
+resolution `content` line: a resolution toggle changes no message body and
+warrants no turn interruption, and adding an inbound kind for it would oblige
+every consumer to handle a frame that carries nothing they route or dedup on. A
+resolution-aware consumer observes the flag on its next read; a resolution-blind
+one is unaffected.
+
 The `(channel_name, thread)` pair is the routing key: it is exactly what a
 multi-context consumer keys a session on. `message_id` is the dedup key (it covers
 both the catch-up/live-window overlap the substrate flags, and any

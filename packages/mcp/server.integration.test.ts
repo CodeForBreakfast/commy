@@ -86,6 +86,8 @@ const EXPECTED_TOOL_NAMES = [
   'presence',
   'read_channel',
   'read_thread',
+  'resolve_thread',
+  'unresolve_thread',
   'message_link',
   'subscribe',
   'unsubscribe',
@@ -230,6 +232,8 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
     edit: (msg, body) => base.publisher.edit(resolveMessageRef(msg), body),
     react: (msg, emoji) => base.publisher.react(resolveMessageRef(msg), emoji),
     unreact: (msg, emoji) => base.publisher.unreact(resolveMessageRef(msg), emoji),
+    setThreadResolved: (ch, thread, resolved) =>
+      base.publisher.setThreadResolved(resolveChannelRef(ch), thread, resolved),
   }
 
   const nameLenientInbox: MessageInbox = {

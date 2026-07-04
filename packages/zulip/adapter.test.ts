@@ -1032,6 +1032,140 @@ const seedMessages = (
     },
   })
 
+const messagesResponse = (
+  messages: ReadonlyArray<Record<string, unknown>>,
+): { readonly body: Record<string, unknown> } => ({
+  body: {
+    result: 'success',
+    messages,
+    anchor: 0,
+    found_anchor: false,
+    found_newest: true,
+    found_oldest: false,
+    history_limited: false,
+  },
+})
+
+const topicMessage = (id: number, subject: string): Record<string, unknown> => ({
+  id,
+  sender_id: HERMES.user_id,
+  sender_full_name: HERMES.full_name,
+  stream_id: 1234,
+  display_recipient: 'general',
+  subject,
+  content: 'body',
+  timestamp: 1715000000,
+})
+
+// Zulip resolves a thread by renaming its topic with a ✔ prefix and a
+// change_all edit; these assert the request shape (topic + propagate_mode) the
+// substrate-agnostic contract deliberately does not pin.
+effectTest(
+  'publisher.setThreadResolved resolves a thread — PATCHes the ✔ topic with change_all',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* seedMessages(stub, [topicMessage(555, 'lobby')])
+      yield* stub.respond('PATCH', '/api/v1/messages/555', { body: { result: 'success' } })
+      yield* adapter.publisher.setThreadResolved(
+        generalChannel,
+        decodeThreadNameSync('lobby'),
+        true,
+      )
+      const params = new URLSearchParams(
+        (yield* findRequest(stub, 'PATCH', '/api/v1/messages/555')).body,
+      )
+      expect(params.get('topic')).toBe('✔ lobby')
+      expect(params.get('propagate_mode')).toBe('change_all')
+    }),
+)
+
+effectTest(
+  'publisher.setThreadResolved unresolves a thread — PATCHes the bare topic with change_all',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      // The messages live under the resolved ✔ form; unresolve strips it back.
+      yield* seedMessages(stub, [topicMessage(555, '✔ lobby')])
+      yield* stub.respond('PATCH', '/api/v1/messages/555', { body: { result: 'success' } })
+      yield* adapter.publisher.setThreadResolved(
+        generalChannel,
+        decodeThreadNameSync('lobby'),
+        false,
+      )
+      const params = new URLSearchParams(
+        (yield* findRequest(stub, 'PATCH', '/api/v1/messages/555')).body,
+      )
+      expect(params.get('topic')).toBe('lobby')
+      expect(params.get('propagate_mode')).toBe('change_all')
+    }),
+)
+
+effectTest(
+  'publisher.setThreadResolved is a no-op (no PATCH) when the thread is already in the requested state',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      // Source form (bare 'lobby') is empty; the target ✔ form already holds the
+      // thread — resolving again must issue no PATCH.
+      yield* stub.respondSequence('GET', '/api/v1/messages', [
+        messagesResponse([]),
+        messagesResponse([topicMessage(555, '✔ lobby')]),
+      ])
+      yield* adapter.publisher.setThreadResolved(
+        generalChannel,
+        decodeThreadNameSync('lobby'),
+        true,
+      )
+      const reqs = yield* stub.captured
+      expect(reqs.find((r) => r.method === 'PATCH')).toBeUndefined()
+    }),
+)
+
+effectTest(
+  'publisher.setThreadResolved fails with PublisherError when the thread has no messages',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* seedMessages(stub, [])
+      const err = yield* Effect.flip(
+        adapter.publisher.setThreadResolved(generalChannel, decodeThreadNameSync('ghost'), true),
+      )
+      expect(err).toBeInstanceOf(PublisherError)
+      if (err instanceof PublisherError) expect(err.operation).toBe('setThreadResolved')
+      const reqs = yield* stub.captured
+      expect(reqs.find((r) => r.method === 'PATCH')).toBeUndefined()
+    }),
+)
+
+effectTest(
+  'history.readThread falls back to the resolved topic and surfaces a clean name + resolved=true',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* seedUsers(stub, [HERMES])
+      // The bare 'lobby' topic is empty (it was resolved); the ✔ form carries
+      // the messages. readThread must fall back and strip the prefix off.
+      yield* stub.respondSequence('GET', '/api/v1/messages', [
+        messagesResponse([]),
+        messagesResponse([topicMessage(555, '✔ lobby')]),
+      ])
+      const messages = yield* adapter.history.readThread(
+        generalChannel,
+        decodeThreadNameSync('lobby'),
+        {},
+      )
+      expect(messages).toHaveLength(1)
+      expect(messages[0]?.ref.thread?.name).toBe(decodeThreadNameSync('lobby'))
+      expect(messages[0]?.ref.thread?.resolved).toBe(true)
+    }),
+)
+
 effectTest('history.readChannel narrows by channel and maps each message to the port shape', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
@@ -1060,6 +1194,7 @@ effectTest('history.readChannel narrows by channel and maps each message to the 
         },
         thread: {
           name: decodeThreadNameSync('lobby'),
+          resolved: false,
           permalink: 'https://zulip.example.com/#narrow/channel/1234-general/topic/lobby',
         },
         permalink: 'https://zulip.example.com/#narrow/channel/1234-general/topic/lobby/near/555',

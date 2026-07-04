@@ -138,6 +138,15 @@ export interface ChannelRef {
 
 export interface ThreadRef {
   readonly name: ThreadName
+  /**
+   * Whether the substrate reports this thread resolved (see
+   * `MessagePublisher.setThreadResolved`). Resolution is modelled as a status
+   * distinct from `name` — the name never encodes it. Populated on refs the
+   * substrate hands back from reads/inbound events; omitted on refs built to
+   * address a thread (post target, subscription), where resolution does not
+   * apply. A resolution-aware consumer treats an absent value as unresolved.
+   */
+  readonly resolved?: boolean
   readonly permalink?: string
 }
 
@@ -372,6 +381,21 @@ export interface MessagePublisher {
   edit(message: MessageRef, body: MessageBody): Effect.Effect<void, PublisherError>
   react(message: MessageRef, emoji: Emoji): Effect.Effect<void, PublisherError>
   unreact(message: MessageRef, emoji: Emoji): Effect.Effect<void, PublisherError>
+  /**
+   * Mark a thread resolved, or clear that state, across the whole thread.
+   * Idempotent: a thread already in the requested state is a no-op with no
+   * substrate write. Like `edit`, this mutates substrate state and emits no
+   * InboundEvent — a consumer observes the new status via `ThreadRef.resolved`
+   * when it next reads the thread. `thread` is the thread's plain name (never a
+   * resolution-encoded form). A substrate failure (including a thread the
+   * substrate has no messages for) surfaces as a typed `PublisherError`;
+   * calling before `identity.acquire` is a defect, not a typed failure.
+   */
+  setThreadResolved(
+    channel: ChannelRef,
+    thread: ThreadName,
+    resolved: boolean,
+  ): Effect.Effect<void, PublisherError>
 }
 
 export interface MessageInbox {
@@ -546,7 +570,7 @@ export class UnknownChannel extends Data.TaggedError('UnknownChannel')<{
  * that failed. Mirrors `DirectoryError` so core stays substrate-agnostic.
  */
 export class PublisherError extends Data.TaggedError('PublisherError')<{
-  readonly operation: 'post' | 'edit' | 'react' | 'unreact'
+  readonly operation: 'post' | 'edit' | 'react' | 'unreact' | 'setThreadResolved'
   readonly cause: unknown
 }> {
   override get message(): string {

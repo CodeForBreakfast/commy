@@ -107,7 +107,10 @@ test('withChannelPermalink decorates a channel ref with its permalink', () => {
 
 test('buildMessageRef decorates message, channel and topic for a threaded message', () => {
   expect(
-    buildMessageRef(base, decodeMessageIdSync('42'), channel, decodeThreadNameSync('lobby')),
+    buildMessageRef(base, decodeMessageIdSync('42'), channel, {
+      name: decodeThreadNameSync('lobby'),
+      rawTopic: 'lobby',
+    }),
   ).toEqual({
     id: decodeMessageIdSync('42'),
     channel: {
@@ -120,6 +123,32 @@ test('buildMessageRef decorates message, channel and topic for a threaded messag
       permalink: 'https://zulip.example.com/#narrow/channel/9-general/topic/lobby',
     },
     permalink: 'https://zulip.example.com/#narrow/channel/9-general/topic/lobby/near/42',
+  })
+})
+
+test('buildMessageRef surfaces a clean name + resolved flag while the URL keeps the raw ✔ topic', () => {
+  expect(
+    buildMessageRef(base, decodeMessageIdSync('42'), channel, {
+      name: decodeThreadNameSync('lobby'),
+      rawTopic: '✔ lobby',
+      resolved: true,
+    }),
+  ).toEqual({
+    id: decodeMessageIdSync('42'),
+    channel: {
+      id: decodeChannelIdSync('9'),
+      name: decodeChannelNameSync('general'),
+      permalink: 'https://zulip.example.com/#narrow/channel/9-general',
+    },
+    thread: {
+      name: decodeThreadNameSync('lobby'),
+      resolved: true,
+      // The narrow must encode the actual ✔-prefixed topic, or the link
+      // 404s — even though ThreadRef.name is the clean 'lobby'.
+      permalink: 'https://zulip.example.com/#narrow/channel/9-general/topic/.E2.9C.94.20lobby',
+    },
+    permalink:
+      'https://zulip.example.com/#narrow/channel/9-general/topic/.E2.9C.94.20lobby/near/42',
   })
 })
 

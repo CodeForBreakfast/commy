@@ -60,14 +60,17 @@ const channelSlug = (channel: ChannelLike): string =>
 export const channelPermalink = (base: string, channel: ChannelLike): string =>
   `${base}/#narrow/channel/${channelSlug(channel)}`
 
-export const topicPermalink = (base: string, channel: ChannelLike, topic: ThreadName): string =>
+// `topic` is the raw substrate topic string, not the port-facing ThreadName:
+// a resolved topic narrows on its ✔-prefixed name, so the URL must encode that
+// exact string even though ThreadRef.name carries the clean name.
+export const topicPermalink = (base: string, channel: ChannelLike, topic: string): string =>
   `${channelPermalink(base, channel)}/topic/${encodeHashComponent(topic)}`
 
 export const messagePermalink = (
   base: string,
   channel: ChannelLike,
   id: MessageId,
-  topic?: ThreadName,
+  topic?: string,
 ): string =>
   topic === undefined
     ? `${channelPermalink(base, channel)}/near/${id}`
@@ -80,6 +83,19 @@ export const withChannelPermalink = (
 ): ChannelRef => ({ ...channel, permalink: channelPermalink(base, channel) })
 
 /**
+ * The thread coordinates a MessageRef carries: the port-facing clean `name`,
+ * the `rawTopic` the substrate actually stores (which drives the URL and may
+ * carry the resolved prefix), and `resolved` when the read path knows it —
+ * omitted on refs built to address a thread (post/hint), where resolution is
+ * unknown.
+ */
+export interface ThreadCoordinates {
+  readonly name: ThreadName
+  readonly rawTopic: string
+  readonly resolved?: boolean
+}
+
+/**
  * Assemble a fully-decorated MessageRef — message, channel, and (when present)
  * topic permalinks. The single ref-builder both the history/post paths and the
  * inbound-event path go through, so the two can never drift on URL shape.
@@ -88,18 +104,19 @@ export const buildMessageRef = (
   base: string,
   id: MessageId,
   channel: { readonly id: ChannelId; readonly name: ChannelName },
-  threadName?: ThreadName,
+  thread?: ThreadCoordinates,
 ): MessageRef => {
   const decoratedChannel = withChannelPermalink(base, channel)
-  return threadName === undefined
+  return thread === undefined
     ? { id, channel: decoratedChannel, permalink: messagePermalink(base, decoratedChannel, id) }
     : {
         id,
         channel: decoratedChannel,
         thread: {
-          name: threadName,
-          permalink: topicPermalink(base, decoratedChannel, threadName),
+          name: thread.name,
+          ...(thread.resolved === undefined ? {} : { resolved: thread.resolved }),
+          permalink: topicPermalink(base, decoratedChannel, thread.rawTopic),
         },
-        permalink: messagePermalink(base, decoratedChannel, id, threadName),
+        permalink: messagePermalink(base, decoratedChannel, id, thread.rawTopic),
       }
 }

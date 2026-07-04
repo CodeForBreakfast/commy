@@ -675,6 +675,82 @@ test('read_channel decorates each message with message and channel permalinks', 
     ),
   ))
 
+test('resolve_thread marks a thread resolved, surfaced as thread.resolved on read_thread', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* ensureBound()
+            const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+            cache.rememberChannel(channelRef)
+            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('to resolve'), {
+              thread: { name: decodeThreadNameSync('bug-report') },
+            })
+          }),
+        )
+        const resolved = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'resolve_thread',
+            arguments: { channel_name: 'home', thread: 'bug-report' },
+          }),
+        )
+        expect(resolved.isError).toBeFalsy()
+        const read = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'read_thread',
+            arguments: { channel_name: 'home', thread: 'bug-report' },
+          }),
+        )
+        const sc = read.structuredContent as {
+          messages: Array<{ thread: { name: string; resolved: boolean } | null }>
+        }
+        expect(sc.messages[0]?.thread?.name).toBe('bug-report')
+        expect(sc.messages[0]?.thread?.resolved).toBe(true)
+      }),
+    ),
+  ))
+
+test('unresolve_thread clears a resolved thread, surfaced as thread.resolved=false', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* ensureBound()
+            const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+            cache.rememberChannel(channelRef)
+            yield* adapter.publisher.post(channelRef, decodeMessageBodySync('round trip'), {
+              thread: { name: decodeThreadNameSync('bug-report') },
+            })
+          }),
+        )
+        yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'resolve_thread',
+            arguments: { channel_name: 'home', thread: 'bug-report' },
+          }),
+        )
+        yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'unresolve_thread',
+            arguments: { channel_name: 'home', thread: 'bug-report' },
+          }),
+        )
+        const read = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'read_thread',
+            arguments: { channel_name: 'home', thread: 'bug-report' },
+          }),
+        )
+        const sc = read.structuredContent as {
+          messages: Array<{ thread: { resolved: boolean } | null }>
+        }
+        expect(sc.messages[0]?.thread?.resolved).toBe(false)
+      }),
+    ),
+  ))
+
 test('list_channels decorates each channel with a permalink', () =>
   Effect.runPromise(
     Effect.scoped(

@@ -183,6 +183,20 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     const messagesByChannel = new Map<string, StoredMessage[]>()
     const messagesById = new Map<string, StoredMessage>()
     const reactionsByMessage = new Map<string, Map<Emoji, Set<string>>>()
+    // Resolution status is kept separate from the (always-clean) thread name,
+    // per channel id → set of resolved thread names. Overlaid onto a ref's
+    // thread at read time so a later resolve/unresolve is reflected without
+    // rewriting stored messages.
+    const resolvedThreadsByChannel = new Map<string, Set<string>>()
+    const isThreadResolved = (channelId: string, threadName: string): boolean =>
+      resolvedThreadsByChannel.get(channelId)?.has(threadName) ?? false
+    const withThreadResolution = (ref: MessageRef): MessageRef =>
+      ref.thread === undefined
+        ? ref
+        : {
+            ...ref,
+            thread: { ...ref.thread, resolved: isThreadResolved(ref.channel.id, ref.thread.name) },
+          }
 
     const nextChannelId = yield* Ref.make(1)
     const nextIdentityId = yield* Ref.make(1)
@@ -454,6 +468,36 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
             return fanOutOnReaction(message.id, 'reaction-removed', emoji, self)
           }),
         ),
+      // Resolution is tracked as a status separate from the thread name (the
+      // name never encodes it), surfaced on reads via ThreadRef.resolved.
+      // Idempotent — re-setting the same state is a no-op. Like edit, emits no
+      // InboundEvent. Mirrors the Zulip adapter's "no messages in the thread →
+      // PublisherError" so the contract holds across both substrates.
+      setThreadResolved: (channel, thread, resolved) =>
+        requireBound().pipe(
+          Effect.flatMap(() => {
+            const bucket = messagesByChannel.get(channel.id) ?? []
+            const hasThread = bucket.some((m) => m.ref.thread?.name === thread)
+            if (!hasThread) {
+              return Effect.fail(
+                new PublisherError({
+                  operation: 'setThreadResolved',
+                  cause: new Error(
+                    `memoryAdapter: no thread '${thread}' in ${channel.name} to ${
+                      resolved ? 'resolve' : 'unresolve'
+                    }`,
+                  ),
+                }),
+              )
+            }
+            const resolvedNames = resolvedThreadsByChannel.get(channel.id) ?? new Set<string>()
+            if (resolved) resolvedNames.add(thread)
+            else resolvedNames.delete(thread)
+            if (resolvedNames.size > 0) resolvedThreadsByChannel.set(channel.id, resolvedNames)
+            else resolvedThreadsByChannel.delete(channel.id)
+            return Effect.void
+          }),
+        ),
     }
 
     const MENTIONS_KEY = Data.struct({ kind: 'mentions' as const })
@@ -537,7 +581,10 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     const fanOutOnPost = (stored: StoredMessage): Effect.Effect<void> =>
       Effect.gen(function* () {
         if (!(yield* deliverableForPost(stored))) return
-        const portMessage = toMessage(stored, collectReactions(stored.ref.id))
+        const portMessage = toMessage(
+          { ...stored, ref: withThreadResolution(stored.ref) },
+          collectReactions(stored.ref.id),
+        )
         yield* dispatchEvent({ kind: 'message-posted', message: portMessage })
         const current = yield* Ref.get(bound)
         if (Option.isSome(current)) {
@@ -606,7 +653,10 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
             )
             const out: InboundEvent[] = []
             for (const stored of sorted) {
-              const portMessage = toMessage(stored, collectReactions(stored.ref.id))
+              const portMessage = toMessage(
+                { ...stored, ref: withThreadResolution(stored.ref) },
+                collectReactions(stored.ref.id),
+              )
               out.push({ kind: 'message-posted', message: portMessage })
               if (stored.mentions.some((m) => m.id === me.id)) {
                 out.push({
@@ -627,7 +677,10 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     ): ReadonlyArray<StoredMessage> => (limit === undefined ? messages : messages.slice(0, limit))
 
     const projectStored = (stored: StoredMessage): Message =>
-      toMessage(stored, collectReactions(stored.ref.id))
+      toMessage(
+        { ...stored, ref: withThreadResolution(stored.ref) },
+        collectReactions(stored.ref.id),
+      )
 
     const history: HistoryReader = {
       // An unknown channel is a non-fatal domain failure on the typed E

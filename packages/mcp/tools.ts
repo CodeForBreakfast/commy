@@ -277,7 +277,11 @@ const messageShape = (m: Message): Record<string, unknown> => ({
   thread:
     m.ref.thread === undefined
       ? null
-      : { name: m.ref.thread.name, permalink: m.ref.thread.permalink ?? null },
+      : {
+          name: m.ref.thread.name,
+          resolved: m.ref.thread.resolved ?? false,
+          permalink: m.ref.thread.permalink ?? null,
+        },
   permalink: m.ref.permalink ?? null,
   sender: identityShape(m.sender),
   body: m.body,
@@ -376,6 +380,10 @@ const ReadThreadArgs = Schema.Struct({
   thread: Schema.String,
   ...RangeArgs,
 })
+const ThreadResolutionArgs = Schema.Struct({
+  channel_name: Schema.String,
+  thread: Schema.String,
+})
 const MessageLinkArgs = Schema.Struct({
   message_id: Schema.String,
   channel_name: Schema.optional(Schema.String),
@@ -431,6 +439,46 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
       intentToTarget(intent).pipe(Effect.flatMap((target) => adapter.inbox.subscribe(target))),
     )
   }
+  // resolve_thread / unresolve_thread share everything but the boolean they
+  // pass to the port; the factory keeps the pair in lockstep.
+  const setThreadResolvedTool = (
+    name: string,
+    description: string,
+    resolved: boolean,
+  ): ToolDef => ({
+    name,
+    description,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel_name: { type: 'string', description: 'Channel the thread lives in' },
+        thread: { type: 'string', description: 'Thread / topic name within the channel' },
+        session_id: sessionIdField,
+        cwd: cwdField,
+      },
+      required: ['channel_name', 'thread'],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      await runEdge(
+        Effect.flatMap(projectForArgs(args), (project) =>
+          identityCache.ensureBoundFor(readSessionId(args), project),
+        ).pipe(Effect.flatMap((ensureBound) => ensureBound())),
+      )
+      await runEdge(
+        Effect.gen(function* () {
+          const { channel_name, thread } = yield* Schema.decodeUnknown(ThreadResolutionArgs)(args)
+          const channel = yield* resolveChannel(cache, channel_name)
+          yield* adapter.publisher.setThreadResolved(
+            channel,
+            yield* decodeThreadName(thread),
+            resolved,
+          )
+        }),
+      )
+      return {}
+    },
+  })
   const coreTools: ReadonlyArray<ToolDef> = [
     {
       name: 'current_identity',
@@ -859,6 +907,16 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         return { messages: messages.map(messageShape) }
       },
     },
+    setThreadResolvedTool(
+      'resolve_thread',
+      "Mark a thread resolved (channel_name + thread, like read_thread). Idempotent — resolving an already-resolved thread is a no-op. Resolution is a status kept separate from the thread name; read it back as a message's thread.resolved via read_thread / read_channel. Use unresolve_thread to clear it.",
+      true,
+    ),
+    setThreadResolvedTool(
+      'unresolve_thread',
+      "Clear a thread's resolved status (channel_name + thread, like read_thread). Idempotent — unresolving a thread that is not resolved is a no-op. The inverse of resolve_thread.",
+      false,
+    ),
     {
       name: 'message_link',
       description:

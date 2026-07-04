@@ -40,6 +40,7 @@ import {
 } from 'effect'
 import type { ZulipApiError, ZulipHttp } from './http.ts'
 import { buildMessageRef } from './permalink.ts'
+import { splitTopic } from './resolved-topic.ts'
 
 export interface DirectoryLookup {
   readonly byId: ReadonlyMap<number, Identity>
@@ -275,8 +276,18 @@ const decodeMessageRef = (
     const id = yield* decodeMessageId(String(message.id))
     const channelId = yield* decodeChannelId(String(message.stream_id))
     const channelName = yield* decodeChannelName(message.display_recipient)
-    const threadName = yield* decodeThreadName(message.subject)
-    return buildMessageRef(base, id, { id: channelId, name: channelName }, threadName)
+    const { name: cleanName, resolved } = splitTopic(message.subject)
+    const threadName = yield* decodeThreadName(cleanName)
+    return buildMessageRef(
+      base,
+      id,
+      { id: channelId, name: channelName },
+      {
+        name: threadName,
+        rawTopic: message.subject,
+        resolved,
+      },
+    )
   })
 
 const decodeSenderIdentity = (
