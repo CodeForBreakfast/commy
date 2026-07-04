@@ -8,6 +8,7 @@ import type {
   ThreadName,
 } from '@commy/core/ports'
 import {
+  ChannelPermalinkSchema,
   decodeChannelIdSync,
   decodeChannelNameSync,
   decodeDisplayNameSync,
@@ -41,6 +42,7 @@ const human: Identity = {
 const channelRef = (name: string): ChannelRef => ({
   id: decodeChannelIdSync(name),
   name: decodeChannelNameSync(name),
+  permalink: ChannelPermalinkSchema.make(`https://zulip.example.com/#narrow/channel/${name}`),
 })
 
 const buildMessage = (
@@ -88,13 +90,13 @@ const buildHistorySpy = (
     history: {
       readChannel: (channel, range) =>
         Effect.sync(() => {
-          channelCalls.push({ channel: channel.name, range })
-          return byChannel[channel.name] ?? []
+          channelCalls.push({ channel, range })
+          return byChannel[channel] ?? []
         }),
       readThread: (channel, threadName, range) =>
         Effect.sync(() => {
-          threadCalls.push({ channel: channel.name, thread: threadName, range })
-          return byThread[`${channel.name}/${threadName}`] ?? []
+          threadCalls.push({ channel, thread: threadName, range })
+          return byThread[`${channel}/${threadName}`] ?? []
         }),
       recentThreads: () => Effect.succeed([]),
       messagePermalink: () => Effect.succeed(Option.none()),

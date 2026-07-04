@@ -3,15 +3,15 @@ import type {
   SubscriptionTarget,
   ThreadName as ThreadNameType,
 } from '@commy/core/ports'
-import { decodeChannelId, decodeChannelName, decodeThreadName } from '@commy/core/ports'
+import { decodeChannelName, decodeThreadName } from '@commy/core/ports'
 import { Data, Effect, Match, String as Str } from 'effect'
 
 /**
  * Parser-stage representation of `COMMY_SUBSCRIBE` tokens and
- * `subscribe`/`unsubscribe` MCP tool arguments. Distinct from
- * `SubscriptionTarget` (in `core/ports.ts`) which requires a resolved
- * `ChannelId` — substrate resolution happens downstream once an
- * adapter is available.
+ * `subscribe`/`unsubscribe` MCP tool arguments. Carries the same channel
+ * *address* (a `ChannelName`) as the port's `SubscriptionTarget`; the two
+ * differ only in the thread/new-topics wrapper shapes, so `intentToTarget`
+ * is a pure re-shaping with nothing to resolve.
  */
 export type SubscribeIntent =
   | { readonly kind: 'channel'; readonly channelName: ChannelNameType }
@@ -104,40 +104,22 @@ export const parseSubscribeTarget = (
 
 /**
  * Map a parsed SubscribeIntent to the port-shaped SubscriptionTarget the
- * adapter expects. The ChannelId is synthesised from the name — Zulip
- * addresses channels by name on the wire, and memory uses the id only
- * as a cache key, so a name-shaped placeholder is faithful for both V1
- * substrates. A future substrate that demands a real id at subscribe
- * time should introduce a port-level resolver and replace this mapping.
- *
- * The id decode is dieable, not a real failure mode: `intent.channelName`
- * is already a validated non-empty `ChannelName`, and `ChannelId` carries
- * the same non-empty constraint, so the decode provably cannot fail.
+ * adapter expects. Channels are addressed by name, so this is a pure
+ * re-shaping — the `channel:` arm collapses to the bare `ChannelName`, and
+ * the thread / new-topics arms wrap it in their port record.
  */
-export const intentToTarget = (intent: SubscribeIntent): Effect.Effect<SubscriptionTarget> =>
+export const intentToTarget = (intent: SubscribeIntent): SubscriptionTarget =>
   Match.value(intent).pipe(
     Match.discriminatorsExhaustive('kind')({
-      mentions: () => Effect.succeed('mentions' as const),
-      channel: ({ channelName }) =>
-        decodeChannelId(channelName).pipe(
-          Effect.map((id) => ({ id, name: channelName })),
-          Effect.orDie,
-        ),
-      'new-topics-in-channel': ({ channelName }) =>
-        decodeChannelId(channelName).pipe(
-          Effect.map((id) => ({
-            kind: 'new-topics-in-channel' as const,
-            channel: { id, name: channelName },
-          })),
-          Effect.orDie,
-        ),
-      thread: ({ channelName, threadName }) =>
-        decodeChannelId(channelName).pipe(
-          Effect.map((id) => ({
-            channel: { id, name: channelName },
-            thread: threadName,
-          })),
-          Effect.orDie,
-        ),
+      mentions: (): SubscriptionTarget => 'mentions',
+      channel: ({ channelName }): SubscriptionTarget => channelName,
+      'new-topics-in-channel': ({ channelName }): SubscriptionTarget => ({
+        kind: 'new-topics-in-channel',
+        channel: channelName,
+      }),
+      thread: ({ channelName, threadName }): SubscriptionTarget => ({
+        channel: channelName,
+        thread: threadName,
+      }),
     }),
   )

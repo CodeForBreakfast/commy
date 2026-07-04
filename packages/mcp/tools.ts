@@ -12,6 +12,8 @@ import type {
   Timestamp,
 } from '@commy/core/ports'
 import {
+  ChannelPermalinkSchema,
+  ChannelRefSchema,
   decodeChannelId,
   decodeChannelName,
   decodeEmoji,
@@ -89,18 +91,6 @@ const identityShape = (identity: Identity): SerializedIdentity => ({
   id: identity.id,
   name: identity.name,
   kind: identity.kind,
-})
-
-interface SerializedChannel {
-  readonly id: string
-  readonly name: string
-  readonly permalink: string | null
-}
-
-const channelShape = (channel: ChannelRef): SerializedChannel => ({
-  id: channel.id,
-  name: channel.name,
-  permalink: channel.permalink ?? null,
 })
 
 export interface ToolsCache {
@@ -251,7 +241,7 @@ const reconstructMessageRef = (
     if (channelNameArg === undefined) {
       return yield* new UnknownMessageError({ id: rawId })
     }
-    const channel = yield* resolveChannel(cache, channelNameArg)
+    const channel = yield* addressChannel(cache, yield* decodeChannelName(channelNameArg))
     return { id, channel, thread: Option.none() }
   })
 
@@ -270,40 +260,52 @@ const resolveMentions = (
   )
 
 const encodeThreadFacet = Schema.encode(Schema.OptionFromNullOr(ObservedThreadSchema))
+const encodeChannel = Schema.encode(ChannelRefSchema)
+const decodeChannelPermalink = Schema.decode(ChannelPermalinkSchema)
 
 const messageShape = (m: Message): Effect.Effect<Record<string, unknown>, ParseResult.ParseError> =>
-  Effect.map(encodeThreadFacet(m.ref.thread), (thread) => ({
-    id: m.ref.id,
-    channel: {
-      id: m.ref.channel.id,
-      name: m.ref.channel.name,
-      permalink: m.ref.channel.permalink ?? null,
-    },
-    thread,
-    permalink: m.ref.permalink ?? null,
-    sender: identityShape(m.sender),
-    body: m.body,
-    ts: m.ts,
-    mentions: m.mentions.map(identityShape),
-    reactions: m.reactions.map((r) => ({
-      emoji: r.emoji,
-      by: r.by.map(identityShape),
+  Effect.all({
+    channel: encodeChannel(m.ref.channel),
+    thread: encodeThreadFacet(m.ref.thread),
+  }).pipe(
+    Effect.map(({ channel, thread }) => ({
+      id: m.ref.id,
+      channel,
+      thread,
+      permalink: m.ref.permalink ?? null,
+      sender: identityShape(m.sender),
+      body: m.body,
+      ts: m.ts,
+      mentions: m.mentions.map(identityShape),
+      reactions: m.reactions.map((r) => ({
+        emoji: r.emoji,
+        by: r.by.map(identityShape),
+      })),
     })),
-  }))
+  )
 
-const resolveChannel = (
+// The channel facet of an *address* MessageRef — the react/edit/unreact/reply
+// target rebuilt from a bare id (reconstructMessageRef). When the channel has
+// been observed this session it comes straight from cache with its real id and
+// permalink. Otherwise only the name is known, so id and permalink are
+// name-derived placeholders: transparently placeholders, never a plausible URL,
+// and never surfaced — `channelByName` is read only here to rebuild address
+// refs (display permalinks come from the adapter, not this cache). The real fix
+// is the message-address split (comms-e6yi), which drops the observation
+// channel from an address entirely; this placeholder is an accepted transient
+// owned by that bead.
+const addressChannel = (
   cache: InternalCache,
-  rawName: string,
+  name: ChannelName,
 ): Effect.Effect<ChannelRef, ParseResult.ParseError> =>
   Effect.gen(function* () {
-    const name = yield* decodeChannelName(rawName)
     const cached = cache.channelByName.get(name)
     if (cached !== undefined) return cached
-    // Synthetic ref by name. Substrates that use only the name (Zulip) treat
-    // this as equivalent to a real ref. Substrates that strictly check id
-    // (memory adapter) require the cache to be populated first.
-    const synthetic: ChannelRef = { id: yield* decodeChannelId(rawName), name }
-    return synthetic
+    return {
+      id: yield* decodeChannelId(name),
+      name,
+      permalink: yield* decodeChannelPermalink(name),
+    }
   })
 
 const parseRange = (range: {
@@ -432,9 +434,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
       threadName: threadName.value,
     }
     narrowSet.add(intent)
-    await runEdge(
-      intentToTarget(intent).pipe(Effect.flatMap((target) => adapter.inbox.subscribe(target))),
-    )
+    await runEdge(adapter.inbox.subscribe(intentToTarget(intent)))
   }
   const coreTools: ReadonlyArray<ToolDef> = [
     {
@@ -533,7 +533,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
       handler: async () => {
         const channels = await runEdge(adapter.directory.listChannels())
         for (const c of channels) cache.rememberChannel(c)
-        return { channels: channels.map(channelShape) }
+        return { channels: await runEdge(Effect.forEach(channels, (c) => encodeChannel(c))) }
       },
     },
     {
@@ -576,7 +576,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           Effect.gen(function* () {
             const { channel_name, body, thread, mentions, reply_to } =
               yield* Schema.decodeUnknown(PostArgs)(args)
-            const channel = yield* resolveChannel(cache, channel_name)
+            const channel = yield* decodeChannelName(channel_name)
             const messageBody = yield* decodeMessageBody(body)
             const opts: { -readonly [K in keyof PostOpts]: PostOpts[K] } = {}
             if (thread !== undefined) {
@@ -771,8 +771,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             // the substrate-side call subscribes the minter to streams the
             // boot-time reconciler didn't have a chance to cover.
             narrowSet.add(intent)
-            const target = yield* intentToTarget(intent)
-            yield* adapter.inbox.subscribe(target)
+            yield* adapter.inbox.subscribe(intentToTarget(intent))
             if (sessionId !== undefined && deps.persistSessionSubscriptions !== undefined) {
               yield* deps.persistSessionSubscriptions(sessionId)
             }
@@ -808,8 +807,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
               yield* deps.ensureSessionSubscriptions(sessionId, yield* projectForArgs(args))
             }
             narrowSet.remove(intent)
-            const target = yield* intentToTarget(intent)
-            yield* adapter.inbox.unsubscribe(target)
+            yield* adapter.inbox.unsubscribe(intentToTarget(intent))
             if (sessionId !== undefined && deps.persistSessionSubscriptions !== undefined) {
               yield* deps.persistSessionSubscriptions(sessionId)
             }
@@ -835,8 +833,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         const messages = await runEdge(
           Effect.gen(function* () {
             const parsed = yield* Schema.decodeUnknown(ReadChannelArgs)(args)
-            const channelRef = yield* resolveChannel(cache, parsed.channel_name)
-            return yield* adapter.history.readChannel(channelRef, yield* parseRange(parsed))
+            const channel = yield* decodeChannelName(parsed.channel_name)
+            return yield* adapter.history.readChannel(channel, yield* parseRange(parsed))
           }),
         )
         for (const m of messages) {
@@ -864,9 +862,9 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         const messages = await runEdge(
           Effect.gen(function* () {
             const parsed = yield* Schema.decodeUnknown(ReadThreadArgs)(args)
-            const channelRef = yield* resolveChannel(cache, parsed.channel_name)
+            const channel = yield* decodeChannelName(parsed.channel_name)
             return yield* adapter.history.readThread(
-              channelRef,
+              channel,
               yield* decodeThreadName(parsed.thread),
               yield* parseRange(parsed),
             )

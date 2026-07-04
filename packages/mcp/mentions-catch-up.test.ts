@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { Identity, InboundEvent, MessageInbox } from '@commy/core/ports'
 import {
+  ChannelPermalinkSchema,
   decodeChannelIdSync,
   decodeChannelNameSync,
   decodeDisplayNameSync,
@@ -41,6 +42,9 @@ const otherSender: Identity = {
 const channelRef = {
   id: decodeChannelIdSync('chan-1'),
   name: decodeChannelNameSync('general'),
+  permalink: ChannelPermalinkSchema.make(
+    'https://zulip.example.com/#narrow/channel/chan-1-general',
+  ),
 }
 
 const buildMention = (ts: number, body: string): InboundEvent => ({

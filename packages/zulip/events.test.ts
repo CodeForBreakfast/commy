@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { captureLogger } from '@commy/core/logging'
 import type { Identity, InboundEvent, MessageRef } from '@commy/core/ports'
 import {
+  ChannelPermalinkSchema,
   decodeChannelIdSync,
   decodeChannelNameSync,
   decodeDisplayNameSync,
@@ -102,7 +103,9 @@ test('decorates the inbound message ref with message, channel and topic permalin
     expect(ref.permalink).toBe(
       'https://zulip.example.com/#narrow/channel/1-general/topic/topic/near/100',
     )
-    expect(ref.channel.permalink).toBe('https://zulip.example.com/#narrow/channel/1-general')
+    expect(ref.channel.permalink).toBe(
+      ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/1-general'),
+    )
     expect(Option.map(ref.thread, (t) => t.permalink)).toEqual(
       Option.some(
         ThreadPermalinkSchema.make(
@@ -139,6 +142,7 @@ test('MessageRefCache.get is None on miss and Some on hit', () => {
     channel: {
       id: decodeChannelIdSync('1'),
       name: decodeChannelNameSync('general'),
+      permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/1-general'),
     },
     thread: Option.none(),
   }
@@ -562,7 +566,13 @@ test(
           message: {
             ref: {
               id: decodeMessageIdSync('150'),
-              channel: { id: decodeChannelIdSync('1'), name: decodeChannelNameSync('general') },
+              channel: {
+                id: decodeChannelIdSync('1'),
+                name: decodeChannelNameSync('general'),
+                permalink: ChannelPermalinkSchema.make(
+                  'https://zulip.example.com/#narrow/channel/1-general',
+                ),
+              },
               thread: Option.some({
                 name: decodeThreadNameSync('topic'),
                 permalink: ThreadPermalinkSchema.make(

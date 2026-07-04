@@ -4,7 +4,6 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { captureLogger, stderrLoggerLayer } from '@commy/core/logging'
 import type {
-  ChannelRef,
   Directory,
   HistoryReader,
   IdentityId as IdentityIdType,
@@ -12,12 +11,12 @@ import type {
   InboundEvent,
   MessageInbox,
   MessagePublisher,
-  MessageRef,
   SubscriptionTarget,
   Timestamp as TimestampType,
 } from '@commy/core/ports'
 import {
   type ChannelName,
+  ChannelPermalinkSchema,
   decodeChannelIdSync,
   decodeChannelNameSync,
   decodeDisplayNameSync,
@@ -180,40 +179,17 @@ interface Harness {
 const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> => {
   const base = await Effect.runPromise(memoryAdapter())
 
-  // Seed channels and stash their real refs by name. The memory adapter is
-  // id-strict: it stores channels at numeric ids (counter) and rejects
-  // `requireChannel` lookups against synthetic refs whose id equals the
-  // channel name. The tools layer mints exactly such synthetic refs when
-  // it has no cached real ref. We bridge the two by intercepting ref-shaped
-  // arguments at the adapter boundary and substituting the real ref —
-  // mirroring what name-based substrates (Zulip) do server-side. The
-  // memory adapter itself is unchanged; storage, fan-out, subscription
-  // matching, and event delivery all flow through it.
-  const realChannelByName = new Map<ChannelName, ChannelRef>()
+  // Seed the channels/agents/humans the test asked for. Channels are addressed
+  // by name end-to-end, so the memory adapter resolves a bare ChannelName to its
+  // stored ref internally — no id-strict ref-substitution bridge is needed.
   for (const name of overrides.seedChannels ?? []) {
-    const ref = await Effect.runPromise(base.seedChannel(name).pipe(Effect.orDie))
-    realChannelByName.set(ref.name, ref)
+    await Effect.runPromise(base.seedChannel(name).pipe(Effect.orDie))
   }
   for (const name of overrides.seedAgents ?? []) {
     await Effect.runPromise(base.seedAgent(name).pipe(Effect.orDie))
   }
   for (const name of overrides.seedHumans ?? []) {
     await Effect.runPromise(base.seedHuman(name).pipe(Effect.orDie))
-  }
-
-  const resolveChannelRef = (ref: ChannelRef): ChannelRef => realChannelByName.get(ref.name) ?? ref
-
-  const resolveMessageRef = (ref: MessageRef): MessageRef => ({
-    ...ref,
-    channel: resolveChannelRef(ref.channel),
-  })
-
-  const resolveSubscriptionTarget = (target: SubscriptionTarget): SubscriptionTarget => {
-    if (target === 'mentions') return target
-    if ('channel' in target) {
-      return { ...target, channel: resolveChannelRef(target.channel) }
-    }
-    return resolveChannelRef(target)
   }
 
   const killSwitch = Deferred.unsafeMake<void>(FiberId.none)
@@ -225,27 +201,11 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
 
   const closes = { count: 0 }
 
-  const nameLenientPublisher: MessagePublisher = {
-    post: (ch, body, opts) => base.publisher.post(resolveChannelRef(ch), body, opts),
-    edit: (msg, body) => base.publisher.edit(resolveMessageRef(msg), body),
-    react: (msg, emoji) => base.publisher.react(resolveMessageRef(msg), emoji),
-    unreact: (msg, emoji) => base.publisher.unreact(resolveMessageRef(msg), emoji),
-  }
+  const nameLenientPublisher: MessagePublisher = base.publisher
 
-  const nameLenientInbox: MessageInbox = {
-    subscribe: (target) => base.inbox.subscribe(resolveSubscriptionTarget(target)),
-    unsubscribe: (target) => base.inbox.unsubscribe(resolveSubscriptionTarget(target)),
-    events: wrappedEvents,
-    replay: (since) => base.inbox.replay(since),
-  }
+  const nameLenientInbox: MessageInbox = { ...base.inbox, events: wrappedEvents }
 
-  const nameLenientHistory: HistoryReader = {
-    readChannel: (ch, range) => base.history.readChannel(resolveChannelRef(ch), range),
-    readThread: (ch, thread, range) =>
-      base.history.readThread(resolveChannelRef(ch), thread, range),
-    recentThreads: (sender, opts) => base.history.recentThreads(sender, opts),
-    messagePermalink: (id, hint) => base.history.messagePermalink(id, hint),
-  }
+  const nameLenientHistory: HistoryReader = base.history
 
   // Always wrap identity to count acquires/releases — we assert
   // the cron-shape lifecycle (one acquire at boot, one release on
@@ -863,7 +823,11 @@ test('presence (happy): resolves an identity first seen only via an inbound noti
   const inboundMessage = {
     ref: {
       id: decodeMessageIdSync('inbound-msg-1'),
-      channel: { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
+      channel: {
+        id: decodeChannelIdSync('home'),
+        name: decodeChannelNameSync('home'),
+        permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/home'),
+      },
       thread: Option.none(),
     },
     sender: stranger,
@@ -1175,7 +1139,11 @@ test('pump filter: event for a never-subscribed channel does NOT fire claude/cha
     message: {
       ref: {
         id: decodeMessageIdSync('noise-msg-1'),
-        channel: { id: decodeChannelIdSync('noise'), name: decodeChannelNameSync('noise') },
+        channel: {
+          id: decodeChannelIdSync('noise'),
+          name: decodeChannelNameSync('noise'),
+          permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/noise'),
+        },
         thread: Option.none(),
       },
       sender: {
@@ -1296,7 +1264,13 @@ test('persistent boot with a prior cursor: replay fires, mention-received notifi
       message: {
         ref: {
           id: decodeMessageIdSync('msg-replay-1'),
-          channel: { id: decodeChannelIdSync('chan-home'), name: decodeChannelNameSync('home') },
+          channel: {
+            id: decodeChannelIdSync('chan-home'),
+            name: decodeChannelNameSync('home'),
+            permalink: ChannelPermalinkSchema.make(
+              'https://zulip.example.com/#narrow/channel/home',
+            ),
+          },
           thread: Option.none(),
         },
         sender: senderIdentity,
@@ -1314,7 +1288,13 @@ test('persistent boot with a prior cursor: replay fires, mention-received notifi
       message: {
         ref: {
           id: decodeMessageIdSync('msg-replay-2'),
-          channel: { id: decodeChannelIdSync('chan-home'), name: decodeChannelNameSync('home') },
+          channel: {
+            id: decodeChannelIdSync('chan-home'),
+            name: decodeChannelNameSync('home'),
+            permalink: ChannelPermalinkSchema.make(
+              'https://zulip.example.com/#narrow/channel/home',
+            ),
+          },
           thread: Option.none(),
         },
         sender: senderIdentity,
@@ -1440,7 +1420,13 @@ test('ephemeral lazy acquire with a prior cursor: replay fires, mention dispatch
       message: {
         ref: {
           id: decodeMessageIdSync('msg-replay-1'),
-          channel: { id: decodeChannelIdSync('chan-home'), name: decodeChannelNameSync('home') },
+          channel: {
+            id: decodeChannelIdSync('chan-home'),
+            name: decodeChannelNameSync('home'),
+            permalink: ChannelPermalinkSchema.make(
+              'https://zulip.example.com/#narrow/channel/home',
+            ),
+          },
           thread: Option.none(),
         },
         sender: senderIdentity,
@@ -1545,9 +1531,9 @@ const captureSubscribes = (): {
   const tokens: string[] = []
   const renderTarget = (target: SubscriptionTarget): string => {
     if (target === 'mentions') return 'mentions'
-    if ('kind' in target) return `new-topics:${target.channel.name}`
-    if ('thread' in target) return `thread:${target.channel.name}/${target.thread}`
-    return `channel:${target.name}`
+    if (typeof target === 'string') return `channel:${target}`
+    if ('kind' in target) return `new-topics:${target.channel}`
+    return `thread:${target.channel}/${target.thread}`
   }
   return {
     tokens,
@@ -1764,8 +1750,8 @@ test('persistent boot surfaces recent channel messages within the catch-up windo
   const historyOverrides: Partial<HistoryReader> = {
     readChannel: (channel, range) =>
       Effect.sync(() => {
-        readChannelCalls.push({ channel: channel.name as string, since: range.since })
-        if (channel.name !== ('home' as unknown as ChannelName)) return []
+        readChannelCalls.push({ channel: channel as string, since: range.since })
+        if (channel !== ('home' as unknown as ChannelName)) return []
         return [
           {
             ref: {
@@ -1773,6 +1759,9 @@ test('persistent boot surfaces recent channel messages within the catch-up windo
               channel: {
                 id: decodeChannelIdSync('chan-home'),
                 name: decodeChannelNameSync('home'),
+                permalink: ChannelPermalinkSchema.make(
+                  'https://zulip.example.com/#narrow/channel/chan-home-home',
+                ),
               },
               thread: Option.none(),
             },
@@ -1852,12 +1841,12 @@ test('persistent boot Type-1 intents feed the channels catch-up (new-topics + th
   const historyOverrides: Partial<HistoryReader> = {
     readChannel: (channel, _range) =>
       Effect.sync(() => {
-        readChannelCalls.push({ channel: channel.name as string })
+        readChannelCalls.push({ channel: channel as string })
         return []
       }),
     readThread: (channel, thread, _range) =>
       Effect.sync(() => {
-        readThreadCalls.push({ channel: channel.name as string, thread: thread as string })
+        readThreadCalls.push({ channel: channel as string, thread: thread as string })
         return []
       }),
   }

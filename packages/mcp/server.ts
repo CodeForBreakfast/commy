@@ -166,9 +166,7 @@ const createType2DefaultsOnAcquire = (
 ): ((project: ProjectSlug | undefined) => Effect.Effect<void>) => {
   const registerIntent = (intent: SubscribeIntent): Effect.Effect<void, InboxError> =>
     Effect.sync(() => narrowSet.add(intent)).pipe(
-      Effect.zipRight(
-        intentToTarget(intent).pipe(Effect.flatMap((target) => inbox.subscribe(target))),
-      ),
+      Effect.zipRight(inbox.subscribe(intentToTarget(intent))),
     )
   return (project) =>
     registerIntent({ kind: 'mentions' }).pipe(
@@ -236,9 +234,7 @@ const registerType1DefaultsOnBoot = (
     Effect.flatMap((intents) =>
       Effect.forEach(intents, (intent) =>
         Effect.sync(() => narrowSet.add(intent)).pipe(
-          Effect.zipRight(
-            intentToTarget(intent).pipe(Effect.flatMap((target) => inbox.subscribe(target))),
-          ),
+          Effect.zipRight(inbox.subscribe(intentToTarget(intent))),
         ),
       ).pipe(
         Effect.as(intents),

@@ -6,7 +6,6 @@ import { join } from 'node:path'
 import type { MessageInbox, SubscriptionTarget } from '@commy/core/ports'
 import {
   decodeBotNameSync,
-  decodeChannelIdSync,
   decodeChannelNameSync,
   decodeThreadNameSync,
   InboxError,
@@ -813,9 +812,9 @@ test('subscribeFromEnv subscribes to each comma-separated token in order', () =>
       }
       yield* subscribeFromEnv(fake.inbox, narrowSet, parsed)
       expect(fake.calls.subscribed).toEqual([
-        { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
+        decodeChannelNameSync('home'),
         {
-          channel: { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
+          channel: decodeChannelNameSync('home'),
           thread: decodeThreadNameSync('payments'),
         },
         'mentions',
@@ -836,8 +835,8 @@ test('subscribeFromEnv trims whitespace around each token', () =>
       }
       yield* subscribeFromEnv(fake.inbox, narrowSet, parsed)
       expect(fake.calls.subscribed).toEqual([
-        { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
-        { id: decodeChannelIdSync('llm-feed'), name: decodeChannelNameSync('llm-feed') },
+        decodeChannelNameSync('home'),
+        decodeChannelNameSync('llm-feed'),
       ])
       expect(narrowSet.size()).toBe(2)
     }),
@@ -855,9 +854,7 @@ test('subscribeFromEnv aborts on a malformed token (and stops before later token
       }
       const err = yield* Effect.flip(subscribeFromEnv(fake.inbox, narrowSet, parsed))
       expect(err).toBeInstanceOf(SubscribeTokenError)
-      expect(fake.calls.subscribed).toEqual([
-        { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
-      ])
+      expect(fake.calls.subscribed).toEqual([decodeChannelNameSync('home')])
       expect(narrowSet.size()).toBe(1)
     }),
   ))
@@ -874,9 +871,7 @@ test('subscribeFromEnv propagates inbox.subscribe rejections and stops calling',
       }
       const err = yield* Effect.flip(subscribeFromEnv(fake.inbox, narrowSet, parsed))
       expect(err.message).toContain('fake-inbox rejected call #2')
-      expect(fake.calls.subscribed).toEqual([
-        { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
-      ])
+      expect(fake.calls.subscribed).toEqual([decodeChannelNameSync('home')])
       // Narrow set advanced both intents before the rejection — the substrate
       // call is what failed, not the local set add. Partial state is acceptable
       // since the boot orchestrator decides whether to release-and-exit.
@@ -896,9 +891,7 @@ test('subscribeFromEnv ignores empty list yielded by a trailing comma', () =>
       }
       const err = yield* Effect.flip(subscribeFromEnv(fake.inbox, narrowSet, parsed))
       expect(err).toBeInstanceOf(SubscribeTokenError)
-      expect(fake.calls.subscribed).toEqual([
-        { id: decodeChannelIdSync('home'), name: decodeChannelNameSync('home') },
-      ])
+      expect(fake.calls.subscribed).toEqual([decodeChannelNameSync('home')])
       expect(narrowSet.size()).toBe(1)
     }),
   ))

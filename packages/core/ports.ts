@@ -138,18 +138,20 @@ export interface Identity {
 }
 
 /**
- * `permalink` carries a ready-to-click substrate URL for a ref the substrate
- * returns, so a caller never hand-assembles one. The principle is
- * maximal: every ref the substrate hands back that has a permalink exposes it —
- * message, channel, and topic alike. Optional because not every substrate (or
- * every code path) has a URL to offer; the in-memory adapter synthesises stable
- * ones for tests.
+ * The channel facet of an observation — a channel the substrate handed back,
+ * carrying its stable id and a ready-to-click permalink so a caller never
+ * hand-assembles one. Only ever produced as an observation (a message's
+ * channel, or a `Directory.listChannels` entry), so its permalink is always
+ * available — hence required, not optional. Addressing a channel (post,
+ * read, subscribe) is by `ChannelName` alone; a `ChannelRef` is what the
+ * substrate returns, never what a caller supplies.
  */
-export interface ChannelRef {
-  readonly id: ChannelId
-  readonly name: ChannelName
-  readonly permalink?: string
-}
+export const ChannelRefSchema = Schema.Struct({
+  id: ChannelIdSchema,
+  name: ChannelNameSchema,
+  permalink: ChannelPermalinkSchema,
+})
+export type ChannelRef = typeof ChannelRefSchema.Type
 
 /**
  * The thread facet of an observed message: a topic name paired with a
@@ -230,13 +232,13 @@ export interface PostOpts {
 export type Presence = 'online' | 'idle' | 'offline' | 'unknown'
 
 export type SubscriptionTarget =
-  | ChannelRef
+  | ChannelName
   | ThreadSubscription
   | NewTopicsInChannelSubscription
   | 'mentions'
 
 export interface ThreadSubscription {
-  readonly channel: ChannelRef
+  readonly channel: ChannelName
   readonly thread: ThreadName
 }
 
@@ -258,7 +260,7 @@ export interface ThreadSubscription {
  */
 export interface NewTopicsInChannelSubscription {
   readonly kind: 'new-topics-in-channel'
-  readonly channel: ChannelRef
+  readonly channel: ChannelName
 }
 
 export type InboundEvent =
@@ -381,7 +383,7 @@ export interface MessagePublisher {
    * `identity.acquire` is a defect, not a typed failure.
    */
   post(
-    channel: ChannelRef,
+    channel: ChannelName,
     body: MessageBody,
     opts?: PostOpts,
   ): Effect.Effect<MessageRef, UnknownChannel | PublisherError>
@@ -440,11 +442,11 @@ export interface RecentThread {
 
 export interface HistoryReader {
   readChannel(
-    channel: ChannelRef,
+    channel: ChannelName,
     range: Range,
   ): Effect.Effect<ReadonlyArray<Message>, HistoryError>
   readThread(
-    channel: ChannelRef,
+    channel: ChannelName,
     threadName: ThreadName,
     range?: Range,
   ): Effect.Effect<ReadonlyArray<Message>, HistoryError>

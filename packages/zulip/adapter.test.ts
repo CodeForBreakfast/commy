@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { ChannelRef, Identity, MessageRef } from '@commy/core/ports'
 import {
+  ChannelPermalinkSchema,
   DirectoryError,
   decodeBotNameSync,
   decodeChannelIdSync,
@@ -673,6 +674,7 @@ effectTest(
 const generalChannel: ChannelRef = {
   id: decodeChannelIdSync('1234'),
   name: decodeChannelNameSync('general'),
+  permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/1234-general'),
 }
 const aliceBot: Identity = {
   id: decodeIdentityIdSync('1'),
@@ -709,7 +711,7 @@ effectTest(
       const stub = yield* makeStubHttpClient
       yield* seedSendMessage(stub, 42)
       const adapter = yield* buildAdapter(stub)
-      yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hello world'))
+      yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hello world'))
       const params = new URLSearchParams(
         (yield* findRequest(stub, 'POST', '/api/v1/messages')).body,
       )
@@ -725,7 +727,10 @@ effectTest('publisher.post returns a MessageRef built from the response id', () 
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 99)
     const adapter = yield* buildAdapter(stub)
-    const ref = yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hello world'))
+    const ref = yield* adapter.publisher.post(
+      generalChannel.name,
+      decodeMessageBodySync('hello world'),
+    )
     expect(ref.id).toEqual(decodeMessageIdSync('99'))
     expect(ref.channel).toMatchObject(generalChannel)
     expect(ref.thread).toEqual(Option.none())
@@ -737,7 +742,7 @@ effectTest('publisher.post with thread sends topic and threads the returned Mess
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 100)
     const adapter = yield* buildAdapter(stub)
-    const ref = yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hi'), {
+    const ref = yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hi'), {
       thread: decodeThreadNameSync('planning'),
     })
     const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
@@ -753,9 +758,14 @@ effectTest('publisher.post hands back message and channel permalinks on the retu
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 99)
     const adapter = yield* buildAdapter(stub)
-    const ref = yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hello world'))
+    const ref = yield* adapter.publisher.post(
+      generalChannel.name,
+      decodeMessageBodySync('hello world'),
+    )
     expect(ref.permalink).toBe('https://zulip.example.com/#narrow/channel/1234-general/near/99')
-    expect(ref.channel.permalink).toBe('https://zulip.example.com/#narrow/channel/1234-general')
+    expect(ref.channel.permalink).toBe(
+      ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/1234-general'),
+    )
   }),
 )
 
@@ -764,7 +774,7 @@ effectTest('publisher.post threads the permalink through the topic when a thread
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 100)
     const adapter = yield* buildAdapter(stub)
-    const ref = yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hi'), {
+    const ref = yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hi'), {
       thread: decodeThreadNameSync('planning'),
     })
     expect(ref.permalink).toBe(
@@ -785,7 +795,7 @@ effectTest('publisher.post permalink uses the public host header when one is con
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 7)
     const adapter = yield* buildAdapter(stub, { hostHeader: 'public.zulip.test' })
-    const ref = yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hi'))
+    const ref = yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hi'))
     expect(ref.permalink).toBe('https://public.zulip.test/#narrow/channel/1234-general/near/7')
   }),
 )
@@ -797,7 +807,7 @@ effectTest(
       const stub = yield* makeStubHttpClient
       yield* seedSendMessage(stub, 101)
       const adapter = yield* buildAdapter(stub)
-      yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('wake up'), {
+      yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('wake up'), {
         mentions: [aliceBot, bobHuman],
       })
       const params = new URLSearchParams(
@@ -812,7 +822,11 @@ effectTest('publisher.post with body-only mention markup posts body verbatim', (
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 103)
     const adapter = yield* buildAdapter(stub)
-    yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hey @**alice** look'), {})
+    yield* adapter.publisher.post(
+      generalChannel.name,
+      decodeMessageBodySync('hey @**alice** look'),
+      {},
+    )
     const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
     expect(params.get('content')).toBe('hey @**alice** look')
   }),
@@ -826,9 +840,13 @@ effectTest('publisher.post with both body markup AND opts.mentions does not doub
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 104)
     const adapter = yield* buildAdapter(stub)
-    yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('@**alice** wake up'), {
-      mentions: [aliceBot],
-    })
+    yield* adapter.publisher.post(
+      generalChannel.name,
+      decodeMessageBodySync('@**alice** wake up'),
+      {
+        mentions: [aliceBot],
+      },
+    )
     const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
     expect(params.get('content')).toBe('@**alice** wake up')
   }),
@@ -851,7 +869,7 @@ effectTest(
           ),
         }),
       }
-      yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('still here'), {
+      yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('still here'), {
         replyTo: parent,
       })
       const params = new URLSearchParams(
@@ -872,7 +890,7 @@ effectTest('publisher.post pre-flights GET /streams before issuing POST /message
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 42)
     const adapter = yield* buildAdapter(stub)
-    yield* adapter.publisher.post(generalChannel, decodeMessageBodySync('hello world'))
+    yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hello world'))
     const reqs = yield* stub.captured
     const streamsIndex = reqs.findIndex(
       (r) => r.method === 'GET' && r.url.pathname === '/api/v1/streams',
@@ -894,7 +912,7 @@ effectTest(
       yield* stub.respond('GET', '/api/v1/streams', { body: { result: 'success', streams: [] } })
       const adapter = yield* buildAdapter(stub)
       const error = yield* Effect.flip(
-        adapter.publisher.post(generalChannel, decodeMessageBodySync('should fail')),
+        adapter.publisher.post(generalChannel.name, decodeMessageBodySync('should fail')),
       )
       expect(error).toBeInstanceOf(UnknownChannel)
       const reqs = yield* stub.captured
@@ -912,7 +930,7 @@ effectTest('publisher.post does not issue POST /messages when pre-flight rejects
     yield* stub.respond('POST', '/api/v1/messages', { body: { result: 'success', id: 999 } })
     const adapter = yield* buildAdapter(stub)
     const error = yield* Effect.flip(
-      adapter.publisher.post(generalChannel, decodeMessageBodySync('should fail')),
+      adapter.publisher.post(generalChannel.name, decodeMessageBodySync('should fail')),
     )
     expect(error).toBeInstanceOf(UnknownChannel)
     const reqs = yield* stub.captured
@@ -942,7 +960,7 @@ effectTest(
       })
       const adapter = yield* buildAdapter(stub)
       const error = yield* Effect.flip(
-        adapter.publisher.post(generalChannel, decodeMessageBodySync('boom')),
+        adapter.publisher.post(generalChannel.name, decodeMessageBodySync('boom')),
       )
       expect(error).toBeInstanceOf(PublisherError)
       if (error instanceof PublisherError) {
@@ -961,7 +979,7 @@ effectTest('publisher.post fails with a tagged UnknownChannel on an unknown chan
     yield* stub.respond('GET', '/api/v1/streams', { body: { result: 'success', streams: [] } })
     const adapter = yield* buildAdapter(stub)
     const error = yield* Effect.flip(
-      adapter.publisher.post(generalChannel, decodeMessageBodySync('should fail')),
+      adapter.publisher.post(generalChannel.name, decodeMessageBodySync('should fail')),
     )
     expect(error).toBeInstanceOf(UnknownChannel)
     if (error instanceof UnknownChannel) {
@@ -1077,15 +1095,12 @@ effectTest('history.readChannel narrows by channel and maps each message to the 
         timestamp: 1715000000,
       },
     ])
-    const messages = yield* adapter.history.readChannel(generalChannel, { limit: 50 })
+    const messages = yield* adapter.history.readChannel(generalChannel.name, { limit: 50 })
     expect(messages).toHaveLength(1)
     expect(messages[0]).toEqual({
       ref: {
         id: decodeMessageIdSync('555'),
-        channel: {
-          ...generalChannel,
-          permalink: 'https://zulip.example.com/#narrow/channel/1234-general',
-        },
+        channel: generalChannel,
         thread: Option.some({
           name: decodeThreadNameSync('lobby'),
           permalink: ThreadPermalinkSchema.make(
@@ -1131,7 +1146,7 @@ effectTest(
           ],
         },
       ])
-      const messages = yield* adapter.history.readChannel(generalChannel, { limit: 50 })
+      const messages = yield* adapter.history.readChannel(generalChannel.name, { limit: 50 })
       const maintainer: Identity = {
         id: decodeIdentityIdSync('5'),
         name: decodeDisplayNameSync('Robin Reyes'),
@@ -1198,7 +1213,7 @@ effectTest(
       const adapter = yield* buildAdapter(stub)
       yield* seedUsers(stub, [HERMES, MAINTAINER])
       yield* seedMessages(stub, [])
-      yield* adapter.history.readChannel(generalChannel, { limit: 25 })
+      yield* adapter.history.readChannel(generalChannel.name, { limit: 25 })
       const req = yield* findRequest(stub, 'GET', '/api/v1/messages')
       expect(req.url.searchParams.get('anchor')).toBe('newest')
       expect(req.url.searchParams.get('num_before')).toBe('25')
@@ -1225,7 +1240,7 @@ effectTest('history.readChannel resolves bot senders to kind=agent via the user 
         timestamp: 1715000100,
       },
     ])
-    const [msg] = yield* adapter.history.readChannel(generalChannel, { limit: 10 })
+    const [msg] = yield* adapter.history.readChannel(generalChannel.name, { limit: 10 })
     expect(msg?.sender.kind).toBe('agent')
   }),
 )
@@ -1248,7 +1263,7 @@ effectTest('history.readChannel resolves deactivated bot senders to kind=agent',
         timestamp: 1714000000,
       },
     ])
-    const [msg] = yield* adapter.history.readChannel(generalChannel, { limit: 10 })
+    const [msg] = yield* adapter.history.readChannel(generalChannel.name, { limit: 10 })
     expect(msg?.sender.kind).toBe('agent')
     expect(msg?.sender.id).toBe(decodeIdentityIdSync(String(deactivatedBot.user_id)))
   }),
@@ -1291,7 +1306,7 @@ effectTest('history.readChannel filters by range.since (epoch seconds, inclusive
         timestamp: 1716000000,
       },
     ])
-    const messages = yield* adapter.history.readChannel(generalChannel, {
+    const messages = yield* adapter.history.readChannel(generalChannel.name, {
       since: decodeTimestampSync(1715000000),
       limit: 50,
     })
@@ -1339,7 +1354,7 @@ effectTest('history.readChannel filters by range.until (epoch seconds, inclusive
         timestamp: 1716000000,
       },
     ])
-    const messages = yield* adapter.history.readChannel(generalChannel, {
+    const messages = yield* adapter.history.readChannel(generalChannel.name, {
       until: decodeTimestampSync(1715000000),
       limit: 50,
     })
@@ -1356,7 +1371,7 @@ effectTest('history.readThread narrows by both channel and topic', () =>
     const adapter = yield* buildAdapter(stub)
     yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [])
-    yield* adapter.history.readThread(generalChannel, decodeThreadNameSync('planning'), {
+    yield* adapter.history.readThread(generalChannel.name, decodeThreadNameSync('planning'), {
       limit: 10,
     })
     const req = yield* findRequest(stub, 'GET', '/api/v1/messages')
@@ -1374,7 +1389,7 @@ effectTest('history.readChannel with no limit defaults num_before to 100', () =>
     const adapter = yield* buildAdapter(stub)
     yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [])
-    yield* adapter.history.readChannel(generalChannel, {})
+    yield* adapter.history.readChannel(generalChannel.name, {})
     const req = yield* findRequest(stub, 'GET', '/api/v1/messages')
     expect(req.url.searchParams.get('num_before')).toBe('100')
   }),
@@ -1664,7 +1679,7 @@ effectTest('inbox.subscribe(channel) POSTs /users/me/subscriptions with [{ name 
     const stub = yield* makeStubHttpClient
     yield* seedSubscribeOk(stub, 'general')
     const adapter = yield* buildAdapter(stub)
-    yield* adapter.inbox.subscribe(generalChannel)
+    yield* adapter.inbox.subscribe(generalChannel.name)
     const req = yield* findRequest(stub, 'POST', '/api/v1/users/me/subscriptions')
     const params = new URLSearchParams(req.body)
     const subs = JSON.parse(params.get('subscriptions') ?? '[]') as unknown
@@ -1685,7 +1700,7 @@ effectTest('inbox.subscribe is a no-op for already_subscribed', () =>
     })
     yield* seedRegisterOk(stub)
     const adapter = yield* buildAdapter(stub)
-    yield* adapter.inbox.subscribe(generalChannel)
+    yield* adapter.inbox.subscribe(generalChannel.name)
   }),
 )
 
@@ -1695,7 +1710,7 @@ effectTest('inbox.subscribe with thread subscribes to its underlying channel', (
     yield* seedSubscribeOk(stub, 'general')
     const adapter = yield* buildAdapter(stub)
     yield* adapter.inbox.subscribe({
-      channel: generalChannel,
+      channel: generalChannel.name,
       thread: decodeThreadNameSync('design'),
     })
     const req = yield* findRequest(stub, 'POST', '/api/v1/users/me/subscriptions')
@@ -1759,7 +1774,7 @@ effectTest('inbox.subscribe flipping mentions -> all re-registers the events que
     yield* seedSubscribeOk(stub, 'general')
     const adapter = yield* buildAdapter(stub)
     yield* adapter.inbox.subscribe('mentions')
-    yield* adapter.inbox.subscribe(generalChannel)
+    yield* adapter.inbox.subscribe(generalChannel.name)
     const registers = (yield* stub.captured).filter(
       (r) => r.method === 'POST' && r.url.pathname === '/api/v1/register',
     )
@@ -1772,7 +1787,7 @@ effectTest('inbox.unsubscribe(channel) DELETEs /users/me/subscriptions with the 
     const stub = yield* makeStubHttpClient
     yield* seedUnsubscribeOk(stub, 'general')
     const adapter = yield* buildAdapter(stub)
-    yield* adapter.inbox.unsubscribe(generalChannel)
+    yield* adapter.inbox.unsubscribe(generalChannel.name)
     const req = yield* findRequest(stub, 'DELETE', '/api/v1/users/me/subscriptions')
     const params = new URLSearchParams(req.body)
     const subs = JSON.parse(params.get('subscriptions') ?? '[]') as unknown
@@ -1980,7 +1995,7 @@ effectTest('history.readChannel runs pre-acquire and routes via minter creds', (
       body: { result: 'success', messages: [] },
     })
     const adapter = yield* zulipAdapter(stub, yield* makeConfig())
-    yield* adapter.history.readChannel(generalChannel, {})
+    yield* adapter.history.readChannel(generalChannel.name, {})
     const req = yield* findRequest(stub, 'GET', '/api/v1/messages')
     expect(decodeBasicAuth(req.headers.get('Authorization'))).toEqual(minterAuth)
   }),
@@ -2030,7 +2045,7 @@ effectTest(
       const stub = yield* makeStubHttpClient
       yield* seedSubscribeOk(stub, 'general')
       const adapter = yield* zulipAdapter(stub, yield* makeConfig())
-      yield* adapter.inbox.subscribe(generalChannel)
+      yield* adapter.inbox.subscribe(generalChannel.name)
       const subReq = yield* findRequest(stub, 'POST', '/api/v1/users/me/subscriptions')
       expect(decodeBasicAuth(subReq.headers.get('Authorization'))).toEqual(minterAuth)
       // The /register that arms the events queue must also be minter-creds —
@@ -2048,7 +2063,7 @@ effectTest(
       yield* seedUsers(stub, [])
       const adapter = yield* zulipAdapter(stub, yield* makeConfig())
       const exit = yield* Effect.exit(
-        adapter.publisher.post(generalChannel, decodeMessageBodySync('hello')),
+        adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hello')),
       )
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isFailure(exit)) {
@@ -2072,7 +2087,7 @@ effectTest('publisher.post after acquire uses BOUND bot creds, not minter creds'
     })
     const adapter = yield* buildAdapter(stub) // acquires hermes-agent → rotates key to "fresh-key"
     yield* adapter.publisher.post(
-      generalChannel,
+      generalChannel.name,
       decodeMessageBodySync('attribution-producing message'),
     )
     const req = yield* findRequest(stub, 'POST', '/api/v1/messages')

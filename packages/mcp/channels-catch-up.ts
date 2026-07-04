@@ -1,13 +1,5 @@
-import type {
-  ChannelName,
-  ChannelRef,
-  HistoryError,
-  HistoryReader,
-  IdentityId,
-  Message,
-  Timestamp,
-} from '@commy/core/ports'
-import { decodeChannelId, decodeTimestamp } from '@commy/core/ports'
+import type { HistoryError, HistoryReader, IdentityId, Message, Timestamp } from '@commy/core/ports'
+import { decodeTimestamp } from '@commy/core/ports'
 import { Array as Arr, Clock, Effect, Match, Option, Order } from 'effect'
 import type { Notifier } from './event-pump.ts'
 import { formatMessage } from './events.ts'
@@ -72,18 +64,6 @@ export interface ChannelsCatchUpDeps {
 }
 
 /**
- * Build the channel ref the history reader keys on. The id decode is
- * dieable, not a real failure mode: `name` is already a validated
- * non-empty `ChannelName`, and `ChannelId` carries the same non-empty
- * constraint, so the decode provably cannot fail.
- */
-const channelRefFromName = (name: ChannelName): Effect.Effect<ChannelRef> =>
-  decodeChannelId(name).pipe(
-    Effect.map((id) => ({ id, name })),
-    Effect.orDie,
-  )
-
-/**
  * Clamp `now - windowSeconds` to a valid non-negative `Timestamp`. The
  * decode is dieable: `Math.max(0, …)` guarantees the constraint, so it
  * cannot fail.
@@ -117,19 +97,12 @@ const fetchForIntent = (
   Match.value(intent).pipe(
     Match.discriminatorsExhaustive('kind')({
       mentions: () => Effect.succeed([] as ReadonlyArray<Message>),
-      channel: (i) =>
-        channelRefFromName(i.channelName).pipe(
-          Effect.flatMap((ref) => history.readChannel(ref, { since: defaultSince })),
-        ),
+      channel: (i) => history.readChannel(i.channelName, { since: defaultSince }),
       'new-topics-in-channel': (i) =>
-        channelRefFromName(i.channelName).pipe(
-          Effect.flatMap((ref) => history.readChannel(ref, { since: newTopicsSince })),
-          Effect.map(firstMessagePerTopic),
-        ),
-      thread: (i) =>
-        channelRefFromName(i.channelName).pipe(
-          Effect.flatMap((ref) => history.readThread(ref, i.threadName, { since: defaultSince })),
-        ),
+        history
+          .readChannel(i.channelName, { since: newTopicsSince })
+          .pipe(Effect.map(firstMessagePerTopic)),
+      thread: (i) => history.readThread(i.channelName, i.threadName, { since: defaultSince }),
     }),
   )
 

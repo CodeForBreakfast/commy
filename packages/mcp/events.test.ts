@@ -7,6 +7,7 @@ import type {
   MessageRef,
 } from '@commy/core/ports'
 import {
+  ChannelPermalinkSchema,
   decodeChannelIdSync,
   decodeChannelNameSync,
   decodeDisplayNameSync,
@@ -50,7 +51,11 @@ const bob: Identity = {
 const baseMessage = (overrides: Partial<Message> = {}): Message => ({
   ref: {
     id: decodeMessageIdSync('msg-1'),
-    channel: { id: decodeChannelIdSync('chan-9'), name: decodeChannelNameSync('home') },
+    channel: {
+      id: decodeChannelIdSync('chan-9'),
+      name: decodeChannelNameSync('home'),
+      permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-home'),
+    },
     thread: paymentsThread,
   },
   sender,
@@ -115,7 +120,7 @@ const messageWithPermalinks = (): Message =>
       channel: {
         id: decodeChannelIdSync('chan-9'),
         name: decodeChannelNameSync('home'),
-        permalink: 'https://zulip.example.com/#narrow/channel/9-home',
+        permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-home'),
       },
       thread: paymentsThread,
       permalink: 'https://zulip.example.com/#narrow/channel/9-home/topic/payments/near/1',
@@ -133,10 +138,12 @@ test('formatMessage — meta carries message, channel and topic permalinks', () 
   )
 })
 
-test('formatMessage — permalink meta omitted when the ref carries none', () => {
+test('formatMessage — message permalink meta omitted when the ref carries none', () => {
   const out = formatMessage(messagePosted(baseMessage()), BOT_ID)
   expect(out.meta).not.toHaveProperty('permalink')
-  expect(out.meta).not.toHaveProperty('channel_permalink')
+  // An observed channel always carries a permalink, so channel_permalink is
+  // always surfaced — only the message-level permalink is conditional.
+  expect(out.meta['channel_permalink']).toBe('https://zulip.example.com/#narrow/channel/9-home')
 })
 
 test('formatMessage — bot_identity_id is never surfaced (self-echo is emitter-guaranteed)', () => {
@@ -264,13 +271,21 @@ const REACTION_TS = decodeTimestampSync(1715450010)
 
 const threadedRef: MessageRef = {
   id: decodeMessageIdSync('msg-1'),
-  channel: { id: decodeChannelIdSync('chan-9'), name: decodeChannelNameSync('home') },
+  channel: {
+    id: decodeChannelIdSync('chan-9'),
+    name: decodeChannelNameSync('home'),
+    permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-home'),
+  },
   thread: paymentsThread,
 }
 
 const rootRef: MessageRef = {
   id: decodeMessageIdSync('msg-2'),
-  channel: { id: decodeChannelIdSync('chan-9'), name: decodeChannelNameSync('home') },
+  channel: {
+    id: decodeChannelIdSync('chan-9'),
+    name: decodeChannelNameSync('home'),
+    permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-home'),
+  },
   thread: Option.none(),
 }
 

@@ -57,6 +57,7 @@ import { Duration, Effect, Option, Redacted, Schema } from 'effect'
 import type { ZulipAdapter } from './adapter.ts'
 import { zulipAdapter } from './adapter.ts'
 import { ApiKey, BotEmail, makeZulipHttp, RealmUrl, type ZulipHttp } from './http.ts'
+import { permalinkBase, withChannelPermalink } from './permalink.ts'
 
 interface LiveEnv {
   readonly site: string
@@ -190,10 +191,15 @@ if (env === undefined) {
           const found = res.streams.find((s) => s.name === realName)
           if (found === undefined)
             return Effect.die(new Error(`seedChannel: stream ${realName} not found after create`))
-          return Effect.succeed<ChannelRef>({
-            id: decodeChannelIdSync(String(found.stream_id)),
-            name: decodeChannelNameSync(realName),
-          })
+          return Effect.succeed<ChannelRef>(
+            withChannelPermalink(
+              permalinkBase({ realmUrl: Effect.runSync(RealmUrl(liveEnv.site)) }),
+              {
+                id: decodeChannelIdSync(String(found.stream_id)),
+                name: decodeChannelNameSync(realName),
+              },
+            ),
+          )
         }),
         Effect.orDie,
       )

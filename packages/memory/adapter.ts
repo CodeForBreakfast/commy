@@ -25,6 +25,8 @@ import type {
   AcquiredIdentity,
   AgentComms,
   ChannelId,
+  ChannelName,
+  ChannelPermalink,
   ChannelRef,
   Credentials,
   Directory,
@@ -51,6 +53,7 @@ import type {
 } from '@commy/core/ports'
 import {
   type BotName,
+  ChannelPermalinkSchema,
   decodeChannelId,
   decodeChannelName,
   decodeDisplayName,
@@ -87,7 +90,8 @@ import {
 // surface without a live Zulip realm. They mirror the message/channel/topic
 // shape the real Zulip narrow builder produces.
 const MEMORY_REALM = 'memory://commy'
-const synthChannelPermalink = (id: ChannelId): string => `${MEMORY_REALM}/channel/${id}`
+const synthChannelPermalink = (id: ChannelId): ChannelPermalink =>
+  ChannelPermalinkSchema.make(`${MEMORY_REALM}/channel/${id}`)
 const synthTopicPermalink = (id: ChannelId, topic: ThreadName): ThreadPermalink =>
   ThreadPermalinkSchema.make(`${synthChannelPermalink(id)}/topic/${topic}`)
 const synthMessagePermalink = (id: ChannelId, messageId: MessageId, topic?: ThreadName): string =>
@@ -152,7 +156,7 @@ export type MemoryAdapter = AgentComms & {
    */
   readonly peerPost: (
     peer: Identity,
-    channel: ChannelRef,
+    channel: ChannelName,
     body: MessageBodyType,
     opts?: PostOpts,
   ) => Effect.Effect<MessageRef, UnknownChannel>
@@ -244,23 +248,28 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       })
 
     // Effect-returning channel resolution shared by publisher.post and the
-    // history readers: an unknown channel is a typed UnknownChannel, a
-    // missing bucket is an invariant violation (a defect). post surfaces the
-    // UnknownChannel directly; the history readers map it into a
-    // HistoryError to match their port signature (and the Zulip adapter).
-    const resolveBucket = (channel: ChannelRef): Effect.Effect<StoredMessage[], UnknownChannel> => {
-      const seen = channelsById.get(channel.id)
-      if (seen === undefined) {
-        return Effect.fail(new UnknownChannel({ channel: channel.name, substrate: 'memory' }))
-      }
-      const bucket = messagesByChannel.get(seen.id)
-      if (bucket === undefined) {
-        return Effect.die(
-          new Error(`memoryAdapter: missing message bucket for channel ${seen.name}`),
-        )
-      }
-      return Effect.succeed(bucket)
+    // history readers: channels are addressed by name, so an unregistered name
+    // is a typed UnknownChannel. post surfaces it directly; the history readers
+    // map it into a HistoryError to match their port signature (and the Zulip
+    // adapter).
+    const resolveChannel = (name: ChannelName): Effect.Effect<ChannelRef, UnknownChannel> => {
+      const existing = channelsByName.get(name)
+      return existing === undefined
+        ? Effect.fail(new UnknownChannel({ channel: name, substrate: 'memory' }))
+        : Effect.succeed(existing)
     }
+
+    // The bucket is created alongside the channel in registerChannel, so a
+    // resolved ref whose bucket is missing is an invariant violation (a defect).
+    const bucketOf = (channel: ChannelRef): Effect.Effect<StoredMessage[]> => {
+      const bucket = messagesByChannel.get(channel.id)
+      return bucket === undefined
+        ? Effect.die(new Error(`memoryAdapter: missing message bucket for channel ${channel.name}`))
+        : Effect.succeed(bucket)
+    }
+
+    const resolveBucket = (name: ChannelName): Effect.Effect<StoredMessage[], UnknownChannel> =>
+      resolveChannel(name).pipe(Effect.flatMap(bucketOf))
 
     const identity: IdentityPort = {
       currentIdentity: () => requireBound(),
@@ -382,33 +391,27 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       // Posting before acquire is an invariant violation (a defect via
       // requireBound's die); an unknown channel is the one typed failure.
       post: (channel, body, opts) =>
-        requireBound().pipe(
-          Effect.flatMap((self) =>
-            resolveBucket(channel).pipe(
-              Effect.flatMap((bucket) =>
-                Effect.gen(function* () {
-                  const id = String(yield* allocId(nextMessageId))
-                  const ref = yield* buildRef(id, channel, opts?.thread)
-                  // The timestamp counter is a monotonic clock-derived
-                  // value, always non-negative — orDie the (impossible)
-                  // ParseError.
-                  const ts = yield* decodeTimestamp(yield* allocId(nextTs)).pipe(Effect.orDie)
-                  const stored: StoredMessage = {
-                    ref,
-                    sender: self,
-                    body,
-                    ts,
-                    mentions: opts?.mentions === undefined ? [] : [...opts.mentions],
-                  }
-                  bucket.push(stored)
-                  messagesById.set(id, stored)
-                  yield* fanOutOnPost(stored)
-                  return ref
-                }),
-              ),
-            ),
-          ),
-        ),
+        Effect.gen(function* () {
+          const self = yield* requireBound()
+          const channelRef = yield* resolveChannel(channel)
+          const bucket = yield* bucketOf(channelRef)
+          const id = String(yield* allocId(nextMessageId))
+          const ref = yield* buildRef(id, channelRef, opts?.thread)
+          // The timestamp counter is a monotonic clock-derived value, always
+          // non-negative — orDie the (impossible) ParseError.
+          const ts = yield* decodeTimestamp(yield* allocId(nextTs)).pipe(Effect.orDie)
+          const stored: StoredMessage = {
+            ref,
+            sender: self,
+            body,
+            ts,
+            mentions: opts?.mentions === undefined ? [] : [...opts.mentions],
+          }
+          bucket.push(stored)
+          messagesById.set(id, stored)
+          yield* fanOutOnPost(stored)
+          return ref
+        }),
       // Editing before acquire is an invariant violation (a defect via
       // requireBound's die); editing a message the store has never seen
       // is a non-fatal domain failure surfaced as a typed PublisherError,
@@ -459,13 +462,16 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         ),
     }
 
+    // Channels are addressed by name, so subscription keys use `ChannelName` —
+    // the same value the subscription target carries and that a stored
+    // message's observation exposes as `ref.channel.name`.
     const MENTIONS_KEY = Data.struct({ kind: 'mentions' as const })
-    const channelSubKey = (channel: ChannelRef) =>
-      Data.struct({ kind: 'channel' as const, channelId: channel.id })
-    const threadSubKey = (channel: ChannelRef, threadName: string) =>
-      Data.struct({ kind: 'thread' as const, channelId: channel.id, threadName })
-    const newTopicsSubKey = (channel: ChannelRef) =>
-      Data.struct({ kind: 'newTopics' as const, channelId: channel.id })
+    const channelSubKey = (channelName: ChannelName) =>
+      Data.struct({ kind: 'channel' as const, channelName })
+    const threadSubKey = (channelName: ChannelName, threadName: string) =>
+      Data.struct({ kind: 'thread' as const, channelName, threadName })
+    const newTopicsSubKey = (channelName: ChannelName) =>
+      Data.struct({ kind: 'newTopics' as const, channelName })
     type SubKey =
       | typeof MENTIONS_KEY
       | ReturnType<typeof channelSubKey>
@@ -505,11 +511,11 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     const matchesStaticSub = (stored: StoredMessage): Effect.Effect<boolean> =>
       Effect.all([Ref.get(bound), Ref.get(subscriptions)]).pipe(
         Effect.map(([current, subs]) => {
-          if (HashSet.has(subs, channelSubKey(stored.ref.channel))) return true
+          if (HashSet.has(subs, channelSubKey(stored.ref.channel.name))) return true
           const thread = stored.ref.thread
           if (
             Option.isSome(thread) &&
-            HashSet.has(subs, threadSubKey(stored.ref.channel, thread.value.name))
+            HashSet.has(subs, threadSubKey(stored.ref.channel.name, thread.value.name))
           ) {
             return true
           }
@@ -525,7 +531,10 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       Effect.all([matchesStaticSub(stored), Ref.get(subscriptions)]).pipe(
         Effect.map(([matches, subs]) => {
           const thread = stored.ref.thread
-          if (Option.isSome(thread) && HashSet.has(subs, newTopicsSubKey(stored.ref.channel))) {
+          if (
+            Option.isSome(thread) &&
+            HashSet.has(subs, newTopicsSubKey(stored.ref.channel.name))
+          ) {
             const seen = seenTopicsByChannel.get(stored.ref.channel.id) ?? new Set<string>()
             if (!seen.has(thread.value.name)) {
               seen.add(thread.value.name)
@@ -733,30 +742,28 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     // memory reports `Duration.zero` granularity below — no spacing needed.
     const peerPost = (
       peer: Identity,
-      channel: ChannelRef,
+      channel: ChannelName,
       body: MessageBodyType,
       opts?: PostOpts,
     ): Effect.Effect<MessageRef, UnknownChannel> =>
-      resolveBucket(channel).pipe(
-        Effect.flatMap((bucket) =>
-          Effect.gen(function* () {
-            const id = String(yield* allocId(nextMessageId))
-            const ref = yield* buildRef(id, channel, opts?.thread)
-            const ts = yield* decodeTimestamp(yield* allocId(nextTs)).pipe(Effect.orDie)
-            const stored: StoredMessage = {
-              ref,
-              sender: peer,
-              body,
-              ts,
-              mentions: opts?.mentions === undefined ? [] : [...opts.mentions],
-            }
-            bucket.push(stored)
-            messagesById.set(id, stored)
-            yield* fanOutOnPost(stored)
-            return ref
-          }),
-        ),
-      )
+      Effect.gen(function* () {
+        const channelRef = yield* resolveChannel(channel)
+        const bucket = yield* bucketOf(channelRef)
+        const id = String(yield* allocId(nextMessageId))
+        const ref = yield* buildRef(id, channelRef, opts?.thread)
+        const ts = yield* decodeTimestamp(yield* allocId(nextTs)).pipe(Effect.orDie)
+        const stored: StoredMessage = {
+          ref,
+          sender: peer,
+          body,
+          ts,
+          mentions: opts?.mentions === undefined ? [] : [...opts.mentions],
+        }
+        bucket.push(stored)
+        messagesById.set(id, stored)
+        yield* fanOutOnPost(stored)
+        return ref
+      })
 
     return {
       // Memory's `ts` is a monotonic counter, so any two posts already differ —

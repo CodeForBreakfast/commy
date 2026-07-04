@@ -111,7 +111,7 @@ test('withChannelPermalink decorates a channel ref with its permalink', () => {
   expect(withChannelPermalink(base, channel)).toEqual({
     id: decodeChannelIdSync('9'),
     name: decodeChannelNameSync('general'),
-    permalink: 'https://zulip.example.com/#narrow/channel/9-general',
+    permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-general'),
   })
 })
 
@@ -123,7 +123,7 @@ test('buildMessageRef decorates message, channel and topic for a threaded messag
     channel: {
       id: decodeChannelIdSync('9'),
       name: decodeChannelNameSync('general'),
-      permalink: 'https://zulip.example.com/#narrow/channel/9-general',
+      permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-general'),
     },
     thread: Option.some({
       name: decodeThreadNameSync('lobby'),
@@ -141,7 +141,7 @@ test('buildMessageRef omits the thread for a thread-less message', () => {
     channel: {
       id: decodeChannelIdSync('9'),
       name: decodeChannelNameSync('general'),
-      permalink: 'https://zulip.example.com/#narrow/channel/9-general',
+      permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-general'),
     },
     thread: Option.none(),
     permalink: 'https://zulip.example.com/#narrow/channel/9-general/near/42',

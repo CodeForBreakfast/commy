@@ -613,12 +613,7 @@ export const subscribeFromEnv = (
   return Effect.forEach(parsed.subscribe.split(','), (raw) =>
     parseSubscribeTarget(raw.trim()).pipe(
       Effect.tap((intent) => Effect.sync(() => narrowSet.add(intent))),
-      Effect.flatMap((intent) =>
-        intentToTarget(intent).pipe(
-          Effect.flatMap((target) => inbox.subscribe(target)),
-          Effect.as(intent),
-        ),
-      ),
+      Effect.flatMap((intent) => inbox.subscribe(intentToTarget(intent)).pipe(Effect.as(intent))),
     ),
   )
 }
