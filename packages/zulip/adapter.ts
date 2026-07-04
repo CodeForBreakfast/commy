@@ -1067,14 +1067,12 @@ export const zulipAdapter = (
                     type: 'channel',
                     to: effective.name,
                     content: body,
-                    topic: thread === undefined ? '(no topic)' : thread.name,
+                    topic: thread ?? '(no topic)',
                   })
                   .pipe(
                     Effect.flatMap((sent) =>
                       decodeMessageId(String(sent.id)).pipe(
-                        Effect.map(
-                          (id): MessageRef => decorateMessageRef(id, effective, thread?.name),
-                        ),
+                        Effect.map((id): MessageRef => decorateMessageRef(id, effective, thread)),
                       ),
                     ),
                   ),
@@ -1170,8 +1168,10 @@ export const zulipAdapter = (
             // Tick the seen state regardless of whether another narrow also
             // covers this channel — so unsubscribing the broader narrow later
             // does not re-fire topics already observed.
-            const [isFirstOfTopic, ticked] =
-              thread === undefined ? [false, state] : observeNewTopic(state, cid, thread.name)
+            const [isFirstOfTopic, ticked] = Option.match(thread, {
+              onNone: () => [false, state] as const,
+              onSome: (t) => observeNewTopic(state, cid, t.name),
+            })
             if (HashSet.has(state.subscribedChannels, cid)) return [true, ticked]
             if (
               state.mentionsSubscribed &&

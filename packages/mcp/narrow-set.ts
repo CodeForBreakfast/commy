@@ -109,9 +109,7 @@ const channelKey = (ref: MessageRef): IntentKey => channelKeyOf(ref.channel.name
 const newTopicsKey = (ref: MessageRef): IntentKey => newTopicsKeyOf(ref.channel.name)
 
 const threadKey = (ref: MessageRef): Option.Option<IntentKey> =>
-  Option.fromNullable(ref.thread).pipe(
-    Option.map((thread) => threadKeyOf(ref.channel.name, thread.name)),
-  )
+  Option.map(ref.thread, (thread) => threadKeyOf(ref.channel.name, thread.name))
 
 const refMatches = (ref: MessageRef, intents: HashSet.HashSet<IntentKey>): boolean =>
   HashSet.has(intents, channelKey(ref)) ||

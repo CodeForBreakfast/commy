@@ -287,7 +287,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
           const channel = yield* env.seedChannel('lobby')
           const thread = decodeThreadNameSync('design')
           yield* env.comms.publisher.post(channel, decodeMessageBodySync('in thread'), {
-            thread: { name: thread },
+            thread,
           })
           const messages = yield* env.comms.history.readThread(channel, thread, {})
           const found = findByBody(messages, 'in thread')
@@ -300,10 +300,10 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         Effect.gen(function* () {
           const channel = yield* env.seedChannel('lobby')
           yield* env.comms.publisher.post(channel, decodeMessageBodySync('topic-a'), {
-            thread: { name: decodeThreadNameSync('alpha') },
+            thread: decodeThreadNameSync('alpha'),
           })
           yield* env.comms.publisher.post(channel, decodeMessageBodySync('topic-b'), {
-            thread: { name: decodeThreadNameSync('bravo') },
+            thread: decodeThreadNameSync('bravo'),
           })
           const messages = yield* env.comms.history.readChannel(channel, {})
           const bodies = messages.map((m) => m.body)
@@ -410,7 +410,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
           const channel = yield* env.seedChannel('lobby')
           const thread = decodeThreadNameSync('design')
           const ref = yield* env.comms.publisher.post(channel, decodeMessageBodySync('first cut'), {
-            thread: { name: thread },
+            thread,
           })
           yield* env.comms.publisher.edit(ref, decodeMessageBodySync('second cut'))
           const messages = yield* env.comms.history.readThread(channel, thread, {})
@@ -432,6 +432,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
           const phantom: MessageRef = {
             id: decodeMessageIdSync('999999999'),
             channel,
+            thread: Option.none(),
           }
           const error = yield* Effect.flip(
             env.comms.publisher.edit(phantom, decodeMessageBodySync('nope')),
@@ -957,7 +958,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             yield* env.comms.inbox.subscribe({ kind: 'new-topics-in-channel', channel })
             const queue = yield* eventQueue(env.comms)
             yield* env.comms.publisher.post(channel, decodeMessageBodySync('first in alpha'), {
-              thread: { name: decodeThreadNameSync('alpha') },
+              thread: decodeThreadNameSync('alpha'),
             })
             const event = yield* awaitEvent(
               queue,
@@ -966,7 +967,9 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             )
             if (event.kind !== 'message-posted')
               throw new Error(`expected message-posted, got ${event.kind}`)
-            expect(event.message.ref.thread?.name).toEqual(decodeThreadNameSync('alpha'))
+            expect(Option.map(event.message.ref.thread, (t) => t.name)).toEqual(
+              Option.some(decodeThreadNameSync('alpha')),
+            )
           }),
         ),
       ))
@@ -979,7 +982,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             yield* env.comms.inbox.subscribe({ kind: 'new-topics-in-channel', channel })
             const queue = yield* eventQueue(env.comms)
             yield* env.comms.publisher.post(channel, decodeMessageBodySync('first in alpha'), {
-              thread: { name: decodeThreadNameSync('alpha') },
+              thread: decodeThreadNameSync('alpha'),
             })
             yield* awaitEvent(
               queue,
@@ -988,7 +991,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             )
 
             yield* env.comms.publisher.post(channel, decodeMessageBodySync('second in alpha'), {
-              thread: { name: decodeThreadNameSync('alpha') },
+              thread: decodeThreadNameSync('alpha'),
             })
             const result = yield* Queue.take(queue).pipe(Effect.timeoutOption(Duration.millis(200)))
             expect(Option.isNone(result)).toBe(true)
@@ -1004,7 +1007,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             yield* env.comms.inbox.subscribe({ kind: 'new-topics-in-channel', channel })
             const queue = yield* eventQueue(env.comms)
             yield* env.comms.publisher.post(channel, decodeMessageBodySync('first in alpha'), {
-              thread: { name: decodeThreadNameSync('alpha') },
+              thread: decodeThreadNameSync('alpha'),
             })
             yield* awaitEvent(
               queue,
@@ -1013,10 +1016,10 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             )
 
             yield* env.comms.publisher.post(channel, decodeMessageBodySync('second in alpha'), {
-              thread: { name: decodeThreadNameSync('alpha') },
+              thread: decodeThreadNameSync('alpha'),
             })
             yield* env.comms.publisher.post(channel, decodeMessageBodySync('first in bravo'), {
-              thread: { name: decodeThreadNameSync('bravo') },
+              thread: decodeThreadNameSync('bravo'),
             })
             const next = yield* awaitEvent(
               queue,
@@ -1024,7 +1027,9 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
               (e) => e.kind === 'message-posted' && e.message.body.includes('first in bravo'),
             )
             if (next.kind !== 'message-posted') throw new Error('expected second message-posted')
-            expect(next.message.ref.thread?.name).toEqual(decodeThreadNameSync('bravo'))
+            expect(Option.map(next.message.ref.thread, (t) => t.name)).toEqual(
+              Option.some(decodeThreadNameSync('bravo')),
+            )
           }),
         ),
       ))
@@ -1039,7 +1044,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             yield* env.comms.inbox.unsubscribe(target)
             const queue = yield* eventQueue(env.comms)
             yield* env.comms.publisher.post(channel, decodeMessageBodySync('should-not-arrive'), {
-              thread: { name: decodeThreadNameSync('alpha') },
+              thread: decodeThreadNameSync('alpha'),
             })
             const result = yield* Queue.take(queue).pipe(Effect.timeoutOption(Duration.millis(200)))
             expect(Option.isNone(result)).toBe(true)

@@ -54,14 +54,14 @@ export const formatMessage = (
   const meta = buildMeta([
     ['channel_id', ref.channel.id],
     ['channel_name', ref.channel.name],
-    ['thread', ref.thread?.name],
+    ['thread', Option.getOrUndefined(Option.map(ref.thread, (t) => t.name))],
     ['message_id', ref.id],
     // Clickable narrow permalinks for the ref the substrate handed us — message,
     // channel, and topic. Omitted by buildMeta when the substrate
     // has none.
     ['permalink', ref.permalink],
     ['channel_permalink', ref.channel.permalink],
-    ['thread_permalink', ref.thread?.permalink],
+    ['thread_permalink', Option.getOrUndefined(Option.map(ref.thread, (t) => t.permalink))],
     ['sender_id', sender.id],
     ['sender_name', sender.name],
     ['sender_kind', sender.kind],
@@ -90,7 +90,7 @@ export const formatReaction = (
   const meta = buildMeta([
     ['target_message_id', event.target.id],
     ['target_channel_name', event.target.channel.name],
-    ['target_thread', event.target.thread?.name],
+    ['target_thread', Option.getOrUndefined(Option.map(event.target.thread, (t) => t.name))],
     ['target_permalink', event.target.permalink],
     ['reaction_emoji', event.emoji],
     ['reaction_action', action],

@@ -8,6 +8,7 @@ import type {
   MessageId,
   MessageRef,
   PostOpts,
+  ThreadName,
   Timestamp,
 } from '@commy/core/ports'
 import {
@@ -19,6 +20,7 @@ import {
   decodeMessageId,
   decodeThreadName,
   decodeTimestamp,
+  ObservedThreadSchema,
 } from '@commy/core/ports'
 import type { UserUploadPath, ZulipApiError } from '@commy/zulip/http'
 import { decodeUserUploadPath } from '@commy/zulip/http'
@@ -233,11 +235,14 @@ class UnknownMessageError extends Data.TaggedError('UnknownMessage')<{ readonly 
   }
 }
 
+// A reconstructed ref is an *address* target (react/edit/unreact/reply): we
+// know its id and channel but observed no permalink, so `thread` is `none` —
+// the topic name, when needed for sticky engagement, travels as a separate
+// address argument rather than through this observation facet.
 const reconstructMessageRef = (
   cache: InternalCache,
   rawId: string,
   channelNameArg: string | undefined,
-  threadNameArg: string | undefined,
 ): Effect.Effect<MessageRef, UnknownMessageError | ParseResult.ParseError> =>
   Effect.gen(function* () {
     const id = yield* decodeMessageId(rawId)
@@ -247,10 +252,7 @@ const reconstructMessageRef = (
       return yield* new UnknownMessageError({ id: rawId })
     }
     const channel = yield* resolveChannel(cache, channelNameArg)
-    if (threadNameArg !== undefined) {
-      return { id, channel, thread: { name: yield* decodeThreadName(threadNameArg) } }
-    }
-    return { id, channel }
+    return { id, channel, thread: Option.none() }
   })
 
 const resolveMentions = (
@@ -267,27 +269,27 @@ const resolveMentions = (
     }),
   )
 
-const messageShape = (m: Message): Record<string, unknown> => ({
-  id: m.ref.id,
-  channel: {
-    id: m.ref.channel.id,
-    name: m.ref.channel.name,
-    permalink: m.ref.channel.permalink ?? null,
-  },
-  thread:
-    m.ref.thread === undefined
-      ? null
-      : { name: m.ref.thread.name, permalink: m.ref.thread.permalink ?? null },
-  permalink: m.ref.permalink ?? null,
-  sender: identityShape(m.sender),
-  body: m.body,
-  ts: m.ts,
-  mentions: m.mentions.map(identityShape),
-  reactions: m.reactions.map((r) => ({
-    emoji: r.emoji,
-    by: r.by.map(identityShape),
-  })),
-})
+const encodeThreadFacet = Schema.encode(Schema.OptionFromNullOr(ObservedThreadSchema))
+
+const messageShape = (m: Message): Effect.Effect<Record<string, unknown>, ParseResult.ParseError> =>
+  Effect.map(encodeThreadFacet(m.ref.thread), (thread) => ({
+    id: m.ref.id,
+    channel: {
+      id: m.ref.channel.id,
+      name: m.ref.channel.name,
+      permalink: m.ref.channel.permalink ?? null,
+    },
+    thread,
+    permalink: m.ref.permalink ?? null,
+    sender: identityShape(m.sender),
+    body: m.body,
+    ts: m.ts,
+    mentions: m.mentions.map(identityShape),
+    reactions: m.reactions.map((r) => ({
+      emoji: r.emoji,
+      by: r.by.map(identityShape),
+    })),
+  }))
 
 const resolveChannel = (
   cache: InternalCache,
@@ -419,12 +421,15 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
   // narrow-set add is set-backed and inbox.subscribe mirrors the explicit
   // subscribe tool. No-op for refs without a thread (top-level channel
   // messages don't get sticky thread behaviour).
-  const stickyThreadEngagement = async (ref: MessageRef): Promise<void> => {
-    if (ref.thread === undefined) return
+  const stickyThreadEngagement = async (
+    channel: ChannelRef,
+    threadName: Option.Option<ThreadName>,
+  ): Promise<void> => {
+    if (Option.isNone(threadName)) return
     const intent = {
       kind: 'thread' as const,
-      channelName: ref.channel.name,
-      threadName: ref.thread.name,
+      channelName: channel.name,
+      threadName: threadName.value,
     }
     narrowSet.add(intent)
     await runEdge(
@@ -575,24 +580,30 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             const messageBody = yield* decodeMessageBody(body)
             const opts: { -readonly [K in keyof PostOpts]: PostOpts[K] } = {}
             if (thread !== undefined) {
-              opts.thread = { name: yield* decodeThreadName(thread) }
+              opts.thread = yield* decodeThreadName(thread)
             }
             if (mentions !== undefined) {
               opts.mentions = yield* resolveMentions(cache, mentions)
             }
             if (reply_to !== undefined) {
-              opts.replyTo = yield* reconstructMessageRef(cache, reply_to, channel_name, thread)
+              opts.replyTo = yield* reconstructMessageRef(cache, reply_to, channel_name)
             }
             return yield* adapter.publisher.post(channel, messageBody, opts)
           }),
         )
         cache.rememberMessage(ref)
-        await stickyThreadEngagement(ref)
+        await stickyThreadEngagement(
+          ref.channel,
+          Option.map(ref.thread, (t) => t.name),
+        )
         return {
           message_id: ref.id,
           channel_id: ref.channel.id,
           channel_name: ref.channel.name,
-          thread: ref.thread === undefined ? null : { name: ref.thread.name },
+          thread: Option.match(ref.thread, {
+            onNone: () => null,
+            onSome: (t) => ({ name: t.name }),
+          }),
           permalink: ref.permalink ?? null,
         }
       },
@@ -629,9 +640,9 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         )
         const ref = await runEdge(
           Effect.gen(function* () {
-            const { message_id, body, channel_name, thread } =
+            const { message_id, body, channel_name } =
               yield* Schema.decodeUnknown(EditMessageArgs)(args)
-            const target = yield* reconstructMessageRef(cache, message_id, channel_name, thread)
+            const target = yield* reconstructMessageRef(cache, message_id, channel_name)
             yield* adapter.publisher.edit(target, yield* decodeMessageBody(body))
             return target
           }),
@@ -669,17 +680,27 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             identityCache.ensureBoundFor(readSessionId(args), project),
           ).pipe(Effect.flatMap((ensureBound) => ensureBound())),
         )
-        const ref = await runEdge(
+        const { ref, threadName } = await runEdge(
           Effect.gen(function* () {
             const { message_id, emoji, channel_name, thread } =
               yield* Schema.decodeUnknown(ReactArgs)(args)
-            const target = yield* reconstructMessageRef(cache, message_id, channel_name, thread)
+            const target = yield* reconstructMessageRef(cache, message_id, channel_name)
             yield* adapter.publisher.react(target, yield* decodeEmoji(emoji))
-            return target
+            // A cache-hit target carries the observed thread; a cache-miss one
+            // does not, so fall back to the caller-supplied topic name.
+            const argThread = yield* Effect.transposeMapOption(
+              Option.fromNullable(thread),
+              decodeThreadName,
+            )
+            const threadName = Option.orElse(
+              Option.map(target.thread, (t) => t.name),
+              () => argThread,
+            )
+            return { ref: target, threadName }
           }),
         )
         cache.rememberMessage(ref)
-        await stickyThreadEngagement(ref)
+        await stickyThreadEngagement(ref.channel, threadName)
         return {}
       },
     },
@@ -707,9 +728,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         )
         await runEdge(
           Effect.gen(function* () {
-            const { message_id, emoji, channel_name, thread } =
-              yield* Schema.decodeUnknown(ReactArgs)(args)
-            const ref = yield* reconstructMessageRef(cache, message_id, channel_name, thread)
+            const { message_id, emoji, channel_name } = yield* Schema.decodeUnknown(ReactArgs)(args)
+            const ref = yield* reconstructMessageRef(cache, message_id, channel_name)
             yield* adapter.publisher.unreact(ref, yield* decodeEmoji(emoji))
           }),
         )
@@ -823,7 +843,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           cache.rememberChannel(m.ref.channel)
           cache.rememberIdentity(m.sender)
         }
-        return { messages: messages.map(messageShape) }
+        return { messages: await runEdge(Effect.forEach(messages, messageShape)) }
       },
     },
     {
@@ -856,7 +876,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           cache.rememberChannel(m.ref.channel)
           cache.rememberIdentity(m.sender)
         }
-        return { messages: messages.map(messageShape) }
+        return { messages: await runEdge(Effect.forEach(messages, messageShape)) }
       },
     },
     {

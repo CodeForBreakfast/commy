@@ -1,10 +1,14 @@
 import { expect, test } from 'bun:test'
 import {
+  ChannelPermalinkSchema,
   decodeChannelIdSync,
   decodeChannelNameSync,
   decodeMessageIdSync,
   decodeThreadNameSync,
+  MessagePermalinkSchema,
+  ThreadPermalinkSchema,
 } from '@commy/core/ports'
+import { Option } from 'effect'
 import {
   buildMessageRef,
   channelPermalink,
@@ -68,32 +72,38 @@ const channel = { id: decodeChannelIdSync('9'), name: decodeChannelNameSync('gen
 
 test('channelPermalink builds a channel narrow with the numeric stream id slug', () => {
   expect(channelPermalink(base, channel)).toBe(
-    'https://zulip.example.com/#narrow/channel/9-general',
+    ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-general'),
   )
 })
 
 test('channelPermalink replaces spaces in the channel name with hyphens', () => {
   const spaced = { id: decodeChannelIdSync('12'), name: decodeChannelNameSync('my stream') }
   expect(channelPermalink(base, spaced)).toBe(
-    'https://zulip.example.com/#narrow/channel/12-my-stream',
+    ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/12-my-stream'),
   )
 })
 
 test('topicPermalink appends an encoded topic segment', () => {
   expect(topicPermalink(base, channel, decodeThreadNameSync('my topic'))).toBe(
-    'https://zulip.example.com/#narrow/channel/9-general/topic/my.20topic',
+    ThreadPermalinkSchema.make(
+      'https://zulip.example.com/#narrow/channel/9-general/topic/my.20topic',
+    ),
   )
 })
 
 test('messagePermalink appends a near/<id> segment under the topic', () => {
   expect(
     messagePermalink(base, channel, decodeMessageIdSync('42'), decodeThreadNameSync('my topic')),
-  ).toBe('https://zulip.example.com/#narrow/channel/9-general/topic/my.20topic/near/42')
+  ).toBe(
+    MessagePermalinkSchema.make(
+      'https://zulip.example.com/#narrow/channel/9-general/topic/my.20topic/near/42',
+    ),
+  )
 })
 
 test('messagePermalink omits the topic segment for a thread-less message', () => {
   expect(messagePermalink(base, channel, decodeMessageIdSync('42'))).toBe(
-    'https://zulip.example.com/#narrow/channel/9-general/near/42',
+    MessagePermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-general/near/42'),
   )
 })
 
@@ -115,10 +125,12 @@ test('buildMessageRef decorates message, channel and topic for a threaded messag
       name: decodeChannelNameSync('general'),
       permalink: 'https://zulip.example.com/#narrow/channel/9-general',
     },
-    thread: {
+    thread: Option.some({
       name: decodeThreadNameSync('lobby'),
-      permalink: 'https://zulip.example.com/#narrow/channel/9-general/topic/lobby',
-    },
+      permalink: ThreadPermalinkSchema.make(
+        'https://zulip.example.com/#narrow/channel/9-general/topic/lobby',
+      ),
+    }),
     permalink: 'https://zulip.example.com/#narrow/channel/9-general/topic/lobby/near/42',
   })
 })
@@ -131,6 +143,7 @@ test('buildMessageRef omits the thread for a thread-less message', () => {
       name: decodeChannelNameSync('general'),
       permalink: 'https://zulip.example.com/#narrow/channel/9-general',
     },
+    thread: Option.none(),
     permalink: 'https://zulip.example.com/#narrow/channel/9-general/near/42',
   })
 })

@@ -16,11 +16,20 @@
 import type {
   ChannelId,
   ChannelName,
+  ChannelPermalink,
   ChannelRef,
   MessageId,
+  MessagePermalink,
   MessageRef,
   ThreadName,
+  ThreadPermalink,
 } from '@commy/core/ports'
+import {
+  ChannelPermalinkSchema,
+  MessagePermalinkSchema,
+  ThreadPermalinkSchema,
+} from '@commy/core/ports'
+import { Option } from 'effect'
 
 const HASH_REPLACEMENTS: Readonly<Record<string, string>> = {
   '%': '.',
@@ -57,21 +66,29 @@ type ChannelLike = Pick<ChannelRef, 'id' | 'name'>
 const channelSlug = (channel: ChannelLike): string =>
   `${channel.id}-${encodeHashComponent(channel.name.replaceAll(' ', '-'))}`
 
-export const channelPermalink = (base: string, channel: ChannelLike): string =>
-  `${base}/#narrow/channel/${channelSlug(channel)}`
+export const channelPermalink = (base: string, channel: ChannelLike): ChannelPermalink =>
+  ChannelPermalinkSchema.make(`${base}/#narrow/channel/${channelSlug(channel)}`)
 
-export const topicPermalink = (base: string, channel: ChannelLike, topic: ThreadName): string =>
-  `${channelPermalink(base, channel)}/topic/${encodeHashComponent(topic)}`
+export const topicPermalink = (
+  base: string,
+  channel: ChannelLike,
+  topic: ThreadName,
+): ThreadPermalink =>
+  ThreadPermalinkSchema.make(
+    `${channelPermalink(base, channel)}/topic/${encodeHashComponent(topic)}`,
+  )
 
 export const messagePermalink = (
   base: string,
   channel: ChannelLike,
   id: MessageId,
   topic?: ThreadName,
-): string =>
-  topic === undefined
-    ? `${channelPermalink(base, channel)}/near/${id}`
-    : `${topicPermalink(base, channel, topic)}/near/${id}`
+): MessagePermalink =>
+  MessagePermalinkSchema.make(
+    topic === undefined
+      ? `${channelPermalink(base, channel)}/near/${id}`
+      : `${topicPermalink(base, channel, topic)}/near/${id}`,
+  )
 
 /** A channel ref carrying its narrow permalink. */
 export const withChannelPermalink = (
@@ -92,14 +109,19 @@ export const buildMessageRef = (
 ): MessageRef => {
   const decoratedChannel = withChannelPermalink(base, channel)
   return threadName === undefined
-    ? { id, channel: decoratedChannel, permalink: messagePermalink(base, decoratedChannel, id) }
+    ? {
+        id,
+        channel: decoratedChannel,
+        thread: Option.none(),
+        permalink: messagePermalink(base, decoratedChannel, id),
+      }
     : {
         id,
         channel: decoratedChannel,
-        thread: {
+        thread: Option.some({
           name: threadName,
           permalink: topicPermalink(base, decoratedChannel, threadName),
-        },
+        }),
         permalink: messagePermalink(base, decoratedChannel, id, threadName),
       }
 }

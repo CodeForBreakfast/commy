@@ -46,6 +46,7 @@ import type {
   RecentThread,
   SubscriptionTarget,
   ThreadName,
+  ThreadPermalink,
   Timestamp as TimestampType,
 } from '@commy/core/ports'
 import {
@@ -59,6 +60,7 @@ import {
   type Emoji,
   HistoryError,
   PublisherError,
+  ThreadPermalinkSchema,
   UnknownChannel,
   UnknownIdentity,
 } from '@commy/core/ports'
@@ -86,8 +88,8 @@ import {
 // shape the real Zulip narrow builder produces.
 const MEMORY_REALM = 'memory://commy'
 const synthChannelPermalink = (id: ChannelId): string => `${MEMORY_REALM}/channel/${id}`
-const synthTopicPermalink = (id: ChannelId, topic: ThreadName): string =>
-  `${synthChannelPermalink(id)}/topic/${topic}`
+const synthTopicPermalink = (id: ChannelId, topic: ThreadName): ThreadPermalink =>
+  ThreadPermalinkSchema.make(`${synthChannelPermalink(id)}/topic/${topic}`)
 const synthMessagePermalink = (id: ChannelId, messageId: MessageId, topic?: ThreadName): string =>
   topic === undefined
     ? `${synthChannelPermalink(id)}/near/${messageId}`
@@ -338,16 +340,17 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
             ? {
                 id: messageId,
                 channel,
+                thread: Option.none(),
                 permalink: synthMessagePermalink(channel.id, messageId),
               }
             : {
                 id: messageId,
                 channel,
-                thread: {
-                  name: thread.name,
-                  permalink: synthTopicPermalink(channel.id, thread.name),
-                },
-                permalink: synthMessagePermalink(channel.id, messageId, thread.name),
+                thread: Option.some({
+                  name: thread,
+                  permalink: synthTopicPermalink(channel.id, thread),
+                }),
+                permalink: synthMessagePermalink(channel.id, messageId, thread),
               },
         ),
       )
@@ -472,7 +475,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       if (target === 'mentions') return MENTIONS_KEY
       if (Predicate.hasProperty(target, 'kind')) return newTopicsSubKey(target.channel)
       if (Predicate.hasProperty(target, 'thread'))
-        return threadSubKey(target.channel, target.thread.name)
+        return threadSubKey(target.channel, target.thread)
       return channelSubKey(target)
     }
 
@@ -505,8 +508,8 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
           if (HashSet.has(subs, channelSubKey(stored.ref.channel))) return true
           const thread = stored.ref.thread
           if (
-            thread !== undefined &&
-            HashSet.has(subs, threadSubKey(stored.ref.channel, thread.name))
+            Option.isSome(thread) &&
+            HashSet.has(subs, threadSubKey(stored.ref.channel, thread.value.name))
           ) {
             return true
           }
@@ -522,10 +525,10 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       Effect.all([matchesStaticSub(stored), Ref.get(subscriptions)]).pipe(
         Effect.map(([matches, subs]) => {
           const thread = stored.ref.thread
-          if (thread !== undefined && HashSet.has(subs, newTopicsSubKey(stored.ref.channel))) {
+          if (Option.isSome(thread) && HashSet.has(subs, newTopicsSubKey(stored.ref.channel))) {
             const seen = seenTopicsByChannel.get(stored.ref.channel.id) ?? new Set<string>()
-            if (!seen.has(thread.name)) {
-              seen.add(thread.name)
+            if (!seen.has(thread.value.name)) {
+              seen.add(thread.value.name)
               seenTopicsByChannel.set(stored.ref.channel.id, seen)
               return true
             }
@@ -646,7 +649,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         resolveBucket(channel).pipe(
           Effect.map((bucket) => {
             const filtered = bucket
-              .filter((m) => m.ref.thread?.name === threadName)
+              .filter((m) => Option.exists(m.ref.thread, (t) => t.name === threadName))
               .filter(inRange(range ?? {}))
             return applyLimit(filtered, range?.limit).map(projectStored)
           }),
@@ -658,7 +661,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
           const collected: StoredMessage[] = []
           for (const bucket of messagesByChannel.values()) {
             for (const stored of bucket) {
-              if (stored.sender.id === sender && stored.ref.thread !== undefined) {
+              if (stored.sender.id === sender && Option.isSome(stored.ref.thread)) {
                 collected.push(stored)
               }
             }
@@ -671,18 +674,18 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
           let seen = HashMap.empty<ReturnType<typeof threadKey>, StoredMessage>()
           for (const msg of bySender) {
             const thread = msg.ref.thread
-            if (thread === undefined) continue
-            const key = threadKey(msg.ref.channel.name, thread.name)
+            if (Option.isNone(thread)) continue
+            const key = threadKey(msg.ref.channel.name, thread.value.name)
             if (!HashMap.has(seen, key)) seen = HashMap.set(seen, key, msg)
             if (HashMap.size(seen) >= limit) break
           }
           const threads: RecentThread[] = []
           for (const msg of HashMap.values(seen)) {
             const thread = msg.ref.thread
-            if (thread === undefined) continue
+            if (Option.isNone(thread)) continue
             threads.push({
               channel: msg.ref.channel.name,
-              thread: thread.name,
+              thread: thread.value.name,
               lastPostTs: msg.ts,
               lastPostBody: msg.body,
             })

@@ -15,6 +15,7 @@ import {
   decodeMessageBodySync,
   decodeMessageIdSync,
   decodeTimestampSync,
+  ThreadPermalinkSchema,
 } from '@commy/core/ports'
 import { Effect, Option, TestClock, TestContext } from 'effect'
 import { type ChannelsCatchUpDeps, catchUpChannels } from './channels-catch-up.ts'
@@ -54,7 +55,15 @@ const buildMessage = (
   ref: {
     id: decodeMessageIdSync(`msg-${body}-${ts}`),
     channel: channelRef(opts.channel ?? 'general'),
-    ...(opts.thread !== undefined ? { thread: { name: opts.thread as ThreadName } } : {}),
+    thread:
+      opts.thread !== undefined
+        ? Option.some({
+            name: opts.thread as ThreadName,
+            permalink: ThreadPermalinkSchema.make(
+              `https://zulip.example.com/#narrow/channel/1-general/topic/${opts.thread}`,
+            ),
+          })
+        : Option.none(),
   },
   sender: human,
   body: decodeMessageBodySync(body),

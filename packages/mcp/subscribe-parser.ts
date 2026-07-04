@@ -135,7 +135,7 @@ export const intentToTarget = (intent: SubscribeIntent): Effect.Effect<Subscript
         decodeChannelId(channelName).pipe(
           Effect.map((id) => ({
             channel: { id, name: channelName },
-            thread: { name: threadName },
+            thread: threadName,
           })),
           Effect.orDie,
         ),
