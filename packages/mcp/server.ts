@@ -42,6 +42,7 @@ import { type CatchUpError, catchUpMentions } from './mentions-catch-up.ts'
 import type { NarrowSet } from './narrow-set.ts'
 import { createNarrowSet } from './narrow-set.ts'
 import { raceReleaseAgainstTimeout } from './release-shutdown.ts'
+import { SessionIdLive, type SessionId as SessionIdTag } from './session-id.ts'
 import type { SubscribeIntent, SubscribeTokenError } from './subscribe-parser.ts'
 import { intentToTarget } from './subscribe-parser.ts'
 import {
@@ -677,22 +678,28 @@ export const makeProgram = (
 /**
  * Production app Layer: the substrate adapter (Zulip,
  * `close()` as a finalizer), the file-backed cursor store, the file-backed
- * subscription store, and the stderr logger. Reads `HttpClient` +
+ * subscription store, the shared session-id `Deferred`, and the stderr
+ * logger. Reads `HttpClient` +
  * `FileSystem` from context — the platform layers are fed in once at the
  * edge so the Zulip adapter and stores inject the held services
  * at construction rather than self-providing a layer per call. The
  * ConfigProvider is fed in the same way — built first, so
  * `ZulipAdapterLive`'s own `parseEnv` reads it during the layer build and
  * the program fiber inherits the same source.
+ *
+ * `SessionIdLive` is merged here so the one shared `Deferred<SessionIdValue>`
+ * is built once and memoized to a single instance for the whole MCP child —
+ * setters and awaiters (sibling comms-k7cv work) reference the same deferred.
  */
 const AppLayer: Layer.Layer<
-  SubstrateAdapter | CursorStoreTag | SubscriptionStoreTag,
+  SubstrateAdapter | CursorStoreTag | SubscriptionStoreTag | SessionIdTag,
   EnvConfigError,
   HttpClient.HttpClient | FileSystem.FileSystem
 > = Layer.mergeAll(
   ZulipAdapterLive,
   FileCursorStoreLive,
   FileSubscriptionStoreLive,
+  SessionIdLive,
   stderrLoggerLayer,
 )
 
@@ -729,6 +736,7 @@ export const MainLive: Layer.Layer<
   | SubstrateAdapter
   | CursorStoreTag
   | SubscriptionStoreTag
+  | SessionIdTag
   | HttpClient.HttpClient
   | FileSystem.FileSystem
   | CommandExecutor.CommandExecutor,
