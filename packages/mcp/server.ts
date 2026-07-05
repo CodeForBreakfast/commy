@@ -497,18 +497,30 @@ export const makeProgram = (
         project: ProjectSlug | undefined,
       ): Effect.Effect<void> =>
         feedSession(sessionId).pipe(Effect.zipRight(seedIfFresh(sessionId, project)))
-      // Persisting is best-effort: a disk hiccup logs but never fails the
-      // user's subscribe/unsubscribe call.
-      const persistSessionSubscriptions = (sessionId: SessionId): Effect.Effect<void> =>
+      // Persisting is best-effort and id-blind: subscribe/unsubscribe never
+      // carry a session_id, so poll the shared deferred rather than await it —
+      // write the snapshot only when the id is already known (fed by the
+      // boot-env feeder or a prior hooked call), no-op otherwise. Awaiting
+      // instead would park the user's call on a subscribe-first seat whose id
+      // no source has delivered. A disk hiccup logs but never fails the call.
+      const persistSessionSubscriptions: Effect.Effect<void> =
         parsed.botName !== undefined
           ? Effect.void
-          : persistSubscriptions(subscriptionStore, narrowSet).pipe(
-              Effect.catchAll((err) =>
-                Effect.logError(
-                  `commy plugin: subscription persist failed for ${sessionId}: ${Predicate.isError(err) ? err.message : String(err)}`,
-                ),
+          : Deferred.poll(sessionIdDeferred).pipe(
+              Effect.flatMap(
+                Option.match({
+                  onNone: () => Effect.void,
+                  onSome: () =>
+                    persistSubscriptions(subscriptionStore, narrowSet).pipe(
+                      Effect.catchAll((err) =>
+                        Effect.logError(
+                          `commy plugin: subscription persist failed: ${Predicate.isError(err) ? err.message : String(err)}`,
+                        ),
+                      ),
+                      Effect.provide(loggerLayer),
+                    ),
+                }),
               ),
-              Effect.provide(loggerLayer),
             )
 
       // Ephemeral-mode post-acquire hook: restore (or

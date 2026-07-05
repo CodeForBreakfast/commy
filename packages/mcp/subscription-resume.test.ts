@@ -348,3 +348,112 @@ test('makeSessionRestore restores nothing for a never-seen session (no fresh-ses
       expect(substrateSubscribes).toEqual([])
     }),
   ))
+
+// The persist path: subscribe/unsubscribe write the current narrow-set
+// snapshot to the session-keyed store after each mutation. But the
+// PreToolUse matcher never stamps `session_id` on subscribe/unsubscribe, so
+// persist cannot read the id from its own args — it must be id-blind. It polls
+// the shared session-id deferred and writes only when the id is already known
+// (fed by the boot-env feeder or a prior hooked tool call), no-op otherwise.
+// Writing unconditionally would park on the store's `Deferred.await` for a
+// subscribe-first seat whose id no source has delivered.
+const channelOtherIntent: SubscribeIntent = {
+  kind: 'channel',
+  channelName: decodeChannelNameSync('other'),
+}
+
+interface PersistRig {
+  readonly client: Client
+  readonly store: SubscriptionStore
+  readonly session: Deferred.Deferred<SessionId>
+}
+
+const buildPersistRig = (): Effect.Effect<PersistRig, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const adapter = yield* memoryAdapter()
+    const identityCache = yield* createEphemeralIdentityCache({
+      acquire: adapter.identity.acquire,
+      release: adapter.identity.release,
+      idleReleaseMs: 60 * 60 * 1000,
+    })
+    const narrowSet = createNarrowSet()
+    const session = yield* Deferred.make<SessionId>()
+    const store = inMemorySubscriptionStore(session)
+    // Mirror server.ts `persistSessionSubscriptions`: a bare lazy Effect that
+    // polls the shared deferred, writing the snapshot only when the id is known,
+    // no-op (never park) when not.
+    const persistSessionSubscriptions: Effect.Effect<void> = Deferred.poll(session).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.void,
+          onSome: () => store.write(narrowSet.intents()).pipe(Effect.catchAll(() => Effect.void)),
+        }),
+      ),
+    )
+
+    const server = buildMcpServer()
+    registerTools(server, {
+      adapter,
+      identityCache,
+      narrowSet,
+      persistSessionSubscriptions,
+    })
+
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair()
+    const client = new Client(
+      { name: 'commy-persist-test', version: '0.0.0' },
+      { capabilities: {} },
+    )
+    yield* Effect.promise(() =>
+      Promise.all([server.connect(serverTransport), client.connect(clientTransport)]),
+    )
+    yield* Effect.addFinalizer(() =>
+      Effect.promise(async () => {
+        await client.close()
+        await server.close()
+      }),
+    )
+
+    return { client, store, session }
+  })
+
+test('subscribe carrying no session_id persists the snapshot when the id is already known', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* buildPersistRig()
+        // The boot-env feeder (or a prior hooked call) has already filled the
+        // shared deferred — the fleet's real state (CC injects the env at boot).
+        yield* Deferred.succeed(rig.session, asSessionId(SID_RESUME))
+
+        // A subscribe that carries NO session_id in args: the matcher never
+        // stamps it on subscribe, so this is the real live shape.
+        yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'subscribe', arguments: { target: 'channel:other' } }),
+        )
+
+        // Persist fired id-blind: the session-keyed snapshot now holds the new
+        // intent, so a later resume restores it.
+        const persisted = yield* rig.store.read()
+        expect(persisted).toEqual(Option.some([channelOtherIntent]))
+      }),
+    ),
+  ))
+
+test('subscribe carrying no session_id with an unfed deferred returns promptly and does not park', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* buildPersistRig()
+        // Deferred deliberately UNFED: a subscribe-first seat whose id no source
+        // has delivered. An unconditional persist would park on the store's
+        // `Deferred.await`; the poll-guard must no-op and let the call return.
+        const outcome = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'subscribe', arguments: { target: 'channel:other' } }),
+        ).pipe(Effect.timeoutOption('2 seconds'))
+
+        // Handler returned rather than hanging on the unfed deferred.
+        expect(Option.isSome(outcome)).toBe(true)
+      }),
+    ),
+  ))
