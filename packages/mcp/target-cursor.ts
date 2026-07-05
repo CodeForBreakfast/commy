@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { ChannelName, Message, ThreadName, Timestamp } from '@commy/core/ports'
+import type { Message, Timestamp } from '@commy/core/ports'
 import { ChannelNameSchema, ThreadNameSchema, TimestampSchema } from '@commy/core/ports'
 import type { FileSystem } from '@effect/platform'
 import type { PlatformError } from '@effect/platform/Error'
@@ -35,10 +35,7 @@ import type { SessionIdValue } from './session-id.ts'
  * `Equal`/`Hash` and the `Option` field composes into it, so there is no
  * delimiter that a channel/thread name containing one could collide on.
  */
-export type DeliveryTarget = {
-  readonly channel: ChannelName
-  readonly thread: Option.Option<ThreadName>
-}
+export type DeliveryTarget = Schema.Schema.Type<typeof DeliveryTargetSchema>
 
 /**
  * Derive the {@link DeliveryTarget} a message was delivered in from its
