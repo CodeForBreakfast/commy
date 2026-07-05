@@ -146,11 +146,16 @@ export interface RegisterToolsDeps {
     project: ProjectSlug | undefined,
   ) => Effect.Effect<void>
   /**
-   * Persist the current narrow set under the session_id after a
-   * `subscribe`/`unsubscribe` mutation. Best-effort — never
-   * fails the tool call. Omitted in tests that don't exercise persistence.
+   * Persist the current narrow set after a `subscribe`/`unsubscribe`
+   * mutation. Id-blind: the session_id is never stamped on these calls, so
+   * the persist polls the shared session-id deferred internally and writes
+   * only when the id is already known — no argument crosses this seam.
+   * Best-effort — never fails the tool call. A bare lazy Effect (not a
+   * thunk): each `yield*` re-polls the deferred and re-reads the current
+   * snapshot at execution time. Omitted in tests that don't exercise
+   * persistence.
    */
-  readonly persistSessionSubscriptions?: (sessionId: SessionId) => Effect.Effect<void>
+  readonly persistSessionSubscriptions?: Effect.Effect<void>
   /**
    * Hand a PreToolUse-stamped session_id to the shared session-id `Deferred`
    * (comms-k7cv). Every hooked tool (post/edit_message/react/unreact/
@@ -797,8 +802,11 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             // boot-time reconciler didn't have a chance to cover.
             narrowSet.add(intent)
             yield* adapter.inbox.subscribe(intentToTarget(intent))
-            if (sessionId !== undefined && deps.persistSessionSubscriptions !== undefined) {
-              yield* deps.persistSessionSubscriptions(sessionId)
+            // Persist is id-blind (this call carries no session_id): it polls
+            // the shared deferred internally and writes only when the id is
+            // already known, so it fires here without an id argument.
+            if (deps.persistSessionSubscriptions !== undefined) {
+              yield* deps.persistSessionSubscriptions
             }
           }),
         )
@@ -836,8 +844,10 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             }
             narrowSet.remove(intent)
             yield* adapter.inbox.unsubscribe(intentToTarget(intent))
-            if (sessionId !== undefined && deps.persistSessionSubscriptions !== undefined) {
-              yield* deps.persistSessionSubscriptions(sessionId)
+            // Persist is id-blind (see subscribe): it polls the shared deferred
+            // internally and writes only when the id is already known.
+            if (deps.persistSessionSubscriptions !== undefined) {
+              yield* deps.persistSessionSubscriptions
             }
           }),
         )
