@@ -26,6 +26,9 @@
  */
 
 import { describe, expect, test } from 'bun:test'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { stderrLoggerLayer } from '@commy/core/logging'
 import type { ZulipAdapter } from '@commy/zulip/adapter'
 import { zulipAdapter } from '@commy/zulip/adapter'
@@ -39,7 +42,9 @@ import {
   Effect,
   Fiber,
   Layer,
+  Option,
   Redacted,
+  Schedule,
   Schema,
   type Scope,
   Stream,
@@ -102,6 +107,13 @@ const EPHEMERAL_SESSION_A = 'aaaaaaaa-0000-0000-0000-000000000001'
 const EPHEMERAL_SESSION_B = 'bbbbbbbb-0000-0000-0000-000000000001'
 const EPHEMERAL_BOT_A = `cc-${EPHEMERAL_SESSION_A.slice(0, 8)}`
 const EPHEMERAL_BOT_B = `cc-${EPHEMERAL_SESSION_B.slice(0, 8)}`
+
+// Fixed boot session id shared across the resume test's two boots — the id the
+// on-disk subscription store keys on, and the id CC re-injects into a resumed
+// MCP child's env. Setting it ourselves is this test's one honest limit (it
+// stubs the zero-action id SOURCE); CC's boot-env injection on resume was
+// confirmed separately on CC 2.1.201 (comms-k7cv.4, and live via comms-k7cv.7).
+const RESUME_SESSION = 'cccccccc-0000-0000-0000-000000000001'
 
 const usersListSchema = Schema.Struct({
   result: Schema.Literal('success'),
@@ -353,5 +365,142 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
         }),
       ),
     TEST_TIMEOUT_MS,
+  )
+
+  test(
+    'resume restore: boot-2 restores boot-1 persisted narrow set and delivers an inbound reaction with zero tool calls',
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const e = liveEnv()
+          const minterHttp = yield* makeZulipHttp({
+            realmUrl: yield* RealmUrl(e.site).pipe(Effect.orDie),
+            email: yield* BotEmail(e.minterEmail).pipe(Effect.orDie),
+            apiKey: yield* ApiKey(e.minterApiKey).pipe(Effect.orDie),
+          }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient))
+
+          // Isolated on-disk state home so the two boots share a private
+          // subscription store keyed by the fixed boot session id.
+          const stateHome = mkdtempSync(join(tmpdir(), 'commy-resume-'))
+          const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+          const verifyTopic = `k7cv-resume-${suffix}`
+          const marker = `resume-marker-${suffix}`
+          const bootEnv = {
+            CLAUDE_CODE_SESSION_ID: RESUME_SESSION,
+            XDG_STATE_HOME: stateHome,
+            COMMY_SUBSCRIBE: 'mentions',
+          }
+
+          // BOOT 1 — post a marker into a NON-DEFAULT thread, then subscribe that
+          // thread (persists {mentions, thread} under the session id), tear down.
+          const messageId = yield* Effect.scoped(
+            Effect.gen(function* () {
+              yield* Effect.sleep(MINTER_PACE)
+              const client = yield* buildHarness(bootEnv)
+              yield* Effect.sleep(MINTER_PACE)
+              const posted = expectStructured(
+                yield* callTool(client, 'post', {
+                  channel_name: e.channelName,
+                  thread: verifyTopic,
+                  body: marker,
+                  session_id: RESUME_SESSION,
+                }),
+              )
+              const id = posted['message_id'] as string
+              expect(typeof id).toBe('string')
+              yield* callTool(client, 'subscribe', {
+                target: `thread:${e.channelName}/${verifyTopic}`,
+                session_id: RESUME_SESSION,
+              })
+              return id
+            }),
+          )
+
+          // The persist half: boot-1's subscribe wrote the narrow set to disk
+          // under the session id, including the non-default thread.
+          const persistedPath = join(stateHome, 'commy', 'subscriptions', `${RESUME_SESSION}.json`)
+          const persisted = JSON.parse(readFileSync(persistedPath, 'utf8')) as ReadonlyArray<{
+            readonly kind: string
+            readonly threadName?: string
+          }>
+          expect(persisted.some((i) => i.kind === 'thread' && i.threadName === verifyTopic)).toBe(
+            true,
+          )
+
+          // BOOT 2 — same session id via boot env + same state home. A fresh MCP
+          // child boots session-blind; the boot-env feeder fills the id and the
+          // boot-forked restore rehydrates the narrow set with ZERO tool calls.
+          // Capture host-facing `notifications/claude/channel` frames, then react
+          // from the minter (a different identity than the resumed subject bot);
+          // the reaction must be delivered off the restored subscription.
+          const frames: Array<{ readonly meta: Record<string, string> }> = []
+          const matchingFrame = yield* Effect.scoped(
+            Effect.gen(function* () {
+              yield* Effect.sleep(MINTER_PACE)
+              const client = yield* buildHarness(bootEnv)
+              client.fallbackNotificationHandler = (n: {
+                readonly method: string
+                readonly params?: unknown
+              }): Promise<void> => {
+                if (
+                  n.method === 'notifications/claude/channel' &&
+                  typeof n.params === 'object' &&
+                  n.params !== null
+                ) {
+                  const p = n.params as { readonly meta?: Record<string, string> }
+                  if (p.meta !== undefined) frames.push({ meta: p.meta })
+                }
+                return Promise.resolve()
+              }
+
+              // Let the boot-forked restore load the narrow set and wire the
+              // thread on the substrate before the reaction is posted, so the
+              // pump's narrow-set match is in place when the event flows.
+              yield* Effect.sleep(Duration.seconds(5))
+
+              yield* minterHttp
+                .post(
+                  `/messages/${messageId}/reactions`,
+                  Schema.Struct({ result: Schema.Literal('success') }),
+                  { emoji_name: 'thumbs_up' },
+                )
+                .pipe(Effect.orDie)
+
+              // Poll the captured frames for the reaction — delivered with no
+              // tool call on this boot. The outer timeout is the fail signal.
+              return yield* Effect.suspend(() =>
+                Option.match(
+                  Option.fromNullable(
+                    frames.find(
+                      (f) =>
+                        f.meta['reaction_action'] === 'add' &&
+                        f.meta['reaction_emoji'] === 'thumbs_up' &&
+                        f.meta['target_thread'] === verifyTopic,
+                    ),
+                  ),
+                  {
+                    onNone: () => Effect.fail('not-yet' as const),
+                    onSome: (f) => Effect.succeed(f),
+                  },
+                ),
+              ).pipe(
+                // Retries the `not-yet` failure on a fixed cadence; the timeout
+                // is the fail signal (a `TimeoutException`) if the reaction never
+                // lands, meaning restore did not re-wire the subscription.
+                Effect.retry(Schedule.spaced(Duration.millis(500))),
+                Effect.timeout(Duration.seconds(30)),
+              )
+            }),
+          )
+
+          expect(matchingFrame.meta['reaction_action']).toBe('add')
+          expect(matchingFrame.meta['reaction_emoji']).toBe('thumbs_up')
+          expect(matchingFrame.meta['target_thread']).toBe(verifyTopic)
+          expect(matchingFrame.meta['target_message_id']).toBe(messageId)
+
+          rmSync(stateHome, { recursive: true, force: true })
+        }),
+      ),
+    90_000,
   )
 })
