@@ -41,11 +41,29 @@ export interface NarrowSet {
    */
   intents(): ReadonlyArray<SubscribeIntent>
   /**
-   * Replace the entire membership set with `intents`, dropping whatever was
-   * there before. Used once on resume to restore the persisted
-   * set — including prior unsubscribes — over whatever boot-time seeding ran.
+   * Begin journaling runtime `add`/`remove` deltas so they can be replayed
+   * onto a base installed later by {@link load}. Called on a resuming
+   * ephemeral seat once the boot-time `COMMY_SUBSCRIBE` base is seeded but
+   * before any tool call can mutate — so a subscribe/unsubscribe that races
+   * the still-loading restore is captured, not lost.
+   *
+   * Deltas continue to apply to the live membership immediately (so `matches`
+   * is never blacked out during the load); journaling is purely so the base
+   * swap in {@link load} can re-apply them on top of the restored set.
    */
-  replace(intents: ReadonlyArray<SubscribeIntent>): void
+  beginBuffering(): void
+  /**
+   * Install the restored base and drain the delta journal, ending the
+   * buffering window. `Some(base)` replaces the membership with the persisted
+   * set (a resume — including prior unsubscribes, so a dropped default stays
+   * dropped); `None` keeps the current membership (a fresh session — the
+   * `COMMY_SUBSCRIBE` base stands as the fallback). Either way the journaled
+   * runtime deltas then replay in arrival order, so a pre-restore subscribe
+   * survives the swap and a pre-restore unsubscribe of a persisted sub still
+   * removes it. Idempotent to re-apply against the live membership because the
+   * deltas were also applied directly while buffering.
+   */
+  load(base: Option.Option<ReadonlyArray<SubscribeIntent>>): void
 }
 
 /**
@@ -71,6 +89,12 @@ type IntentKey =
   | ReturnType<typeof channelKeyOf>
   | ReturnType<typeof threadKeyOf>
   | ReturnType<typeof newTopicsKeyOf>
+
+/**
+ * A journaled runtime mutation, held while buffering so it can be replayed
+ * onto the base {@link NarrowSet.load} installs on resume.
+ */
+type PendingDelta = { readonly op: 'add' | 'remove'; readonly key: IntentKey }
 
 const intentKey = (intent: SubscribeIntent): IntentKey =>
   Match.value(intent).pipe(
@@ -128,6 +152,8 @@ const mentionsMatches = (
 export const createNarrowSet = (): NarrowSet => {
   let intents = HashSet.empty<IntentKey>()
   let seenTopics = HashSet.empty<IntentKey>()
+  const pending: PendingDelta[] = []
+  let recording = false
 
   /**
    * First-message-per-topic match for a `new-topics:<ch>` intent. A
@@ -167,15 +193,32 @@ export const createNarrowSet = (): NarrowSet => {
 
   return {
     add: (intent) => {
-      intents = HashSet.add(intents, intentKey(intent))
+      const key = intentKey(intent)
+      intents = HashSet.add(intents, key)
+      if (recording) pending.push({ op: 'add', key })
     },
     remove: (intent) => {
-      intents = HashSet.remove(intents, intentKey(intent))
+      const key = intentKey(intent)
+      intents = HashSet.remove(intents, key)
+      if (recording) pending.push({ op: 'remove', key })
     },
     size: () => HashSet.size(intents),
     intents: () => Arr.fromIterable(intents).map(keyToIntent),
-    replace: (next) => {
-      intents = HashSet.fromIterable(next.map(intentKey))
+    beginBuffering: () => {
+      recording = true
+    },
+    load: (base) => {
+      const seeded = Option.match(base, {
+        onNone: () => intents,
+        onSome: (next) => HashSet.fromIterable(next.map(intentKey)),
+      })
+      intents = pending.reduce(
+        (acc, delta) =>
+          delta.op === 'add' ? HashSet.add(acc, delta.key) : HashSet.remove(acc, delta.key),
+        seeded,
+      )
+      pending.length = 0
+      recording = false
     },
     matches: (event, botIdentityId): boolean =>
       Match.value(event).pipe(

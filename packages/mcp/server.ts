@@ -48,8 +48,8 @@ import { SessionIdLive, SessionId as SessionIdTag } from './session-id.ts'
 import type { SubscribeIntent, SubscribeTokenError } from './subscribe-parser.ts'
 import { intentToTarget } from './subscribe-parser.ts'
 import {
-  makeSessionRestore,
   persistSubscriptions,
+  restoreSubscriptions,
   seedDefaultsIfFresh,
 } from './subscription-restore.ts'
 import { FileSubscriptionStoreLive, SubscriptionStoreTag } from './subscription-store.ts'
@@ -351,7 +351,7 @@ export const makeProgram = (
       const adapter = yield* SubstrateAdapter
       const cursorStore = yield* CursorStoreTag
       const subscriptionStore = yield* SubscriptionStoreTag
-      // The one shared session-id deferred (comms-k7cv). Setters below fill it;
+      // The one shared session-id deferred. Setters below fill it;
       // sibling seats' awaiters (Store / restore) read it. Every setter is
       // opportunistic and additive — none load-bearing alone; the first source
       // to arrive wins. Boot feeder first: when CC injects CLAUDE_CODE_SESSION_ID
@@ -439,36 +439,32 @@ export const makeProgram = (
           ? createType2DefaultsOnAcquire(narrowSet, adapter.inbox)
           : undefined
 
-      // Reactive subscription restore (comms-k7cv). Restore is a reaction to the
-      // session_id becoming known: a resumed MCP child boots session-blind, so
-      // the moment a feeder (acquire / subscribe / unsubscribe) delivers the id,
-      // the `Deferred` latch fires `restoreSubscriptions` ONCE. This retires the
-      // old `restoredSessions` memo — the latch is the once-guard for restore,
-      // and the store's presence is a store-gated once-guard for the seed.
-      // Ephemeral mode only: a persistent COMMY_BOT_NAME pane gets a new
-      // session_id every launch, so its store is always absent → the fresh path
-      // → COMMY_SUBSCRIBE-only.
-      const sessionRestoreFeed =
-        parsed.botName === undefined
-          ? yield* makeSessionRestore({ subscriptionStore, narrowSet, inbox: adapter.inbox })
-          : undefined
-      const seedDefaults = (project: ProjectSlug | undefined): Effect.Effect<void> =>
-        registerType2Defaults !== undefined ? registerType2Defaults(project) : Effect.void
-      // Deliver the session_id to the restore reaction. Idempotent: after the
-      // first delivery the latch is closed and later calls do nothing. A corrupt
-      // or unreadable store must not strand the session — log and carry on; the
-      // seed below still supplies fresh defaults.
-      const feedSession = (sessionId: SessionId): Effect.Effect<void> =>
-        sessionRestoreFeed === undefined
+      // Reactive subscription restore. Restore is a reaction to the
+      // session_id becoming known, not a thing a specific action triggers: a
+      // resumed MCP child boots session-blind. `restoreSubscriptions` reads the
+      // session-bound store, whose `read` awaits the shared session-id `Deferred`
+      // internally — so this is forked ONCE into the connected runtime below and
+      // parks on that read until any source (the boot-env feeder for a listen-only
+      // seat, or the first tool call) fills the id, then rehydrates with zero
+      // agent action. Must be forked, not awaited inline: an inline await would
+      // block boot/serving until the id lands. The store's presence stays a true
+      // resume signal; a corrupt or unreadable store logs and is swallowed rather
+      // than stranding the session. Ephemeral mode only: a persistent
+      // COMMY_BOT_NAME pane gets a new session_id every launch, so its store is
+      // always absent → the fresh path → COMMY_SUBSCRIBE-only.
+      const restoreOnResume: Effect.Effect<void> =
+        parsed.botName !== undefined
           ? Effect.void
-          : sessionRestoreFeed(sessionId).pipe(
+          : restoreSubscriptions({ subscriptionStore, narrowSet, inbox: adapter.inbox }).pipe(
               Effect.catchAll((err) =>
                 Effect.logError(
-                  `commy plugin: subscription restore failed for ${sessionId}: ${Predicate.isError(err) ? err.message : String(err)}`,
+                  `commy plugin: subscription restore failed: ${Predicate.isError(err) ? err.message : String(err)}`,
                 ),
               ),
               Effect.provide(loggerLayer),
             )
+      const seedDefaults = (project: ProjectSlug | undefined): Effect.Effect<void> =>
+        registerType2Defaults !== undefined ? registerType2Defaults(project) : Effect.void
       // Seed the acquire-gated Type-2 defaults for a fresh session (store absent).
       // Restore-free and store-gated, so it never rehydrates a resumed set. On a
       // corrupt store, fall back to fresh defaults rather than strand the session.
@@ -489,14 +485,15 @@ export const makeProgram = (
               ),
               Effect.provide(loggerLayer),
             )
-      // Restore then seed on the first action carrying this session_id: rehydrate
-      // a resumed set via the reactive latch, then seed a fresh session's
-      // defaults. Both idempotent, so this needs no once-per-session memo.
+      // Seed a fresh session's defaults on the first action carrying this
+      // session_id. Restore is no longer entangled here — it is boot-forked
+      // (`restoreOnResume`) off the shared session-id `Deferred`, so this path is
+      // seed-only. Store-gated and idempotent, so it needs no once-per-session
+      // memo: a resumed session (store present) gets nothing from here.
       const ensureSessionSubscriptions = (
         sessionId: SessionId,
         project: ProjectSlug | undefined,
-      ): Effect.Effect<void> =>
-        feedSession(sessionId).pipe(Effect.zipRight(seedIfFresh(sessionId, project)))
+      ): Effect.Effect<void> => seedIfFresh(sessionId, project)
       // Persisting is best-effort and id-blind: subscribe/unsubscribe never
       // carry a session_id, so poll the shared deferred rather than await it —
       // write the snapshot only when the id is already known (fed by the
@@ -607,6 +604,15 @@ export const makeProgram = (
 
       const subscribedIntents = yield* subscribeFromEnv(adapter.inbox, narrowSet, parsed)
 
+      // Ephemeral resume: start journaling runtime subscribe/unsubscribe deltas
+      // now — after the COMMY_SUBSCRIBE base is seeded but before any tool call
+      // can mutate — so a delta racing the boot-forked restore below is replayed
+      // onto the restored base rather than clobbered by it. Persistent mode never
+      // restores, so it never buffers: add/remove apply directly.
+      if (parsed.botName === undefined) {
+        narrowSet.beginBuffering()
+      }
+
       const toolsCache = registerTools(mcp, {
         adapter,
         identityCache,
@@ -702,6 +708,15 @@ export const makeProgram = (
       if (runsIdleSweep) {
         yield* forkIdleSweep(identityCache, EPHEMERAL_IDLE_SWEEP_INTERVAL_MS)
       }
+
+      // Boot-forked subscription restore, scope-tied like the sweep. Parks on the
+      // store's `Deferred.await` until any source fills the shared session-id,
+      // then loads the persisted base (resume) or drains the buffer over the env
+      // seed (fresh); either way it replays the deltas journaled since
+      // `beginBuffering`, so a subscribe racing the load is never lost. A no-op
+      // Effect in persistent mode. Never awaited inline: an unfilled id on a
+      // listen-only seat would otherwise block the scope forever.
+      yield* Effect.forkScoped(restoreOnResume)
 
       // Block until either the event stream ends / the pump fatally parks
       // and is interrupted (the SIGINT/SIGTERM path), OR the MCP client
