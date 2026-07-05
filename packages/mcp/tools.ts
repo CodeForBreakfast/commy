@@ -151,6 +151,19 @@ export interface RegisterToolsDeps {
    * fails the tool call. Omitted in tests that don't exercise persistence.
    */
   readonly persistSessionSubscriptions?: (sessionId: SessionId) => Effect.Effect<void>
+  /**
+   * Deliver this session_id to the reactive restore latch. Fed by the passive
+   * `current_identity` read so a zero-tool-call listen-only seat — one that
+   * never posts/reacts/subscribes — still restores its persisted narrow set on
+   * resume: its wake-time `UserPromptSubmit` hook calls `current_identity`, and
+   * that call hands the id to the latch. Restore-only (Type-2 defaults stay
+   * acquire-gated, unlike `ensureSessionSubscriptions`), and never fails the
+   * read. Not an inline restore: it hands the id to the boot-forked `Deferred`
+   * awaiter, which runs restore once inside the connected runtime. Omitted in
+   * tests that don't wire the latch; when absent, `current_identity` stays a
+   * pure passive read.
+   */
+  readonly feedSessionRestore?: (sessionId: SessionId) => Effect.Effect<void>
   readonly downloadFile?: (
     urlPath: UserUploadPath,
   ) => Effect.Effect<
@@ -461,9 +474,24 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
       },
       handler: async (args): Promise<CurrentIdentityResult> => {
         const sessionId = readSessionId(args)
+        // Deliver the session_id to the reactive restore latch before the
+        // passive read. This is the feeder for the seat that never acts: a
+        // listen-only resumed seat's wake-time hook calls current_identity, and
+        // this hands its id to the latch so the boot-forked awaiter rehydrates
+        // the persisted narrow set once. A side-effect only — the binding
+        // self-check below still reports the same {state, identity?} it always
+        // has.
+        const feed =
+          sessionId !== undefined && deps.feedSessionRestore !== undefined
+            ? deps.feedSessionRestore(sessionId)
+            : Effect.void
         const ensureBound = await runEdge(
-          Effect.flatMap(projectForArgs(args), (project) =>
-            identityCache.ensureBoundFor(sessionId, project),
+          feed.pipe(
+            Effect.zipRight(
+              Effect.flatMap(projectForArgs(args), (project) =>
+                identityCache.ensureBoundFor(sessionId, project),
+              ),
+            ),
           ),
         )
         const current = ensureBound.current()

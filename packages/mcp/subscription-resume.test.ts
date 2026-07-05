@@ -25,14 +25,16 @@ import { makeSessionRestore, seedDefaultsIfFresh } from './subscription-restore.
 import type { SubscriptionStore } from './subscription-store.ts'
 import { registerTools } from './tools.ts'
 
-// The reactive core (comms-k7cv): a resumed ephemeral seat reboots with an empty
-// narrow set, so the event pump matches nothing and silently drops inbound —
-// including a human's decision reaction on a subscribed thread. Restore is a
-// reaction to the session_id becoming known: the moment a feeder (acquire /
-// subscribe / unsubscribe) delivers the id, the reactive latch rehydrates the
-// persisted set. The passive `current_identity` read is deliberately NOT a feeder
-// here — it is a pure read; delivering the id from a zero-tool-call listen-only
-// seat is its own follow-up (comms-3qi2.2).
+// The reactive core: a resumed ephemeral seat reboots with an empty narrow set,
+// so the event pump matches nothing and silently drops inbound — including a
+// human's decision reaction on a subscribed thread. Restore is a reaction to the
+// session_id becoming known: the moment a feeder delivers the id, the reactive
+// latch rehydrates the persisted set. The feeders are subscribe/unsubscribe
+// (which restore-then-seed before mutating) and the passive `current_identity`
+// read (restore-only) — the latter closes the zero-tool-call listen-only seat,
+// whose wake-time hook calls `current_identity` and hands over the id without
+// the seat ever acting. `current_identity`'s *response* stays a pure binding
+// self-check; the feed is a side-effect only.
 
 const DECISIONS_CHANNEL = 'commy'
 const DECISIONS_THREAD = 'ref-types-split-decisions'
@@ -101,8 +103,10 @@ interface ResumeRig {
 // narrow set of a prior session — the exact state after an MCP-child reboot on
 // resume: in-memory narrow set empty, disk snapshot intact, same session_id.
 // `ensureSessionSubscriptions` mirrors server.ts: the reactive restore latch
-// (`makeSessionRestore`) plus the store-gated fresh-session seed. It is wired as
-// the tools' feeder — subscribe/unsubscribe call it; current_identity does not.
+// (`makeSessionRestore`) plus the store-gated fresh-session seed — subscribe/
+// unsubscribe call it. `feedSessionRestore` is the raw restore latch (no seed),
+// wired as current_identity's feeder so a listen-only seat restores without
+// seeding acquire-gated Type-2 defaults.
 const buildResumeRig = (
   persisted: ReadonlyArray<SubscribeIntent>,
 ): Effect.Effect<ResumeRig, never, Scope.Scope> =>
@@ -147,12 +151,16 @@ const buildResumeRig = (
         ),
       )
 
+    const feedSessionRestore = (sessionId: SessionId): Effect.Effect<void> =>
+      sessionRestoreFeed(sessionId).pipe(Effect.catchAll(() => Effect.void))
+
     const server = buildMcpServer()
     registerTools(server, {
       adapter: spiedAdapter,
       identityCache,
       narrowSet,
       ensureSessionSubscriptions,
+      feedSessionRestore,
     })
 
     const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair()
@@ -203,15 +211,17 @@ test('a feeder (subscribe) on resume rehydrates the persisted narrow set so a de
     ),
   ))
 
-test('passive current_identity on resume is a pure read — it does NOT rehydrate the persisted set', () =>
+test('current_identity on resume feeds the restore latch — rehydrating the persisted set while its response stays a pure read', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const rig = yield* buildResumeRig([decisionsThreadIntent, { kind: 'mentions' }])
 
-        // Rebooted: deaf. The passive "am I still bound?" check must not change that.
+        // Rebooted: deaf. The pump would drop the decisions-topic reaction.
         expect(rig.narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(false)
 
+        // The wake-time hook's current_identity call delivers the session_id —
+        // this is the feeder for the seat that never acts.
         const result = yield* Effect.promise(() =>
           rig.client.callTool({
             name: 'current_identity',
@@ -219,24 +229,29 @@ test('passive current_identity on resume is a pure read — it does NOT rehydrat
           }),
         )
 
-        // Passivity preserved: no identity acquired by the check.
+        // Response purity: the feed does not leak into what the read reports.
+        // The seat never acquired, so the binding self-check still reads unbound.
         expect(result.structuredContent).toEqual({ state: 'unbound', identity: null })
 
-        // Still deaf: current_identity is not a feeder, so it restored nothing.
-        // Rehydrating a zero-tool-call listen-only seat is comms-3qi2.2's job.
-        expect(rig.narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(false)
-        expect(rig.substrateSubscribes).toEqual([])
+        // ...but the reactive latch rehydrated the persisted set: the human's
+        // :one: reaction on the decisions thread now matches...
+        expect(rig.narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(true)
+        // ...and the restored thread was re-subscribed on the substrate.
+        expect(rig.substrateSubscribes).toContainEqual(intentToTarget(decisionsThreadIntent))
+        // Restore-only: a resume is not a fresh session, and current_identity
+        // never seeds acquire-gated Type-2 defaults even for a fresh one.
         expect(rig.seedCalls).toEqual([])
       }),
     ),
   ))
 
-// The fresh-session contract: a passive current_identity for a session_id the
-// store has never seen neither restores nor seeds — Type-2 defaults stay on the
-// acquire hook (server.integration.test.ts).
+// The fresh-session contract: current_identity for a session_id the store has
+// never seen neither restores nor seeds. The feed still fires, but the latch
+// finds no persisted set (restore is a no-op) and current_identity never seeds —
+// Type-2 defaults stay on the acquire hook (server.integration.test.ts).
 const SID_FRESH = 'f9e5f9e5-0000-4000-8000-000000000002'
 
-test('passive current_identity for a never-seen session restores and seeds nothing', () =>
+test('current_identity for a never-seen session restores and seeds nothing', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {

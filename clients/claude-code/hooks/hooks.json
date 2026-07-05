@@ -11,6 +11,21 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "commy",
+            "tool": "current_identity",
+            "input": {
+              "session_id": "${session_id}",
+              "cwd": "${cwd}"
+            }
+          }
+        ]
+      }
     ]
   }
 }

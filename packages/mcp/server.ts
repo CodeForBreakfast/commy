@@ -575,6 +575,7 @@ export const makeProgram = (
         projectForCwd,
         ensureSessionSubscriptions,
         persistSessionSubscriptions,
+        feedSessionRestore: feedSession,
         downloadFile: (urlPath) =>
           Effect.gen(function* () {
             const result = yield* adapter.downloadFile(urlPath)

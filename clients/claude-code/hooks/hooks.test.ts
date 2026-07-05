@@ -15,13 +15,26 @@ interface HookEntry {
   }>
 }
 
+interface McpToolHook {
+  readonly type: string
+  readonly server?: string
+  readonly tool?: string
+  readonly input?: Record<string, unknown>
+}
+
+interface UserPromptSubmitEntry {
+  readonly hooks: ReadonlyArray<McpToolHook>
+}
+
 interface HooksConfig {
   readonly hooks: {
     readonly PreToolUse?: ReadonlyArray<HookEntry>
+    readonly UserPromptSubmit?: ReadonlyArray<UserPromptSubmitEntry>
   }
 }
 
 const preToolUse = (hooks as HooksConfig).hooks.PreToolUse ?? []
+const userPromptSubmit = (hooks as HooksConfig).hooks.UserPromptSubmit ?? []
 
 test('PreToolUse hook is registered', () => {
   expect(preToolUse.length).toBe(1)
@@ -65,4 +78,42 @@ test('command invokes node on PATH against the hook entrypoint — no bun, no Ni
   expect(hook?.command).toBe('node')
   // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional — testing placeholder rejection
   expect(hook?.args).toEqual(['${CLAUDE_PLUGIN_ROOT}/hooks/inject-session-id.ts'])
+})
+
+// UserPromptSubmit feeds the session_id to the reactive restore latch at wake
+// time, with zero agent action — this is what restores a listen-only resumed
+// seat that never posts/reacts/reads. It fires an mcp_tool hook calling
+// current_identity (a passive read that doubles as the latch feeder), templating
+// the id straight from the hook's stdin so nothing depends on the model.
+
+test('UserPromptSubmit hook is registered', () => {
+  expect(userPromptSubmit.length).toBe(1)
+})
+
+test('UserPromptSubmit fires an mcp_tool hook', () => {
+  const hook = userPromptSubmit[0]?.hooks[0]
+  expect(hook?.type).toBe('mcp_tool')
+})
+
+test('the mcp_tool hook targets the commy server by its configured name (not the tool-name namespace)', () => {
+  // The mcp_tool `server` field is the raw server name from .mcp.json — `commy`.
+  // The doubled `plugin_commy_commy` prefix is the tool-NAME namespace (used by
+  // the PreToolUse matcher), not the server identifier for an mcp_tool hook.
+  const hook = userPromptSubmit[0]?.hooks[0]
+  expect(hook?.server).toBe('commy')
+})
+
+test('the mcp_tool hook calls current_identity — the passive feeder', () => {
+  const hook = userPromptSubmit[0]?.hooks[0]
+  expect(hook?.tool).toBe('current_identity')
+})
+
+test('the mcp_tool hook templates session_id and cwd from the hook stdin', () => {
+  const hook = userPromptSubmit[0]?.hooks[0]
+  expect(hook?.input).toEqual({
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional — CC ${path} interpolation from hook stdin
+    session_id: '${session_id}',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional — CC ${path} interpolation from hook stdin
+    cwd: '${cwd}',
+  })
 })
