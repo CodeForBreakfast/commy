@@ -4,8 +4,8 @@ import { type MemoryAdapter, memoryAdapter } from '@commy/memory/adapter'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { Effect, Option, type Scope } from 'effect'
-import type { ProjectSlug } from './bootstrap.ts'
-import { sanitiseProjectSlug } from './bootstrap.ts'
+import type { ProjectSlug, SessionId } from './bootstrap.ts'
+import { parseSessionId, sanitiseProjectSlug } from './bootstrap.ts'
 import { createEphemeralIdentityCache } from './identity-cache.ts'
 import { buildMcpServer } from './mcp-server.ts'
 import { createNarrowSet } from './narrow-set.ts'
@@ -26,6 +26,7 @@ const buildSessionRig = (
   options: {
     readonly idleReleaseMs?: number
     readonly projectForCwd?: (cwd: string | undefined) => Effect.Effect<ProjectSlug | undefined>
+    readonly feedSessionId?: (sessionId: SessionId) => Effect.Effect<void>
   } = {},
 ): Effect.Effect<SessionRig, never, Scope.Scope> =>
   Effect.gen(function* () {
@@ -43,6 +44,7 @@ const buildSessionRig = (
       identityCache,
       narrowSet,
       ...(options.projectForCwd !== undefined ? { projectForCwd: options.projectForCwd } : {}),
+      ...(options.feedSessionId !== undefined ? { feedSessionId: options.feedSessionId } : {}),
     })
     toolsCache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
 
@@ -167,6 +169,78 @@ test('current_identity with a non-UUID session_id returns unbound', () =>
         expect(result.structuredContent).toEqual({ state: 'unbound', identity: null })
         const exit = yield* Effect.exit(rig.adapter.identity.currentIdentity())
         expect(exit._tag).toBe('Failure')
+      }),
+    ),
+  ))
+
+// The obtaining side (comms-k7cv.4): every PreToolUse-stamped tool hands its
+// session_id to the shared SessionId deferred via the `feedSessionId` dep.
+// current_identity is the load-bearing case — a passive read that feeds
+// WITHOUT acquiring, so a listen-only-ish seat that only calls current_identity
+// still delivers its id. The feed is guarded on the same UUID brand as
+// minting, so a malformed id never reaches the deferred.
+test('current_identity feeds a valid session_id to the deferred without acquiring', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fed: SessionId[] = []
+        const rig = yield* buildSessionRig({
+          feedSessionId: (sid) =>
+            Effect.sync(() => {
+              fed.push(sid)
+            }),
+        })
+        yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'current_identity', arguments: { session_id: SID_A } }),
+        )
+        expect(fed).toEqual([Option.getOrThrow(parseSessionId(SID_A))])
+        // Passive: the feed must not have triggered an acquire.
+        const exit = yield* Effect.exit(rig.adapter.identity.currentIdentity())
+        expect(exit._tag).toBe('Failure')
+      }),
+    ),
+  ))
+
+test('post feeds its session_id to the deferred', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fed: SessionId[] = []
+        const rig = yield* buildSessionRig({
+          feedSessionId: (sid) =>
+            Effect.sync(() => {
+              fed.push(sid)
+            }),
+        })
+        yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: { channel_name: 'home', body: 'attribution', session_id: SID_B },
+          }),
+        )
+        expect(fed).toEqual([Option.getOrThrow(parseSessionId(SID_B))])
+      }),
+    ),
+  ))
+
+test('a non-UUID session_id is not fed to the deferred', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fed: SessionId[] = []
+        const rig = yield* buildSessionRig({
+          feedSessionId: (sid) =>
+            Effect.sync(() => {
+              fed.push(sid)
+            }),
+        })
+        yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'current_identity',
+            arguments: { session_id: 'myproject-iphone-vpn-debug' },
+          }),
+        )
+        expect(fed).toEqual([])
       }),
     ),
   ))

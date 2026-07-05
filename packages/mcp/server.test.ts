@@ -49,6 +49,7 @@ import type { IdentityCache } from './identity-cache.ts'
 // directly.
 import { completeAsSubstrate, type ZulipAdapter } from './memory-substrate.ts'
 import { clientDisconnect, forkIdleSweep, makeProgram, type ProgramParams } from './server.ts'
+import { SessionIdLive } from './session-id.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 import type { SubscriptionStore } from './subscription-store.ts'
 import { SubscriptionStoreTag } from './subscription-store.ts'
@@ -107,6 +108,7 @@ const runProgram = (
             substrateAdapterLayer(parseEnv.pipe(Effect.as(adapter))),
             Layer.succeed(CursorStoreTag, inMemoryCursorStore()),
             Layer.succeed(SubscriptionStoreTag, inMemorySubscriptionStore()),
+            SessionIdLive,
             loggerLayer,
           ),
           testPlatformLayer(env),

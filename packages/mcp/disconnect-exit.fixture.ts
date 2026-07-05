@@ -26,6 +26,7 @@ import { substrateAdapterLayer } from './bootstrap.ts'
 import { CursorStoreTag } from './cursor-store.ts'
 import { completeAsSubstrate } from './memory-substrate.ts'
 import { clientDisconnect, makeProgram } from './server.ts'
+import { SessionIdLive } from './session-id.ts'
 import { SubscriptionStoreTag } from './subscription-store.ts'
 
 const inMemoryCursorStore = {
@@ -77,6 +78,7 @@ NodeRuntime.runMain(
           substrateAdapterLayer(substrate),
           Layer.succeed(CursorStoreTag, inMemoryCursorStore),
           Layer.succeed(SubscriptionStoreTag, inMemorySubscriptionStore),
+          SessionIdLive,
           stderrLoggerLayer,
         ),
         Layer.mergeAll(
