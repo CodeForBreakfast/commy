@@ -779,6 +779,12 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             const { target: raw } = yield* Schema.decodeUnknown(SubscribeArgs)(args)
             const intent = yield* parseSubscribeTarget(raw)
             const sessionId = readSessionId(args)
+            // Feed the shared session-id deferred first: subscribe is a feeder,
+            // and the session-bound store's restore/persist below await this
+            // deferred to resolve their id-keyed path. Without this a
+            // subscribe-first resumed seat (no boot-env id) would park on the
+            // await — the deaf-resume case this reactive core exists to close.
+            yield* feedSession(sessionId)
             // Restore (or seed) this session's set before the first mutation, so
             // the snapshot persisted below captures the full live set and the
             // store's presence stays a true resume signal.
@@ -822,6 +828,9 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             const { target: raw } = yield* Schema.decodeUnknown(SubscribeArgs)(args)
             const intent = yield* parseSubscribeTarget(raw)
             const sessionId = readSessionId(args)
+            // Feed the shared session-id deferred first (see subscribe): the
+            // session-bound store's restore/persist below await it.
+            yield* feedSession(sessionId)
             if (sessionId !== undefined && deps.ensureSessionSubscriptions !== undefined) {
               yield* deps.ensureSessionSubscriptions(sessionId, yield* projectForArgs(args))
             }

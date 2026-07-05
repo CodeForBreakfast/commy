@@ -3,8 +3,8 @@ import { join } from 'node:path'
 import { ChannelNameSchema, ThreadNameSchema } from '@commy/core/ports'
 import { FileSystem } from '@effect/platform'
 import type { PlatformError } from '@effect/platform/Error'
-import { Config, Context, Effect, Layer, Option, type ParseResult, Schema } from 'effect'
-import type { SessionId } from './bootstrap.ts'
+import { Config, Context, Deferred, Effect, Layer, Option, type ParseResult, Schema } from 'effect'
+import { SessionId, type SessionIdValue } from './session-id.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 
 /**
@@ -35,16 +35,11 @@ import type { SubscribeIntent } from './subscribe-parser.ts'
  * so a smaller set (after an unsubscribe) correctly replaces a larger one.
  */
 export interface SubscriptionStore {
-  read(
-    sessionId: SessionId,
-  ): Effect.Effect<
+  read(): Effect.Effect<
     Option.Option<ReadonlyArray<SubscribeIntent>>,
     PlatformError | ParseResult.ParseError
   >
-  write(
-    sessionId: SessionId,
-    intents: ReadonlyArray<SubscribeIntent>,
-  ): Effect.Effect<void, PlatformError>
+  write(intents: ReadonlyArray<SubscribeIntent>): Effect.Effect<void, PlatformError>
 }
 
 /**
@@ -66,6 +61,15 @@ export interface FileSubscriptionStoreDeps {
    * reads it from context (`NodeContext.layer`, provided once in the app layer).
    */
   readonly fs: FileSystem.FileSystem
+  /**
+   * The one shared session-id deferred, captured at layer build (cheap and
+   * non-blocking — capturing the deferred does not await it). Every read/write
+   * awaits it lazily inside the method to resolve the id-keyed path, so the id
+   * is never threaded through a call site. Awaiting here rather than at build is
+   * load-bearing: a build-time await would block the whole layer build until a
+   * feeder delivers the id.
+   */
+  readonly session: Deferred.Deferred<SessionIdValue>
 }
 
 /**
@@ -95,7 +99,7 @@ const FILENAME_SAFE = /[^a-zA-Z0-9._-]/g
  * defence-in-depth: non-`[a-zA-Z0-9._-]` characters collapse to `_`, so the
  * resulting path is always a direct child of the configured directory.
  */
-const subscriptionFilename = (id: SessionId): string => {
+const subscriptionFilename = (id: SessionIdValue): string => {
   const safe = (id as string).replace(FILENAME_SAFE, '_')
   return `${safe}.json`
 }
@@ -122,15 +126,18 @@ const readSubscriptions = (
   )
 
 export const createFileSubscriptionStore = (deps: FileSubscriptionStoreDeps): SubscriptionStore => {
-  const { dir, fs } = deps
-  const pathFor = (id: SessionId): string => join(dir, subscriptionFilename(id))
+  const { dir, fs, session } = deps
+  const pathFor = (id: SessionIdValue): string => join(dir, subscriptionFilename(id))
 
-  const read: SubscriptionStore['read'] = (id) => readSubscriptions(fs, pathFor(id))
+  const read: SubscriptionStore['read'] = () =>
+    Effect.flatMap(Deferred.await(session), (id) => readSubscriptions(fs, pathFor(id)))
 
-  const write: SubscriptionStore['write'] = (id, intents) =>
-    fs
-      .makeDirectory(dir, { recursive: true })
-      .pipe(Effect.zipRight(fs.writeFileString(pathFor(id), JSON.stringify(intents))))
+  const write: SubscriptionStore['write'] = (intents) =>
+    Effect.flatMap(Deferred.await(session), (id) =>
+      fs
+        .makeDirectory(dir, { recursive: true })
+        .pipe(Effect.zipRight(fs.writeFileString(pathFor(id), JSON.stringify(intents)))),
+    )
 
   return { read, write }
 }
@@ -168,10 +175,10 @@ export const subscriptionDirConfig: Config.Config<string> = stateBaseConfig.pipe
 export const FileSubscriptionStoreLive: Layer.Layer<
   SubscriptionStoreTag,
   never,
-  FileSystem.FileSystem
+  FileSystem.FileSystem | SessionId
 > = Layer.effect(
   SubscriptionStoreTag,
-  Effect.all([FileSystem.FileSystem, Effect.orDie(subscriptionDirConfig)]).pipe(
-    Effect.map(([fs, dir]) => createFileSubscriptionStore({ dir, fs })),
+  Effect.all([FileSystem.FileSystem, Effect.orDie(subscriptionDirConfig), SessionId]).pipe(
+    Effect.map(([fs, dir, session]) => createFileSubscriptionStore({ dir, fs, session })),
   ),
 )

@@ -194,8 +194,10 @@ const buildHarness = (
           Layer.mergeAll(
             substrateAdapterLayer(parseEnv.pipe(Effect.as(wrappedAdapter))),
             FileCursorStoreLive,
-            FileSubscriptionStoreLive,
-            SessionIdLive,
+            // Feed the one shared session-id deferred into the store, which now
+            // awaits it — mergeAll won't wire a sibling's output to a sibling's
+            // input, so a plain merge leaves the store's SessionId unsatisfied.
+            Layer.provideMerge(FileSubscriptionStoreLive, SessionIdLive),
             stderrLoggerLayer,
           ),
           testPlatformLayer(mainEnv),

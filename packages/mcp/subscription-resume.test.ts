@@ -15,7 +15,7 @@ import {
 import { type MemoryAdapter, memoryAdapter } from '@commy/memory/adapter'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { Effect, Option, type Scope } from 'effect'
+import { Deferred, Effect, Option, type Scope } from 'effect'
 import type { ProjectSlug, SessionId } from './bootstrap.ts'
 import { createEphemeralIdentityCache } from './identity-cache.ts'
 import { buildMcpServer } from './mcp-server.ts'
@@ -44,16 +44,28 @@ const decisionsThreadIntent: SubscribeIntent = {
   threadName: decodeThreadNameSync(DECISIONS_THREAD),
 }
 
+// The session-bound in-memory store: it resolves its id from the shared
+// session-id deferred it captures — never a per-call argument — mirroring the
+// live file store. The Map keying survives so multi-session seeds still work.
 const inMemorySubscriptionStore = (
+  session: Deferred.Deferred<SessionId>,
   seed: ReadonlyMap<string, ReadonlyArray<SubscribeIntent>> = new Map(),
 ): SubscriptionStore => {
   const store = new Map<string, ReadonlyArray<SubscribeIntent>>(seed)
   return {
-    read: (id: SessionId) => Effect.sync(() => Option.fromNullable(store.get(id as string))),
-    write: (id: SessionId, intents: ReadonlyArray<SubscribeIntent>) =>
-      Effect.sync(() => void store.set(id as string, intents)),
+    read: () =>
+      Effect.map(Deferred.await(session), (id) => Option.fromNullable(store.get(id as string))),
+    write: (intents: ReadonlyArray<SubscribeIntent>) =>
+      Effect.flatMap(Deferred.await(session), (id) =>
+        Effect.sync(() => void store.set(id as string, intents)),
+      ),
   }
 }
+
+// A session-id deferred already completed with `id`, for the standalone core
+// tests that drive the restore latch directly (no tool handler feeds it).
+const filledSessionDeferred = (id: SessionId): Effect.Effect<Deferred.Deferred<SessionId>> =>
+  Effect.tap(Deferred.make<SessionId>(), (d) => Deferred.succeed(d, id))
 
 const reactionOnDecisionsThread = (): InboundEvent => {
   const channel = {
@@ -125,7 +137,16 @@ const buildResumeRig = (
       idleReleaseMs: 60 * 60 * 1000,
     })
     const narrowSet = createNarrowSet()
-    const subscriptionStore = inMemorySubscriptionStore(new Map([[SID_RESUME, persisted]]))
+    // The one shared session-id deferred, filled by the tools' `feedSessionId`
+    // when a session-carrying tool call (subscribe / current_identity) arrives —
+    // exactly as the live boot wiring does. The session-bound store awaits it.
+    const sessionDeferred = yield* Deferred.make<SessionId>()
+    const subscriptionStore = inMemorySubscriptionStore(
+      sessionDeferred,
+      new Map([[SID_RESUME, persisted]]),
+    )
+    const feedSessionId = (id: SessionId): Effect.Effect<void> =>
+      Deferred.succeed(sessionDeferred, id).pipe(Effect.asVoid)
 
     const seedCalls: (ProjectSlug | undefined)[] = []
     const sessionRestoreFeed = yield* makeSessionRestore({ subscriptionStore, narrowSet, inbox })
@@ -141,7 +162,6 @@ const buildResumeRig = (
               subscriptionStore,
               registerDefaults: (p) => Effect.sync(() => void seedCalls.push(p)),
             },
-            sessionId,
             project,
           ).pipe(Effect.catchAll(() => Effect.void)),
         ),
@@ -153,6 +173,7 @@ const buildResumeRig = (
       identityCache,
       narrowSet,
       ensureSessionSubscriptions,
+      feedSessionId,
     })
 
     const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair()
@@ -276,7 +297,9 @@ test('makeSessionRestore restores a resumed narrow set on the first session_id d
             substrateSubscribes.push(target)
           }),
       }
+      const session = yield* filledSessionDeferred(asSessionId(SID_RESUME))
       const subscriptionStore = inMemorySubscriptionStore(
+        session,
         new Map([[SID_RESUME, [decisionsThreadIntent, { kind: 'mentions' }]]]),
       )
 
@@ -311,7 +334,9 @@ test('makeSessionRestore restores nothing for a never-seen session (no fresh-ses
             substrateSubscribes.push(target)
           }),
       }
+      const session = yield* filledSessionDeferred(asSessionId(SID_FRESH))
       const subscriptionStore = inMemorySubscriptionStore(
+        session,
         new Map([[SID_RESUME, [decisionsThreadIntent]]]),
       )
 

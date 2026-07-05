@@ -1,15 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { decodeChannelNameSync } from '@commy/core/ports'
 import { Effect, Option } from 'effect'
-import type { ProjectSlug, SessionId } from './bootstrap.ts'
-import { parseSessionId } from './bootstrap.ts'
+import type { ProjectSlug } from './bootstrap.ts'
 import { createNarrowSet } from './narrow-set.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 import { persistSubscriptions, seedDefaultsIfFresh } from './subscription-restore.ts'
 import type { SubscriptionStore } from './subscription-store.ts'
-
-const SID = '11111111-1111-4111-8111-111111111111'
-const sid = (raw: string): SessionId => Option.getOrThrow(parseSessionId(raw))
 
 const mentions: SubscribeIntent = { kind: 'mentions' }
 const channel = (name: string): SubscribeIntent => ({
@@ -42,7 +38,6 @@ describe('seedDefaultsIfFresh', () => {
               defaultsCall = { project }
             }),
         },
-        sid(SID),
         undefined,
       ),
     )
@@ -62,7 +57,6 @@ describe('seedDefaultsIfFresh', () => {
               defaultsCalled = true
             }),
         },
-        sid(SID),
         undefined,
       ),
     )
@@ -80,7 +74,6 @@ describe('seedDefaultsIfFresh', () => {
               defaultsCalled = true
             }),
         },
-        sid(SID),
         undefined,
       ),
     )
@@ -89,19 +82,16 @@ describe('seedDefaultsIfFresh', () => {
 })
 
 describe('persistSubscriptions', () => {
-  test('writes the current narrow-set snapshot under the session id', async () => {
+  test('writes the current narrow-set snapshot to the session-bound store', async () => {
     const narrowSet = createNarrowSet()
     narrowSet.add(mentions)
     narrowSet.add(channel('commy'))
-    const written: { sid: SessionId; intents: ReadonlyArray<SubscribeIntent> }[] = []
+    const written: ReadonlyArray<SubscribeIntent>[] = []
     const store: Pick<SubscriptionStore, 'write'> = {
-      write: (s, intents) => Effect.sync(() => void written.push({ sid: s, intents })),
+      write: (intents) => Effect.sync(() => void written.push(intents)),
     }
-    await Effect.runPromise(persistSubscriptions(store, narrowSet, sid(SID)))
+    await Effect.runPromise(persistSubscriptions(store, narrowSet))
     expect(written.length).toBe(1)
-    expect(written[0]?.sid).toBe(sid(SID))
-    expect(sortIntents(written[0]?.intents ?? [])).toEqual(
-      sortIntents([mentions, channel('commy')]),
-    )
+    expect(sortIntents(written[0] ?? [])).toEqual(sortIntents([mentions, channel('commy')]))
   })
 })

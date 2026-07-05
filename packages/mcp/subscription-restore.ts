@@ -59,10 +59,9 @@ const applyRestored = (
  */
 export const seedDefaultsIfFresh = (
   deps: Pick<SubscriptionRestoreDeps, 'subscriptionStore' | 'registerDefaults'>,
-  sessionId: SessionId,
   project: ProjectSlug | undefined,
 ): Effect.Effect<void, PlatformError | ParseResult.ParseError> =>
-  deps.subscriptionStore.read(sessionId).pipe(
+  deps.subscriptionStore.read().pipe(
     Effect.flatMap(
       Option.match({
         onNone: () => deps.registerDefaults(project),
@@ -83,9 +82,8 @@ export const seedDefaultsIfFresh = (
  */
 const restoreSubscriptions = (
   deps: Pick<SubscriptionRestoreDeps, 'subscriptionStore' | 'narrowSet' | 'inbox'>,
-  sessionId: SessionId,
 ): Effect.Effect<void, PlatformError | ParseResult.ParseError | InboxError> =>
-  deps.subscriptionStore.read(sessionId).pipe(
+  deps.subscriptionStore.read().pipe(
     Effect.flatMap(
       Option.match({
         onNone: () => Effect.void,
@@ -127,7 +125,7 @@ export const makeSessionRestore = (
         sessionId: SessionId,
       ): Effect.Effect<void, PlatformError | ParseResult.ParseError | InboxError> =>
         Deferred.succeed(known, sessionId).pipe(
-          Effect.flatMap((won) => (won ? restoreSubscriptions(deps, sessionId) : Effect.void)),
+          Effect.flatMap((won) => (won ? restoreSubscriptions(deps) : Effect.void)),
         ),
   )
 
@@ -139,5 +137,4 @@ export const makeSessionRestore = (
 export const persistSubscriptions = (
   store: Pick<SubscriptionStore, 'write'>,
   narrowSet: NarrowSet,
-  sessionId: SessionId,
-): Effect.Effect<void, PlatformError> => store.write(sessionId, narrowSet.intents())
+): Effect.Effect<void, PlatformError> => store.write(narrowSet.intents())
