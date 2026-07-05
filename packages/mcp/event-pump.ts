@@ -21,6 +21,7 @@ import {
 } from 'effect'
 import type { ChannelEventPayload } from './events.ts'
 import { formatError, formatMessage, formatReaction, IDENTITY_ID_META_KEYS } from './events.ts'
+import { type DeliveryTarget, deliveryTargetOf } from './target-cursor.ts'
 
 /**
  * Sink for one rendered channel-event payload. Production callers use
@@ -85,6 +86,22 @@ export interface EventPumpDeps {
    * own failures rather than failing the pump.
    */
   readonly onMention?: (ts: Timestamp) => Effect.Effect<void>
+  /**
+   * Optional sink invoked with the target + timestamp of EVERY delivered
+   * message-shaped event (`message-posted` and `mention-received`) — the
+   * write half of precise resume replay. Unlike {@link onMention} (mention
+   * only, per-identity watermark) this fires for plain channel/thread messages
+   * too, so the per-(session, target) cursor tracks how far each subscription
+   * has been seen. Production wires this to the session-bound store's
+   * `advanceCursor`. Invoked after the narrow filter and self-echo guard —
+   * mirrors the events the consumer sees — and, like `onMention`, sequenced
+   * whether the delivery is fresh or a dedup duplicate.
+   *
+   * Returns an `Effect<void>` the pump sequences inside its dispatch loop; its
+   * error channel is `void` because the advance is best-effort and monotonic,
+   * so the provider swallows its own failures rather than failing the pump.
+   */
+  readonly onDelivery?: (target: DeliveryTarget, ts: Timestamp) => Effect.Effect<void>
 }
 
 export interface EventPumpHandle {
@@ -275,9 +292,21 @@ export const startEventPump = (deps: EventPumpDeps): Effect.Effect<EventPumpHand
             ? deps.onMention(event.message.ts)
             : Effect.void
 
-        if (recordMessageDelivery(event, seenDelivered) === 'duplicate') return mentionAdvance
+        // Advance the per-(session, target) cursor for every delivered
+        // message, message-posted included — the write half of precise replay.
+        // Not gated on mention-received (unlike mentionAdvance), so a plain
+        // channel/thread message moves its subscription's cursor forward.
+        const deliveryAdvance =
+          deps.onDelivery !== undefined &&
+          (event.kind === 'message-posted' || event.kind === 'mention-received')
+            ? deps.onDelivery(deliveryTargetOf(event.message), event.message.ts)
+            : Effect.void
 
-        return mentionAdvance.pipe(
+        const advance = Effect.zipRight(mentionAdvance, deliveryAdvance)
+
+        if (recordMessageDelivery(event, seenDelivered) === 'duplicate') return advance
+
+        return advance.pipe(
           Effect.zipRight(renderEvent(event, botIdentityId)),
           Effect.flatMap((payload) =>
             Effect.tryPromise({

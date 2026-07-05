@@ -32,7 +32,7 @@ const boundStore = (dir: string, id: SessionId): SubscriptionStore =>
     Effect.gen(function* () {
       const session = yield* Deferred.make<SessionId>()
       yield* Deferred.succeed(session, id)
-      return createFileSubscriptionStore({ dir, fs, session })
+      return createFileSubscriptionStore({ dir, fs, cursorDir: join(dir, 'cursors'), session })
     }),
   )
 
@@ -173,7 +173,12 @@ describe('createFileSubscriptionStore', () => {
       // If the method resolved the id at build it would already have failed;
       // instead it parks on the await and completes only once the id arrives.
       const session = Effect.runSync(Deferred.make<SessionId>())
-      const store = createFileSubscriptionStore({ dir: tmp.path, fs, session })
+      const store = createFileSubscriptionStore({
+        dir: tmp.path,
+        fs,
+        cursorDir: join(tmp.path, 'cursors'),
+        session,
+      })
       writeFileSync(join(tmp.path, `${SID_A}.json`), JSON.stringify([{ kind: 'mentions' }]))
       const pending = Effect.runPromise(store.read())
       Effect.runSync(Deferred.succeed(session, sid(SID_A)))
