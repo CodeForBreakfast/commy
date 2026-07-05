@@ -696,6 +696,17 @@ export const makeProgram = (
           if (id === undefined) return Effect.void
           return cursorStore.write(id, ts).pipe(Effect.catchAllCause(() => Effect.void))
         },
+        // Advance the per-(session, target) cursor on every delivered message —
+        // the write half of precise resume replay. Ephemeral-only: persistent
+        // seats don't resume-replay, so the write is wasted there. Failures are
+        // swallowed (best-effort, monotonic); the store's non-blocking `poll`
+        // is the hot-path safety net regardless.
+        onDelivery: (target, ts) => {
+          if (parsed.botName !== undefined) return Effect.void
+          return subscriptionStore
+            .advanceCursor(target, ts)
+            .pipe(Effect.catchAllCause(() => Effect.void))
+        },
       })
       // The pump is a daemon (forkDaemon) — not scope-tied — so an explicit
       // finalizer interrupts it on scope unwind (signal interrupt under

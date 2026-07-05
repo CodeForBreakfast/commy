@@ -86,6 +86,7 @@ const inMemorySubscriptionStore = (): SubscriptionStore => {
       Effect.sync(() => {
         slot.value = Option.some(intents)
       }),
+    advanceCursor: () => Effect.void,
   }
 }
 

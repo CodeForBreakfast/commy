@@ -88,6 +88,7 @@ const inMemorySubscriptionStore = (
       Effect.flatMap(Deferred.await(session), (id) =>
         Effect.sync(() => void store.set(id as string, intents)),
       ),
+    advanceCursor: () => Effect.void,
   }
 }
 
