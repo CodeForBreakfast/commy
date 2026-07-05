@@ -20,12 +20,12 @@ const stubStore = (read: SubscriptionStore['read']): SubscriptionStore => ({
   write: () => Effect.void,
 })
 
-// The seed half of the old restore-or-seed, split out for the reactive core
-// (comms-k7cv): restore now reacts to the session_id via the `Deferred` latch in
-// `makeSessionRestore`, leaving seeding as its own store-gated, restore-free step.
-// The `Pick` deps carry no `narrowSet`/`inbox`, so seeding structurally CANNOT
-// restore — it only registers the acquire-gated Type-2 defaults, and only for a
-// fresh session (store absent).
+// The seed half of the old restore-or-seed, split out for the reactive core:
+// restore now reacts to the session_id via a boot-forked `restoreSubscriptions`
+// off the session-bound store, leaving seeding as its own store-gated,
+// restore-free step. The `Pick` deps carry no `narrowSet`/`inbox`, so seeding
+// structurally CANNOT restore — it only registers the acquire-gated Type-2
+// defaults, and only for a fresh session (store absent).
 describe('seedDefaultsIfFresh', () => {
   test('store absent → registers defaults for a fresh session', async () => {
     let defaultsCall: { readonly project: ProjectSlug | undefined } | undefined

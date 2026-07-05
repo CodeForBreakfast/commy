@@ -356,28 +356,86 @@ test('intents() does not leak the seen-topics ledger after a new-topics match', 
   expect(set.intents()).toEqual([newTopicsIntent('home')])
 })
 
-test('replace() sets the intents on an empty set', () => {
+test('load(Some) sets the base on an empty set', () => {
   const set = createNarrowSet()
-  set.replace([channelIntent('home'), mentionsIntent()])
+  set.load(Option.some([channelIntent('home'), mentionsIntent()]))
   expect(sortIntents(set.intents())).toEqual(sortIntents([channelIntent('home'), mentionsIntent()]))
   expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(true)
 })
 
-test('replace() clears the prior intents — the old set no longer matches', () => {
+test('load(Some) replaces the prior base — the old set no longer matches', () => {
   const set = createNarrowSet()
   set.add(channelIntent('home'))
-  set.replace([channelIntent('work')])
+  set.load(Option.some([channelIntent('work')]))
   expect(set.intents()).toEqual([channelIntent('work')])
   expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(false)
   expect(set.matches(buildMessagePosted('work', undefined), noBot)).toBe(true)
 })
 
-test('replace() with an empty array drops every narrow — matches nothing', () => {
+test('load(Some([])) drops every narrow — matches nothing', () => {
   const set = createNarrowSet()
   set.add(channelIntent('home'))
   set.add(mentionsIntent())
-  set.replace([])
+  set.load(Option.some([]))
   expect(set.intents()).toEqual([])
   expect(set.size()).toBe(0)
   expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(false)
+})
+
+test('load(None) keeps the current base — the fresh-session fallback', () => {
+  const set = createNarrowSet()
+  set.add(channelIntent('home'))
+  set.load(Option.none())
+  expect(set.intents()).toEqual([channelIntent('home')])
+  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(true)
+})
+
+test('a buffered subscribe replays onto the loaded base', () => {
+  const set = createNarrowSet()
+  set.beginBuffering()
+  set.add(channelIntent('work'))
+  // Restore installs the persisted base after the subscribe already happened.
+  set.load(Option.some([channelIntent('home')]))
+  expect(sortIntents(set.intents())).toEqual(
+    sortIntents([channelIntent('home'), channelIntent('work')]),
+  )
+})
+
+test('a buffered unsubscribe of a base member is applied after the base loads', () => {
+  const set = createNarrowSet()
+  set.beginBuffering()
+  // The seat unsubscribes a sub the persisted set still holds, before restore ran.
+  set.remove(channelIntent('home'))
+  set.load(Option.some([channelIntent('home'), mentionsIntent()]))
+  expect(set.intents()).toEqual([mentionsIntent()])
+  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(false)
+})
+
+test('an env seed applied before buffering is not resurrected by load(Some) — dropped stays dropped', () => {
+  const set = createNarrowSet()
+  // COMMY_SUBSCRIBE base seeded at boot, before the buffering window opens.
+  set.add(channelIntent('home'))
+  set.beginBuffering()
+  // Persisted set unsubscribed the env default; nothing re-adds it.
+  set.load(Option.some([]))
+  expect(set.intents()).toEqual([])
+  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(false)
+})
+
+test('load(None) keeps the env seed and applies buffered deltas', () => {
+  const set = createNarrowSet()
+  set.add(channelIntent('home'))
+  set.beginBuffering()
+  set.add(channelIntent('work'))
+  set.load(Option.none())
+  expect(sortIntents(set.intents())).toEqual(
+    sortIntents([channelIntent('home'), channelIntent('work')]),
+  )
+})
+
+test('a delta applies live during buffering — matches is not blacked out before load', () => {
+  const set = createNarrowSet()
+  set.beginBuffering()
+  set.add(channelIntent('home'))
+  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(true)
 })

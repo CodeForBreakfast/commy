@@ -12,37 +12,66 @@ import {
   MessagePermalinkSchema,
   ThreadPermalinkSchema,
 } from '@commy/core/ports'
-import { type MemoryAdapter, memoryAdapter } from '@commy/memory/adapter'
+import { memoryAdapter } from '@commy/memory/adapter'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { Deferred, Effect, Option, type Scope } from 'effect'
-import type { ProjectSlug, SessionId } from './bootstrap.ts'
+import { Deferred, Effect, Fiber, Option, type Scope } from 'effect'
+import type { SessionId } from './bootstrap.ts'
 import { createEphemeralIdentityCache } from './identity-cache.ts'
 import { buildMcpServer } from './mcp-server.ts'
-import { createNarrowSet, type NarrowSet } from './narrow-set.ts'
+import { createNarrowSet } from './narrow-set.ts'
 import { intentToTarget, type SubscribeIntent } from './subscribe-parser.ts'
-import { makeSessionRestore, seedDefaultsIfFresh } from './subscription-restore.ts'
+import { restoreSubscriptions } from './subscription-restore.ts'
 import type { SubscriptionStore } from './subscription-store.ts'
 import { registerTools } from './tools.ts'
 
-// The reactive core (comms-k7cv): a resumed ephemeral seat reboots with an empty
-// narrow set, so the event pump matches nothing and silently drops inbound —
-// including a human's decision reaction on a subscribed thread. Restore is a
-// reaction to the session_id becoming known: the moment a feeder (acquire /
-// subscribe / unsubscribe) delivers the id, the reactive latch rehydrates the
-// persisted set. The passive `current_identity` read is deliberately NOT a feeder
-// here — it is a pure read; delivering the id from a zero-tool-call listen-only
-// seat is its own follow-up (comms-3qi2.2).
+// The reactive core: a resumed ephemeral seat reboots with an empty narrow set,
+// so the event pump matches nothing and silently drops inbound — including a
+// human's decision reaction on a subscribed thread. Restore is a reaction to the
+// session_id becoming known: `restoreSubscriptions` is forked once at boot and
+// parks on the session-bound store's internal `Deferred.await` until any source
+// fills the shared session-id — the boot-env feeder for a listen-only seat, or a
+// stamped tool call carrying the id. No session_id threads through its signature;
+// filling the shared deferred is the whole trigger.
+//
+// Because restore loads asynchronously, subscribe/unsubscribe deltas can arrive
+// before it completes. The narrow set journals those deltas while buffering and
+// replays them onto the restored base, so none is lost and a dropped default is
+// not resurrected. These tests drive that model deterministically: fork restore,
+// fill the shared deferred with `Deferred.succeed` alone, `Fiber.join`, assert.
 
 const DECISIONS_CHANNEL = 'commy'
 const DECISIONS_THREAD = 'ref-types-split-decisions'
 const SID_RESUME = '61b08d76-0000-4000-8000-000000000001'
+const SID_FRESH = 'f9e5f9e5-0000-4000-8000-000000000002'
 
 const decisionsThreadIntent: SubscribeIntent = {
   kind: 'thread',
   channelName: decodeChannelNameSync(DECISIONS_CHANNEL),
   threadName: decodeThreadNameSync(DECISIONS_THREAD),
 }
+const mentionsIntent: SubscribeIntent = { kind: 'mentions' }
+const channelIntent = (name: string): SubscribeIntent => ({
+  kind: 'channel',
+  channelName: decodeChannelNameSync(name),
+})
+const sortIntents = (intents: ReadonlyArray<SubscribeIntent>): ReadonlyArray<SubscribeIntent> =>
+  [...intents].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+
+// A substrate-subscribe spy: restore wires each restored intent on the substrate
+// via `inbox.subscribe`, mirroring the real adapter's side effect.
+const spyInbox = (): {
+  readonly inbox: { subscribe: (target: SubscriptionTarget) => Effect.Effect<void> }
+  readonly subscribes: ReadonlyArray<SubscriptionTarget>
+} => {
+  const subscribes: SubscriptionTarget[] = []
+  return {
+    subscribes,
+    inbox: { subscribe: (target) => Effect.sync(() => void subscribes.push(target)) },
+  }
+}
+
+const asSessionId = (raw: string): SessionId => raw as unknown as SessionId
 
 // The session-bound in-memory store: it resolves its id from the shared
 // session-id deferred it captures — never a per-call argument — mirroring the
@@ -61,11 +90,6 @@ const inMemorySubscriptionStore = (
       ),
   }
 }
-
-// A session-id deferred already completed with `id`, for the standalone core
-// tests that drive the restore latch directly (no tool handler feeds it).
-const filledSessionDeferred = (id: SessionId): Effect.Effect<Deferred.Deferred<SessionId>> =>
-  Effect.tap(Deferred.make<SessionId>(), (d) => Deferred.succeed(d, id))
 
 const reactionOnDecisionsThread = (): InboundEvent => {
   const channel = {
@@ -101,251 +125,136 @@ const reactionOnDecisionsThread = (): InboundEvent => {
   }
 }
 
-interface ResumeRig {
-  readonly client: Client
-  readonly adapter: MemoryAdapter
-  readonly narrowSet: NarrowSet
-  readonly substrateSubscribes: ReadonlyArray<SubscriptionTarget>
-  readonly seedCalls: ReadonlyArray<ProjectSlug | undefined>
-}
-
-// Boot a fresh MCP server whose subscription store already holds the persisted
-// narrow set of a prior session — the exact state after an MCP-child reboot on
-// resume: in-memory narrow set empty, disk snapshot intact, same session_id.
-// `ensureSessionSubscriptions` mirrors server.ts: the reactive restore latch
-// (`makeSessionRestore`) plus the store-gated fresh-session seed. It is wired as
-// the tools' feeder — subscribe/unsubscribe call it; current_identity does not.
-const buildResumeRig = (
-  persisted: ReadonlyArray<SubscribeIntent>,
-): Effect.Effect<ResumeRig, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const adapter = yield* memoryAdapter()
-    const substrateSubscribes: SubscriptionTarget[] = []
-    const realSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
-    const inbox = {
-      ...adapter.inbox,
-      subscribe: (target: SubscriptionTarget) =>
-        Effect.sync(() => void substrateSubscribes.push(target)).pipe(
-          Effect.zipRight(realSubscribe(target)),
-        ),
-    }
-    const spiedAdapter = { ...adapter, inbox } as MemoryAdapter
-
-    const identityCache = yield* createEphemeralIdentityCache({
-      acquire: adapter.identity.acquire,
-      release: adapter.identity.release,
-      idleReleaseMs: 60 * 60 * 1000,
-    })
-    const narrowSet = createNarrowSet()
-    // The one shared session-id deferred, filled by the tools' `feedSessionId`
-    // when a session-carrying tool call (subscribe / current_identity) arrives —
-    // exactly as the live boot wiring does. The session-bound store awaits it.
-    const sessionDeferred = yield* Deferred.make<SessionId>()
-    const subscriptionStore = inMemorySubscriptionStore(
-      sessionDeferred,
-      new Map([[SID_RESUME, persisted]]),
-    )
-    const feedSessionId = (id: SessionId): Effect.Effect<void> =>
-      Deferred.succeed(sessionDeferred, id).pipe(Effect.asVoid)
-
-    const seedCalls: (ProjectSlug | undefined)[] = []
-    const sessionRestoreFeed = yield* makeSessionRestore({ subscriptionStore, narrowSet, inbox })
-    const ensureSessionSubscriptions = (
-      sessionId: SessionId,
-      project: ProjectSlug | undefined,
-    ): Effect.Effect<void> =>
-      sessionRestoreFeed(sessionId).pipe(
-        Effect.catchAll(() => Effect.void),
-        Effect.zipRight(
-          seedDefaultsIfFresh(
-            {
-              subscriptionStore,
-              registerDefaults: (p) => Effect.sync(() => void seedCalls.push(p)),
-            },
-            project,
-          ).pipe(Effect.catchAll(() => Effect.void)),
-        ),
-      )
-
-    const server = buildMcpServer()
-    registerTools(server, {
-      adapter: spiedAdapter,
-      identityCache,
-      narrowSet,
-      ensureSessionSubscriptions,
-      feedSessionId,
-    })
-
-    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair()
-    const client = new Client({ name: 'commy-resume-test', version: '0.0.0' }, { capabilities: {} })
-    yield* Effect.promise(() =>
-      Promise.all([server.connect(serverTransport), client.connect(clientTransport)]),
-    )
-    yield* Effect.addFinalizer(() =>
-      Effect.promise(async () => {
-        await client.close()
-        await server.close()
-      }),
-    )
-
-    return { client, adapter: spiedAdapter, narrowSet, substrateSubscribes, seedCalls }
-  })
-
-test('a feeder (subscribe) on resume rehydrates the persisted narrow set so a decisions-topic reaction is deliverable', () =>
-  Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const rig = yield* buildResumeRig([decisionsThreadIntent, { kind: 'mentions' }])
-
-        // Rebooted: nothing restored yet, so the pump would drop the reaction.
-        expect(rig.narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(false)
-
-        // A feeder delivers the session_id — here the seat's own subscribe.
-        yield* Effect.promise(() =>
-          rig.client.callTool({
-            name: 'subscribe',
-            arguments: { target: 'channel:other', session_id: SID_RESUME },
-          }),
-        )
-
-        // The reactive latch rehydrated the persisted set: the human's :one:
-        // reaction on the decisions thread now matches...
-        expect(rig.narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(true)
-        // ...the restored thread was re-subscribed on the substrate...
-        expect(rig.substrateSubscribes).toContainEqual(intentToTarget(decisionsThreadIntent))
-        // ...and the newly-subscribed intent was added on top of the restored set.
-        expect(rig.narrowSet.intents()).toContainEqual({
-          kind: 'channel',
-          channelName: decodeChannelNameSync('other'),
-        })
-        // A resume is not a fresh session: no Type-2 defaults were seeded.
-        expect(rig.seedCalls).toEqual([])
-      }),
-    ),
-  ))
-
-test('passive current_identity on resume is a pure read — it does NOT rehydrate the persisted set', () =>
-  Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const rig = yield* buildResumeRig([decisionsThreadIntent, { kind: 'mentions' }])
-
-        // Rebooted: deaf. The passive "am I still bound?" check must not change that.
-        expect(rig.narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(false)
-
-        const result = yield* Effect.promise(() =>
-          rig.client.callTool({
-            name: 'current_identity',
-            arguments: { session_id: SID_RESUME },
-          }),
-        )
-
-        // Passivity preserved: no identity acquired by the check.
-        expect(result.structuredContent).toEqual({ state: 'unbound', identity: null })
-
-        // Still deaf: current_identity is not a feeder, so it restored nothing.
-        // Rehydrating a zero-tool-call listen-only seat is comms-3qi2.2's job.
-        expect(rig.narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(false)
-        expect(rig.substrateSubscribes).toEqual([])
-        expect(rig.seedCalls).toEqual([])
-      }),
-    ),
-  ))
-
-// The fresh-session contract: a passive current_identity for a session_id the
-// store has never seen neither restores nor seeds — Type-2 defaults stay on the
-// acquire hook (server.integration.test.ts).
-const SID_FRESH = 'f9e5f9e5-0000-4000-8000-000000000002'
-
-test('passive current_identity for a never-seen session restores and seeds nothing', () =>
-  Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const rig = yield* buildResumeRig([decisionsThreadIntent])
-
-        const result = yield* Effect.promise(() =>
-          rig.client.callTool({
-            name: 'current_identity',
-            arguments: { session_id: SID_FRESH },
-          }),
-        )
-
-        expect(result.structuredContent).toEqual({ state: 'unbound', identity: null })
-        expect(rig.narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(false)
-        expect(rig.substrateSubscribes).toEqual([])
-        expect(rig.seedCalls).toEqual([])
-      }),
-    ),
-  ))
-
-// The reactive core (comms-k7cv): restore is a reaction to the session_id
-// becoming known, not a thing a specific action triggers. A `Deferred<SessionId>`
-// is the first-wins latch — the first feeder to deliver the id runs restore-only
-// (synchronously, so the narrow set is live before that call returns); every later
-// delivery is a no-op. Feeders (any tool call carrying session_id, acquire) stay
-// ignorant of restore; they just publish the id.
-const asSessionId = (raw: string): SessionId => raw as unknown as SessionId
-
-test('makeSessionRestore restores a resumed narrow set on the first session_id delivery and is a no-op thereafter', () =>
+// The zero-action rehydrate: restore fires purely from the shared session-id
+// deferred being filled — no tool call, no ensureSessionSubscriptions. This is
+// the resumed listen-only seat the reactive core exists to close.
+test('restore rehydrates the persisted narrow set when the shared deferred is filled — zero tool calls', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const narrowSet = createNarrowSet()
-      const substrateSubscribes: SubscriptionTarget[] = []
-      const inbox = {
-        subscribe: (target: SubscriptionTarget) =>
-          Effect.sync(() => {
-            substrateSubscribes.push(target)
-          }),
-      }
-      const session = yield* filledSessionDeferred(asSessionId(SID_RESUME))
+      narrowSet.beginBuffering()
+      const { inbox, subscribes } = spyInbox()
+      const session = yield* Deferred.make<SessionId>()
       const subscriptionStore = inMemorySubscriptionStore(
         session,
-        new Map([[SID_RESUME, [decisionsThreadIntent, { kind: 'mentions' }]]]),
+        new Map([[SID_RESUME, [decisionsThreadIntent, mentionsIntent]]]),
       )
 
-      const feed = yield* makeSessionRestore({ subscriptionStore, narrowSet, inbox })
+      // Boot-fork restore: it parks on the store read, which awaits the deferred.
+      const fiber = yield* Effect.fork(
+        restoreSubscriptions({ subscriptionStore, narrowSet, inbox }),
+      )
 
-      // Rebooted: empty narrow set, deaf.
+      // Rebooted, deaf: nothing restored while the id is unknown.
       expect(narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(false)
 
-      // The moment the id is known — via any feeder — restore reacts, restore-only.
-      yield* feed(asSessionId(SID_RESUME))
-      expect(narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(true)
-      expect(substrateSubscribes).toContainEqual(intentToTarget(decisionsThreadIntent))
+      // Fill the shared deferred ALONE — no callTool.
+      yield* Deferred.succeed(session, asSessionId(SID_RESUME))
+      yield* Fiber.join(fiber)
 
-      // First-wins latch: a second delivery does not restore again.
-      const subscribedCount = substrateSubscribes.length
-      yield* feed(asSessionId(SID_RESUME))
-      expect(substrateSubscribes.length).toBe(subscribedCount)
+      // Restored: the human's :one: reaction on the decisions thread now matches,
+      // and the thread was re-wired on the substrate.
+      expect(narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(true)
+      expect(subscribes).toContainEqual(intentToTarget(decisionsThreadIntent))
+      expect(sortIntents(narrowSet.intents())).toEqual(
+        sortIntents([decisionsThreadIntent, mentionsIntent]),
+      )
     }),
   ))
 
-// The fresh-session contract holds at the core too: a delivery for a session the
-// store has never seen restores nothing and — crucially — seeds nothing. Type-2
-// defaults stay acquire-gated; the reactive core is restore-only.
-test('makeSessionRestore restores nothing for a never-seen session (no fresh-session seed)', () =>
+// The buffer-and-replay proof: subscribe/unsubscribe deltas that arrive before
+// restore loads are journaled and replayed onto the restored base in arrival
+// order — the pre-restore subscribe survives the base swap, the pre-restore
+// unsubscribe of a persisted sub still removes it, and a default the persisted
+// set had dropped is not resurrected.
+test('deltas racing the load are journaled and replayed onto the restored base', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const narrowSet = createNarrowSet()
-      const substrateSubscribes: SubscriptionTarget[] = []
-      const inbox = {
-        subscribe: (target: SubscriptionTarget) =>
-          Effect.sync(() => {
-            substrateSubscribes.push(target)
-          }),
-      }
-      const session = yield* filledSessionDeferred(asSessionId(SID_FRESH))
+      // A COMMY_SUBSCRIBE default the persisted set turns out to have dropped.
+      narrowSet.add(channelIntent('env-default'))
+      narrowSet.beginBuffering()
+      const { inbox } = spyInbox()
+      const session = yield* Deferred.make<SessionId>()
+      const subscriptionStore = inMemorySubscriptionStore(
+        session,
+        new Map([[SID_RESUME, [decisionsThreadIntent, mentionsIntent]]]),
+      )
+
+      const fiber = yield* Effect.fork(
+        restoreSubscriptions({ subscriptionStore, narrowSet, inbox }),
+      )
+
+      // Before the id lands: subscribe something new, unsubscribe a persisted sub.
+      narrowSet.add(channelIntent('fresh-sub'))
+      narrowSet.remove(mentionsIntent)
+
+      yield* Deferred.succeed(session, asSessionId(SID_RESUME))
+      yield* Fiber.join(fiber)
+
+      // Restored base with deltas replayed: fresh-sub survived, mentions removed,
+      // env-default stayed dropped.
+      expect(sortIntents(narrowSet.intents())).toEqual(
+        sortIntents([decisionsThreadIntent, channelIntent('fresh-sub')]),
+      )
+    }),
+  ))
+
+// A fresh session (store miss) loads no base: the COMMY_SUBSCRIBE seed stands and
+// buffered deltas replay onto it. Restoring nothing is the whole point — a
+// never-seen session must not inherit another session's persisted set.
+test('a fresh session (store miss) keeps the env seed and replays buffered deltas', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const narrowSet = createNarrowSet()
+      narrowSet.add(channelIntent('env-default'))
+      narrowSet.beginBuffering()
+      const { inbox, subscribes } = spyInbox()
+      const session = yield* Deferred.make<SessionId>()
+      // The store holds a DIFFERENT session's data; SID_FRESH is a miss.
       const subscriptionStore = inMemorySubscriptionStore(
         session,
         new Map([[SID_RESUME, [decisionsThreadIntent]]]),
       )
 
-      const feed = yield* makeSessionRestore({ subscriptionStore, narrowSet, inbox })
+      const fiber = yield* Effect.fork(
+        restoreSubscriptions({ subscriptionStore, narrowSet, inbox }),
+      )
+      narrowSet.add(channelIntent('fresh-sub'))
 
-      yield* feed(asSessionId(SID_FRESH))
+      yield* Deferred.succeed(session, asSessionId(SID_FRESH))
+      yield* Fiber.join(fiber)
 
+      // Env seed kept, buffered delta replayed, nothing re-subscribed, and the
+      // other session's decisions thread was NOT restored.
+      expect(sortIntents(narrowSet.intents())).toEqual(
+        sortIntents([channelIntent('env-default'), channelIntent('fresh-sub')]),
+      )
+      expect(subscribes).toEqual([])
       expect(narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(false)
-      expect(substrateSubscribes).toEqual([])
+    }),
+  ))
+
+// An empty persisted set is honoured verbatim: the resumed seat hears only what
+// it re-subscribed since boot, and a dropped default stays dropped.
+test('an empty persisted set is honoured — the env default is not resurrected', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const narrowSet = createNarrowSet()
+      narrowSet.add(channelIntent('env-default'))
+      narrowSet.beginBuffering()
+      const { inbox } = spyInbox()
+      const session = yield* Deferred.make<SessionId>()
+      const subscriptionStore = inMemorySubscriptionStore(session, new Map([[SID_RESUME, []]]))
+
+      const fiber = yield* Effect.fork(
+        restoreSubscriptions({ subscriptionStore, narrowSet, inbox }),
+      )
+      yield* Deferred.succeed(session, asSessionId(SID_RESUME))
+      yield* Fiber.join(fiber)
+
+      expect(narrowSet.intents()).toEqual([])
+      expect(narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(false)
     }),
   ))
 
