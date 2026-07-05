@@ -151,6 +151,16 @@ export interface RegisterToolsDeps {
    * fails the tool call. Omitted in tests that don't exercise persistence.
    */
   readonly persistSessionSubscriptions?: (sessionId: SessionId) => Effect.Effect<void>
+  /**
+   * Hand a PreToolUse-stamped session_id to the shared session-id `Deferred`
+   * (comms-k7cv). Every hooked tool (post/edit_message/react/unreact/
+   * current_identity) feeds it; the feed is idempotent (first-writer-wins), so
+   * the first hooked call of the MCP child fills the deferred for every awaiter.
+   * The boot feeder in `server.ts` fills it earlier when the host injects
+   * `CLAUDE_CODE_SESSION_ID`; this per-call feed covers a host that doesn't.
+   * Omitted in tests that don't exercise the session-id latch.
+   */
+  readonly feedSessionId?: (sessionId: SessionId) => Effect.Effect<void>
   readonly downloadFile?: (
     urlPath: UserUploadPath,
   ) => Effect.Effect<
@@ -424,6 +434,13 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
   // loudly at parse time rather than silently minting garbage downstream.
   const readSessionId = (args: Readonly<Record<string, unknown>>): SessionId | undefined =>
     Option.getOrUndefined(parseSessionId(args['session_id']))
+  // Feed the shared session-id deferred (comms-k7cv), guarded on the same
+  // UUID brand as minting so a malformed id never reaches it. A no-op when the
+  // dep is absent (tests) or the arg didn't parse.
+  const feedSession = (sessionId: SessionId | undefined): Effect.Effect<void> =>
+    sessionId === undefined || deps.feedSessionId === undefined
+      ? Effect.void
+      : deps.feedSessionId(sessionId)
   const readCwd = (args: Readonly<Record<string, unknown>>): string | undefined => {
     const raw = args['cwd']
     return Predicate.isString(raw) ? raw : undefined
@@ -431,6 +448,16 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
   const projectForArgs = (
     args: Readonly<Record<string, unknown>>,
   ): Effect.Effect<ProjectSlug | undefined> => projectForCwd(readCwd(args))
+  // The single binding choke-point every PreToolUse-stamped tool routes
+  // through: feed the session_id, then resolve the ephemeral identity for it.
+  // The returned `ensureBound` thunk IS the acquire — the attribution tools
+  // invoke it, `current_identity` leaves it (a passive read that still feeds).
+  const ensureBoundForArgs = (args: Readonly<Record<string, unknown>>) =>
+    Effect.gen(function* () {
+      const sessionId = readSessionId(args)
+      yield* feedSession(sessionId)
+      return yield* identityCache.ensureBoundFor(sessionId, yield* projectForArgs(args))
+    })
   // Sticky engagement: active participation in a thread —
   // posting or reacting — implies interest in its replies. Idempotent;
   // narrow-set add is set-backed and inbox.subscribe mirrors the explicit
@@ -460,12 +487,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args): Promise<CurrentIdentityResult> => {
-        const sessionId = readSessionId(args)
-        const ensureBound = await runEdge(
-          Effect.flatMap(projectForArgs(args), (project) =>
-            identityCache.ensureBoundFor(sessionId, project),
-          ),
-        )
+        const ensureBound = await runEdge(ensureBoundForArgs(args))
         const current = ensureBound.current()
         if (current === undefined) {
           return { state: 'unbound', identity: null }
@@ -580,11 +602,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        await runEdge(
-          Effect.flatMap(projectForArgs(args), (project) =>
-            identityCache.ensureBoundFor(readSessionId(args), project),
-          ).pipe(Effect.flatMap((ensureBound) => ensureBound())),
-        )
+        await runEdge(ensureBoundForArgs(args).pipe(Effect.flatMap((ensureBound) => ensureBound())))
         const ref = await runEdge(
           Effect.gen(function* () {
             const { channel_name, body, thread, mentions, reply_to } =
@@ -646,11 +664,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        await runEdge(
-          Effect.flatMap(projectForArgs(args), (project) =>
-            identityCache.ensureBoundFor(readSessionId(args), project),
-          ).pipe(Effect.flatMap((ensureBound) => ensureBound())),
-        )
+        await runEdge(ensureBoundForArgs(args).pipe(Effect.flatMap((ensureBound) => ensureBound())))
         const ref = await runEdge(
           Effect.gen(function* () {
             const { message_id, body, channel_name } =
@@ -688,11 +702,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        await runEdge(
-          Effect.flatMap(projectForArgs(args), (project) =>
-            identityCache.ensureBoundFor(readSessionId(args), project),
-          ).pipe(Effect.flatMap((ensureBound) => ensureBound())),
-        )
+        await runEdge(ensureBoundForArgs(args).pipe(Effect.flatMap((ensureBound) => ensureBound())))
         const { ref, threadName } = await runEdge(
           Effect.gen(function* () {
             const { message_id, emoji, channel_name, thread } =
@@ -734,11 +744,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        await runEdge(
-          Effect.flatMap(projectForArgs(args), (project) =>
-            identityCache.ensureBoundFor(readSessionId(args), project),
-          ).pipe(Effect.flatMap((ensureBound) => ensureBound())),
-        )
+        await runEdge(ensureBoundForArgs(args).pipe(Effect.flatMap((ensureBound) => ensureBound())))
         await runEdge(
           Effect.gen(function* () {
             const { message_id, emoji, channel_name } = yield* Schema.decodeUnknown(ReactArgs)(args)

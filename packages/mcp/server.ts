@@ -13,6 +13,7 @@ import {
   Clock,
   ConfigProvider,
   Data,
+  Deferred,
   Duration,
   Effect,
   Layer,
@@ -26,6 +27,7 @@ import {
   deriveProject,
   type EnvConfigError,
   parseEnv,
+  readBootSessionId,
   SubstrateAdapter,
   subscribeFromEnv,
   ZulipAdapterLive,
@@ -42,7 +44,7 @@ import { type CatchUpError, catchUpMentions } from './mentions-catch-up.ts'
 import type { NarrowSet } from './narrow-set.ts'
 import { createNarrowSet } from './narrow-set.ts'
 import { raceReleaseAgainstTimeout } from './release-shutdown.ts'
-import { SessionIdLive, type SessionId as SessionIdTag } from './session-id.ts'
+import { SessionIdLive, SessionId as SessionIdTag } from './session-id.ts'
 import type { SubscribeIntent, SubscribeTokenError } from './subscribe-parser.ts'
 import { intentToTarget } from './subscribe-parser.ts'
 import {
@@ -339,6 +341,7 @@ export const makeProgram = (
   | SubstrateAdapter
   | CursorStoreTag
   | SubscriptionStoreTag
+  | SessionIdTag
   | FileSystem.FileSystem
   | CommandExecutor.CommandExecutor
 > =>
@@ -348,6 +351,30 @@ export const makeProgram = (
       const adapter = yield* SubstrateAdapter
       const cursorStore = yield* CursorStoreTag
       const subscriptionStore = yield* SubscriptionStoreTag
+      // The one shared session-id deferred (comms-k7cv). Setters below fill it;
+      // sibling seats' awaiters (Store / restore) read it. Every setter is
+      // opportunistic and additive — none load-bearing alone; the first source
+      // to arrive wins. Boot feeder first: when CC injects CLAUDE_CODE_SESSION_ID
+      // into the MCP child env at spawn (observed on 2.1.201, but not assumed
+      // always present), this fills the deferred at boot with zero agent action
+      // — the ONLY zero-action source, so it is what closes the resumed
+      // listen-only case WHEN present. Absent/non-UUID → no-op; an acting seat
+      // still fills it via the per-tool-call feeder below, but a pure-listen
+      // seat with no boot-env source keeps the gap until another zero-action
+      // source exists. Idempotent first-writer-wins.
+      const sessionIdDeferred = yield* SessionIdTag
+      yield* Effect.flatMap(
+        readBootSessionId,
+        Option.match({
+          onNone: () => Effect.void,
+          onSome: (sessionId) => Deferred.succeed(sessionIdDeferred, sessionId).pipe(Effect.asVoid),
+        }),
+      )
+      // Per-tool-call feeder: every PreToolUse-stamped call
+      // (post/edit_message/react/unreact/current_identity) hands its session_id
+      // here. Idempotent — after the first writer the rest return false.
+      const feedSessionId = (sessionId: SessionId): Effect.Effect<void> =>
+        Deferred.succeed(sessionIdDeferred, sessionId).pipe(Effect.asVoid)
       // The download/upload tool builders execute against this filesystem,
       // captured once from context (NodeContext.layer, provided in the
       // app layer) instead of self-providing a platform layer per call.
@@ -576,6 +603,7 @@ export const makeProgram = (
         projectForCwd,
         ensureSessionSubscriptions,
         persistSessionSubscriptions,
+        feedSessionId,
         downloadFile: (urlPath) =>
           Effect.gen(function* () {
             const result = yield* adapter.downloadFile(urlPath)

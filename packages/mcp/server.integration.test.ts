@@ -32,7 +32,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { Deferred, Effect, FiberId, Layer, Option, Stream } from 'effect'
 import type { SessionId } from './bootstrap.ts'
-import { parseEnv, substrateAdapterLayer } from './bootstrap.ts'
+import { parseEnv, parseSessionId, substrateAdapterLayer } from './bootstrap.ts'
 import type { CursorStore } from './cursor-store.ts'
 import { CursorStoreTag } from './cursor-store.ts'
 // Above-port unit tests drive the substrate through the in-memory adapter only —
@@ -41,6 +41,7 @@ import { CursorStoreTag } from './cursor-store.ts'
 // `SubstrateAdapter` port; no Zulip type or brand is named directly here.
 import { completeAsSubstrate } from './memory-substrate.ts'
 import { makeProgram } from './server.ts'
+import { SessionId as SessionIdTag, type SessionIdValue } from './session-id.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 import type { SubscriptionStore } from './subscription-store.ts'
 import { SubscriptionStoreTag } from './subscription-store.ts'
@@ -177,6 +178,12 @@ interface Harness {
    */
   readonly shutdown: () => Promise<void>
   readonly cleanup: () => Promise<void>
+  /**
+   * The shared session-id deferred the program booted against. A test polls
+   * it to assert the boot feeder (comms-k7cv) filled it from
+   * CLAUDE_CODE_SESSION_ID in the MCP child env.
+   */
+  readonly sessionIdDeferred: Deferred.Deferred<SessionIdValue>
 }
 
 const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> => {
@@ -306,6 +313,9 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
     overrides.capturedLogs !== undefined ? captureLogger(overrides.capturedLogs) : stderrLoggerLayer
   const cursorStore = overrides.cursorStore ?? createMemoryCursorStore()
   const subscriptionStore = overrides.subscriptionStore ?? createMemorySubscriptionStore()
+  // A known shared session-id deferred, so a test can assert the boot feeder
+  // (comms-k7cv) filled it from CLAUDE_CODE_SESSION_ID in the child env.
+  const sessionIdDeferred = Deferred.unsafeMake<SessionIdValue>(FiberId.none)
   const runExit = Effect.runPromiseExit(
     makeProgram({
       transport: serverTransport,
@@ -317,6 +327,7 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
             substrateAdapterLayer(parseEnv.pipe(Effect.as(adapter))),
             Layer.succeed(CursorStoreTag, cursorStore),
             Layer.succeed(SubscriptionStoreTag, subscriptionStore),
+            Layer.succeed(SessionIdTag, sessionIdDeferred),
             loggerLayer,
           ),
           testPlatformLayer(env),
@@ -360,6 +371,7 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
         // Client may already be closed (e.g. server hit a fatal error first).
       }
     },
+    sessionIdDeferred,
   }
 }
 
@@ -2087,3 +2099,32 @@ const snapshotPluginDir = (
   visit(root)
   return out.sort((a, b) => a.path.localeCompare(b.path))
 }
+
+// ─── Boot feeder (comms-k7cv.4): CLAUDE_CODE_SESSION_ID → session-id deferred ──
+// Claude Code injects CLAUDE_CODE_SESSION_ID into the MCP child env at spawn
+// (verified empirically on CC 2.1.201). The boot feeder mints a SessionId from
+// it and fills the shared deferred at boot — with zero tool calls, the exact
+// path a resumed listen-only seat needs. By the time `buildHarness` returns the
+// server has connected (mcp.connect runs after the boot feeder), so the feed
+// has already happened.
+const BOOT_SID = 'f73f0ef0-1234-4abc-8def-000000000000'
+
+test('boot feeder fills the session-id deferred from CLAUDE_CODE_SESSION_ID in the child env', async () => {
+  const harness = await buildHarness({ env: { CLAUDE_CODE_SESSION_ID: BOOT_SID } })
+  try {
+    expect(await Effect.runPromise(Deferred.isDone(harness.sessionIdDeferred))).toBe(true)
+    const value = await Effect.runPromise(Deferred.await(harness.sessionIdDeferred))
+    expect(value).toBe(Option.getOrThrow(parseSessionId(BOOT_SID)))
+  } finally {
+    await harness.cleanup()
+  }
+})
+
+test('boot feeder is a no-op when CLAUDE_CODE_SESSION_ID is absent — deferred stays unfilled', async () => {
+  const harness = await buildHarness({ env: { CLAUDE_CODE_SESSION_ID: undefined } })
+  try {
+    expect(await Effect.runPromise(Deferred.isDone(harness.sessionIdDeferred))).toBe(false)
+  } finally {
+    await harness.cleanup()
+  }
+})

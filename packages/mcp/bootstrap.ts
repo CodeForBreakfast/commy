@@ -73,6 +73,27 @@ export type SessionId = typeof SessionIdSchema.Type
 export const parseSessionId: (raw: unknown) => Option.Option<SessionId> =
   Schema.decodeUnknownOption(SessionIdSchema)
 
+/**
+ * Boot-time session-id feed source. Claude Code injects
+ * `CLAUDE_CODE_SESSION_ID` into the MCP child's env at spawn — verified on CC
+ * 2.1.201: it is inherited into the child `process.env`, NOT substituted into
+ * `.mcp.json` via `${…}` (the host does not do that, cc#2065). Read it once
+ * at boot and mint a `SessionId`, so the shared session-id `Deferred` can be
+ * filled with zero agent action — the case a resumed listen-only seat needs,
+ * where restore must fire before the agent does anything. A missing var (a
+ * non-CC host, or a CC that stops injecting it) or a non-UUID value yields
+ * `Option.none()`: the boot feeder becomes a harmless no-op and the
+ * per-tool-call feeders still cover any acting seat. Reads the ambient
+ * ConfigProvider, so it never fails — an absent key is `None`, not an error.
+ */
+export const readBootSessionId: Effect.Effect<Option.Option<SessionId>> = Effect.orElseSucceed(
+  Effect.map(
+    Config.option(Config.string('CLAUDE_CODE_SESSION_ID')),
+    Option.flatMap(parseSessionId),
+  ),
+  () => Option.none<SessionId>(),
+)
+
 export type { BotName } from '@commy/core/ports'
 
 const BOT_NAME_RE = /^[a-z][a-z0-9_-]*$/

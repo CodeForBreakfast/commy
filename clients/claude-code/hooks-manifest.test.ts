@@ -6,14 +6,18 @@ import hooksManifest from './hooks/hooks.json'
  * The PreToolUse hook in `hooks/hooks.json` injects `session_id` (and
  * `cwd`) into MCP tool args before the call reaches the server. Its
  * matcher is a hand-curated alternation over tool names. Every tool
- * whose handler calls `identityCache.ensureBoundFor(...)` must be in
- * the alternation — otherwise the handler sees `session_id`
- * undefined and `readSessionId` falls back to ephemeral binding.
+ * whose handler binds an identity for `session_id` must be in the
+ * alternation — otherwise the handler sees `session_id` undefined,
+ * `readSessionId` falls back to ephemeral binding, and (comms-k7cv) the
+ * session-id `Deferred` never gets fed from that call.
  *
- * Direct callers only — if `ensureBoundFor` is invoked through a
- * helper indirection, the parser will miss it. Add the wrapper here
- * if/when that pattern appears.
+ * Binding routes through one of two shapes: a direct
+ * `identityCache.ensureBoundFor(...)` call, or the `ensureBoundForArgs(...)`
+ * wrapper (comms-k7cv), which feeds the session-id deferred and then binds.
+ * The parser attributes both to their enclosing tool.
  */
+
+const BINDING_CALL_TOKENS = ['ensureBoundFor(', 'ensureBoundForArgs('] as const
 
 function mintingToolsFromToolsSource(source: string): ReadonlySet<string> {
   const minting = new Set<string>()
@@ -22,7 +26,7 @@ function mintingToolsFromToolsSource(source: string): ReadonlySet<string> {
     const named = line.match(/^\s*name:\s*['"]([a-z_]+)['"]/)
     const captured = named?.[1]
     if (captured !== undefined) currentName = captured
-    if (line.includes('ensureBoundFor(') && currentName !== undefined) {
+    if (currentName !== undefined && BINDING_CALL_TOKENS.some((token) => line.includes(token))) {
       minting.add(currentName)
     }
   }
@@ -90,6 +94,34 @@ test('mintingToolsFromToolsSource attributes each ensureBoundFor call to the enc
     },
   `
   expect(mintingToolsFromToolsSource(synthetic)).toEqual(new Set(['alpha', 'gamma']))
+})
+
+test('mintingToolsFromToolsSource attributes ensureBoundForArgs wrapper calls to the enclosing tool', () => {
+  const synthetic = `
+    const ensureBoundForArgs = (args) =>
+      Effect.gen(function* () {
+        yield* feedSession(readSessionId(args))
+        return yield* identityCache.ensureBoundFor(readSessionId(args), yield* projectForArgs(args))
+      })
+    const coreTools = [
+      {
+        name: 'epsilon',
+        handler: async (args) => {
+          await runEdge(ensureBoundForArgs(args).pipe(Effect.flatMap((b) => b())))
+        },
+      },
+      {
+        name: 'zeta',
+        handler: async (args) => {
+          const b = await runEdge(ensureBoundForArgs(args))
+          return b.current()
+        },
+      },
+    ]
+  `
+  // The wrapper definition itself (before any name:) is not attributed; both
+  // callers are — matching the real tools.ts shape.
+  expect(mintingToolsFromToolsSource(synthetic)).toEqual(new Set(['epsilon', 'zeta']))
 })
 
 test('mintingToolsFromToolsSource ignores name properties whose value is not a string literal', () => {

@@ -23,6 +23,7 @@ import {
   parseBotName,
   parseEnv,
   parseSessionId,
+  readBootSessionId,
   readGitContext,
   sanitiseProjectSlug,
   subscribeFromEnv,
@@ -942,4 +943,27 @@ describe('readGitContext on the node command executor', () => {
     withTempDir(async (dir) => {
       expect(await runProbe(dir)).toEqual(NotInRepo())
     }))
+})
+
+describe('readBootSessionId (boot-env session-id feed source)', () => {
+  const SID = '33333333-3333-4333-8333-333333333333'
+  const read = (env: Record<string, string | undefined>): Effect.Effect<Option.Option<SessionId>> =>
+    readBootSessionId.pipe(Effect.provide(testConfigProviderLayer(env)))
+
+  test('CLAUDE_CODE_SESSION_ID present and UUID-shaped → Some(minted sid)', () =>
+    Effect.gen(function* () {
+      const result = yield* read({ CLAUDE_CODE_SESSION_ID: SID })
+      expect(Option.isSome(result)).toBe(true)
+      expect(Option.getOrThrow(result)).toBe(Option.getOrThrow(parseSessionId(SID)))
+    }).pipe(Effect.runPromise))
+
+  test('CLAUDE_CODE_SESSION_ID absent → None (boot feeder is a harmless no-op)', () =>
+    Effect.gen(function* () {
+      expect(Option.isNone(yield* read({}))).toBe(true)
+    }).pipe(Effect.runPromise))
+
+  test('CLAUDE_CODE_SESSION_ID present but not UUID-shaped → None', () =>
+    Effect.gen(function* () {
+      expect(Option.isNone(yield* read({ CLAUDE_CODE_SESSION_ID: 'not-a-uuid' }))).toBe(true)
+    }).pipe(Effect.runPromise))
 })
