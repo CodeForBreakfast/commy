@@ -15,12 +15,10 @@ import {
   Data,
   Duration,
   Effect,
-  HashSet,
   Layer,
   Option,
   Predicate,
   Schedule,
-  SynchronizedRef,
 } from 'effect'
 import type { BotName, GitContext, ProjectSlug, SessionId } from './bootstrap.ts'
 import {
@@ -46,7 +44,11 @@ import { createNarrowSet } from './narrow-set.ts'
 import { raceReleaseAgainstTimeout } from './release-shutdown.ts'
 import type { SubscribeIntent, SubscribeTokenError } from './subscribe-parser.ts'
 import { intentToTarget } from './subscribe-parser.ts'
-import { persistSubscriptions, restoreOrSeedSubscriptions } from './subscription-restore.ts'
+import {
+  makeSessionRestore,
+  persistSubscriptions,
+  seedDefaultsIfFresh,
+} from './subscription-restore.ts'
 import { FileSubscriptionStoreLive, SubscriptionStoreTag } from './subscription-store.ts'
 import { registerTools } from './tools.ts'
 
@@ -409,45 +411,65 @@ export const makeProgram = (
           ? createType2DefaultsOnAcquire(narrowSet, adapter.inbox)
           : undefined
 
-      // Subscription restore/persist. Ephemeral mode only: a
-      // persistent COMMY_BOT_NAME pane gets a new session_id every launch, so
-      // its store is always absent → the fresh path → COMMY_SUBSCRIBE-only.
-      // `restoredSessions` memoises the once-per-session_id
-      // restore decision so the store's presence is a true resume signal and
-      // never a file this same process just wrote via `subscribe`.
-      const restoredSessions = yield* SynchronizedRef.make(HashSet.empty<SessionId>())
+      // Reactive subscription restore (comms-k7cv). Restore is a reaction to the
+      // session_id becoming known: a resumed MCP child boots session-blind, so
+      // the moment a feeder (acquire / subscribe / unsubscribe) delivers the id,
+      // the `Deferred` latch fires `restoreSubscriptions` ONCE. This retires the
+      // old `restoredSessions` memo — the latch is the once-guard for restore,
+      // and the store's presence is a store-gated once-guard for the seed.
+      // Ephemeral mode only: a persistent COMMY_BOT_NAME pane gets a new
+      // session_id every launch, so its store is always absent → the fresh path
+      // → COMMY_SUBSCRIBE-only.
+      const sessionRestoreFeed =
+        parsed.botName === undefined
+          ? yield* makeSessionRestore({ subscriptionStore, narrowSet, inbox: adapter.inbox })
+          : undefined
       const seedDefaults = (project: ProjectSlug | undefined): Effect.Effect<void> =>
         registerType2Defaults !== undefined ? registerType2Defaults(project) : Effect.void
-      const ensureSessionSubscriptions = (
+      // Deliver the session_id to the restore reaction. Idempotent: after the
+      // first delivery the latch is closed and later calls do nothing. A corrupt
+      // or unreadable store must not strand the session — log and carry on; the
+      // seed below still supplies fresh defaults.
+      const feedSession = (sessionId: SessionId): Effect.Effect<void> =>
+        sessionRestoreFeed === undefined
+          ? Effect.void
+          : sessionRestoreFeed(sessionId).pipe(
+              Effect.catchAll((err) =>
+                Effect.logError(
+                  `commy plugin: subscription restore failed for ${sessionId}: ${Predicate.isError(err) ? err.message : String(err)}`,
+                ),
+              ),
+              Effect.provide(loggerLayer),
+            )
+      // Seed the acquire-gated Type-2 defaults for a fresh session (store absent).
+      // Restore-free and store-gated, so it never rehydrates a resumed set. On a
+      // corrupt store, fall back to fresh defaults rather than strand the session.
+      const seedIfFresh = (
         sessionId: SessionId,
         project: ProjectSlug | undefined,
       ): Effect.Effect<void> =>
         parsed.botName !== undefined
           ? Effect.void
-          : SynchronizedRef.updateEffect(restoredSessions, (seen) =>
-              HashSet.has(seen, sessionId)
-                ? Effect.succeed(seen)
-                : restoreOrSeedSubscriptions(
-                    {
-                      subscriptionStore,
-                      narrowSet,
-                      inbox: adapter.inbox,
-                      registerDefaults: seedDefaults,
-                    },
-                    sessionId,
-                    project,
-                  ).pipe(
-                    // A corrupt or unreadable store must not strand the session:
-                    // log and fall back to the fresh defaults rather than refuse.
-                    Effect.catchAll((err) =>
-                      Effect.logError(
-                        `commy plugin: subscription restore failed for ${sessionId}: ${Predicate.isError(err) ? err.message : String(err)}`,
-                      ).pipe(Effect.zipRight(seedDefaults(project))),
-                    ),
-                    Effect.provide(loggerLayer),
-                    Effect.as(HashSet.add(seen, sessionId)),
-                  ),
+          : seedDefaultsIfFresh(
+              { subscriptionStore, registerDefaults: seedDefaults },
+              sessionId,
+              project,
+            ).pipe(
+              Effect.catchAll((err) =>
+                Effect.logError(
+                  `commy plugin: subscription seed check failed for ${sessionId}: ${Predicate.isError(err) ? err.message : String(err)}`,
+                ).pipe(Effect.zipRight(seedDefaults(project))),
+              ),
+              Effect.provide(loggerLayer),
             )
+      // Restore then seed on the first action carrying this session_id: rehydrate
+      // a resumed set via the reactive latch, then seed a fresh session's
+      // defaults. Both idempotent, so this needs no once-per-session memo.
+      const ensureSessionSubscriptions = (
+        sessionId: SessionId,
+        project: ProjectSlug | undefined,
+      ): Effect.Effect<void> =>
+        feedSession(sessionId).pipe(Effect.zipRight(seedIfFresh(sessionId, project)))
       // Persisting is best-effort: a disk hiccup logs but never fails the
       // user's subscribe/unsubscribe call.
       const persistSessionSubscriptions = (sessionId: SessionId): Effect.Effect<void> =>

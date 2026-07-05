@@ -61,7 +61,6 @@ const fullEnv = {
   ZULIP_MINTER_API_KEY: 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk1',
   COMMY_BOT_NAME: 'myproject-concierge',
   COMMY_SUBSCRIBE: 'channel:home,channel:llm-feed',
-  CLAUDE_CODE_SESSION_ID: 'abcdef12-3456-4789-89ab-cdef01234567',
 } as const
 
 test('parseEnv fails with EnvConfigError when all required vars are missing', () =>
@@ -167,33 +166,6 @@ test('parseEnv rejects COMMY_SUBSCRIBE when value is a non-user_config ${...} pl
     }),
   ))
 
-// biome-ignore lint/suspicious/noTemplateCurlyInString: intentional — testing placeholder rejection
-test('parseEnv rejects CLAUDE_CODE_SESSION_ID when value is an unsubstituted ${...} placeholder', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const err = yield* expectParseEnvError({
-        ...fullEnv,
-        // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional — testing placeholder rejection
-        CLAUDE_CODE_SESSION_ID: '${CLAUDE_CODE_SESSION_ID}',
-      })
-      expect(err.message).toContain('CLAUDE_CODE_SESSION_ID')
-      expect(err.message.toLowerCase()).toMatch(/substitut|placeholder/)
-    }),
-  ))
-
-test('parseEnv rejects a set-but-invalid CLAUDE_CODE_SESSION_ID with a UUID message', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const err = yield* expectParseEnvError({
-        ...fullEnv,
-        CLAUDE_CODE_SESSION_ID: 'my-debug-session',
-      })
-      expect(err.message).toContain('CLAUDE_CODE_SESSION_ID')
-      expect(err.message).toContain('must be a UUID')
-      expect(err.message).toContain('my-debug-session')
-    }),
-  ))
-
 // --- COMMY_* env config ---
 // Optional COMMY_* keys are read from the canonical form; a value that is
 // present but invalid fails loudly rather than being silently ignored.
@@ -202,7 +174,6 @@ const requiredOnlyEnv = {
   ZULIP_SITE: 'https://zulip.example.com',
   ZULIP_MINTER_EMAIL: 'minter-bot@zulip.example.com',
   ZULIP_MINTER_API_KEY: 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk1',
-  CLAUDE_CODE_SESSION_ID: 'abcdef12-3456-4789-89ab-cdef01234567',
 } as const
 
 test('parseEnv reads botName from canonical COMMY_BOT_NAME', () =>
@@ -280,7 +251,6 @@ test('parseEnv returns required-only result when no optionals set', () =>
       )
       expect('botName' in parsed).toBe(false)
       expect('subscribe' in parsed).toBe(false)
-      expect('sessionId' in parsed).toBe(false)
     }),
   ))
 
@@ -295,7 +265,6 @@ test('parseEnv returns all fields when every var is present', () =>
       )
       expect(parsed.botName).toBe(decodeBotNameSync(fullEnv.COMMY_BOT_NAME))
       expect(parsed.subscribe).toBe(fullEnv.COMMY_SUBSCRIBE)
-      expect(parsed.sessionId as unknown as string).toBe(fullEnv.CLAUDE_CODE_SESSION_ID)
     }),
   ))
 

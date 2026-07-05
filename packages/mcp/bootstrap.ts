@@ -107,7 +107,6 @@ export interface ParsedEnv {
     readonly apiKey: Redacted.Redacted<ApiKeyType>
   }
   readonly subscribe?: string
-  readonly sessionId?: SessionId
   readonly project?: ProjectSlug
   /**
    * Window (in seconds) for the boot-time channel/thread catch-up
@@ -248,28 +247,6 @@ const optionalNonNegativeInt = (key: string): Config.Config<Option.Option<number
   )
 
 /**
- * `CLAUDE_CODE_SESSION_ID` is a host-env var (not `userConfig`): empty or
- * unset is `None`, an unsubstituted placeholder is a misconfig, and a present
- * value must be UUID-shaped (the `SessionId` brand invariant).
- */
-const optionalSessionId = (key: string): Config.Config<Option.Option<SessionId>> =>
-  Config.option(
-    Config.string(key).pipe(
-      Config.mapOrFail((value) => {
-        if (value.length === 0) {
-          return Either.left(ConfigError.MissingData([key], `${key} is unset`))
-        }
-        if (placeholderShape.test(value)) {
-          return Either.left(ConfigError.InvalidData([key], placeholderMessage(key, value)))
-        }
-        return Either.fromOption(parseSessionId(value), () =>
-          ConfigError.InvalidData([key], `${key} must be a UUID — received: ${value}`),
-        )
-      }),
-    ),
-  )
-
-/**
  * `COMMY_BOT_NAME` must be substrate-safe (lowercase ASCII, digits, dashes,
  * underscores; starts with a letter; max 40 chars) — the `BotName` brand
  * invariant.
@@ -332,7 +309,6 @@ const envConfig: Config.Config<ParsedEnv> = Config.all({
   subscribe: optionalUserConfig('COMMY_SUBSCRIBE'),
   project: optionalNonEmpty('COMMY_PROJECT'),
   catchupWindowSeconds: optionalNonNegativeInt('COMMY_CATCHUP_WINDOW_SECONDS'),
-  sessionId: optionalSessionId('CLAUDE_CODE_SESSION_ID'),
 }).pipe(
   Config.mapOrFail((raw) => {
     // Attach mode needs both halves: a key with no name has no identity to bind
@@ -357,10 +333,6 @@ const envConfig: Config.Config<ParsedEnv> = Config.all({
       ...Option.match(raw.subscribe, {
         onNone: () => ({}),
         onSome: (subscribe) => ({ subscribe }),
-      }),
-      ...Option.match(raw.sessionId, {
-        onNone: () => ({}),
-        onSome: (sessionId) => ({ sessionId }),
       }),
       ...Option.match(project, { onNone: () => ({}), onSome: (slug) => ({ project: slug }) }),
       ...Option.match(raw.catchupWindowSeconds, {
