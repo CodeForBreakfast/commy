@@ -480,7 +480,6 @@ export const makeProgram = (
           ? Effect.void
           : seedDefaultsIfFresh(
               { subscriptionStore, registerDefaults: seedDefaults },
-              sessionId,
               project,
             ).pipe(
               Effect.catchAll((err) =>
@@ -503,7 +502,7 @@ export const makeProgram = (
       const persistSessionSubscriptions = (sessionId: SessionId): Effect.Effect<void> =>
         parsed.botName !== undefined
           ? Effect.void
-          : persistSubscriptions(subscriptionStore, narrowSet, sessionId).pipe(
+          : persistSubscriptions(subscriptionStore, narrowSet).pipe(
               Effect.catchAll((err) =>
                 Effect.logError(
                   `commy plugin: subscription persist failed for ${sessionId}: ${Predicate.isError(err) ? err.message : String(err)}`,
@@ -715,9 +714,12 @@ export const makeProgram = (
  * `ZulipAdapterLive`'s own `parseEnv` reads it during the layer build and
  * the program fiber inherits the same source.
  *
- * `SessionIdLive` is merged here so the one shared `Deferred<SessionIdValue>`
- * is built once and memoized to a single instance for the whole MCP child —
- * setters and awaiters (sibling comms-k7cv work) reference the same deferred.
+ * `SessionIdLive` is `provideMerge`d into the subscription store so the one
+ * shared `Deferred<SessionIdValue>` is built once and memoized to a single
+ * instance for the whole MCP child: the store's build captures that deferred,
+ * and the same instance is re-exported so the program and every setter/awaiter
+ * reference it. A plain merge would leave the store's `SessionId` requirement
+ * unsatisfied — merge does not feed a sibling's output into a sibling's input.
  */
 const AppLayer: Layer.Layer<
   SubstrateAdapter | CursorStoreTag | SubscriptionStoreTag | SessionIdTag,
@@ -726,8 +728,7 @@ const AppLayer: Layer.Layer<
 > = Layer.mergeAll(
   ZulipAdapterLive,
   FileCursorStoreLive,
-  FileSubscriptionStoreLive,
-  SessionIdLive,
+  Layer.provideMerge(FileSubscriptionStoreLive, SessionIdLive),
   stderrLoggerLayer,
 )
 

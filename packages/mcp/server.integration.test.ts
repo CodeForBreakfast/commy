@@ -31,7 +31,6 @@ import { memoryAdapter } from '@commy/memory/adapter'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { Deferred, Effect, FiberId, Layer, Option, Stream } from 'effect'
-import type { SessionId } from './bootstrap.ts'
 import { parseEnv, parseSessionId, substrateAdapterLayer } from './bootstrap.ts'
 import type { CursorStore } from './cursor-store.ts'
 import { CursorStoreTag } from './cursor-store.ts'
@@ -60,14 +59,22 @@ const createMemoryCursorStore = (): CursorStore => {
   }
 }
 
-const createMemorySubscriptionStore = (): SubscriptionStore => {
+// The session-bound in-memory store: it resolves its id from the shared
+// session-id deferred — never a per-call argument — exactly as the live file
+// store does, so the harness exercises the real session-binding path.
+const createMemorySubscriptionStore = (
+  session: Deferred.Deferred<SessionIdValue>,
+): SubscriptionStore => {
   const store = new Map<string, ReadonlyArray<SubscribeIntent>>()
   return {
-    read: (id: SessionId) => Effect.sync(() => Option.fromNullable(store.get(id as string))),
-    write: (id: SessionId, intents: ReadonlyArray<SubscribeIntent>) =>
-      Effect.sync(() => {
-        store.set(id as string, intents)
-      }),
+    read: () =>
+      Effect.map(Deferred.await(session), (id) => Option.fromNullable(store.get(id as string))),
+    write: (intents: ReadonlyArray<SubscribeIntent>) =>
+      Effect.flatMap(Deferred.await(session), (id) =>
+        Effect.sync(() => {
+          store.set(id as string, intents)
+        }),
+      ),
   }
 }
 
@@ -129,8 +136,14 @@ interface AdapterOverrides {
   readonly subscribe?: string
   /** Override the cursor store (default: in-memory). */
   readonly cursorStore?: CursorStore
-  /** Override the subscription store (default: in-memory). */
+  /** Override the subscription store (default: in-memory, bound to the shared deferred). */
   readonly subscriptionStore?: SubscriptionStore
+  /**
+   * Override the shared session-id deferred (default: a fresh, uncompleted
+   * one). Pass a deferred a custom `subscriptionStore` also awaits, so the
+   * store resolves the same id the tool-call feeders complete.
+   */
+  readonly sessionIdDeferred?: Deferred.Deferred<SessionIdValue>
   /**
    * Boot in ephemeral mode (omits COMMY_BOT_NAME). First
    * attribution-producing tool call must include a `session_id`
@@ -312,10 +325,13 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
   const loggerLayer =
     overrides.capturedLogs !== undefined ? captureLogger(overrides.capturedLogs) : stderrLoggerLayer
   const cursorStore = overrides.cursorStore ?? createMemoryCursorStore()
-  const subscriptionStore = overrides.subscriptionStore ?? createMemorySubscriptionStore()
   // A known shared session-id deferred, so a test can assert the boot feeder
-  // (comms-k7cv) filled it from CLAUDE_CODE_SESSION_ID in the child env.
-  const sessionIdDeferred = Deferred.unsafeMake<SessionIdValue>(FiberId.none)
+  // filled it from CLAUDE_CODE_SESSION_ID in the child env, and can bind a
+  // custom store to the same deferred the tool-call feeders complete.
+  const sessionIdDeferred =
+    overrides.sessionIdDeferred ?? Deferred.unsafeMake<SessionIdValue>(FiberId.none)
+  const subscriptionStore =
+    overrides.subscriptionStore ?? createMemorySubscriptionStore(sessionIdDeferred)
   const runExit = Effect.runPromiseExit(
     makeProgram({
       transport: serverTransport,
@@ -1703,18 +1719,25 @@ test('ephemeral mode + project: distinct session_ids each register their own def
 
 test('ephemeral subscribe persists the live narrow set (defaults + new sub) under the session_id', async () => {
   const writes: { sid: string; intents: ReadonlyArray<SubscribeIntent> }[] = []
+  // The store resolves the id from the shared deferred the harness completes
+  // when the subscribe call feeds its session_id — proving the snapshot is
+  // keyed under that id with no id ever passed to write().
+  const sessionIdDeferred = Deferred.unsafeMake<SessionIdValue>(FiberId.none)
   const subscriptionStore: SubscriptionStore = {
     read: () => Effect.succeed(Option.none()),
-    write: (id, intents) =>
-      Effect.sync(() => {
-        writes.push({ sid: id as string, intents })
-      }),
+    write: (intents) =>
+      Effect.flatMap(Deferred.await(sessionIdDeferred), (id) =>
+        Effect.sync(() => {
+          writes.push({ sid: id as string, intents })
+        }),
+      ),
   }
   const sid = '5b5c81b5-0000-4000-8000-0000000000a1'
   const h = await buildHarness({
     ephemeral: true,
     seedChannels: ['home'],
     subscriptionStore,
+    sessionIdDeferred,
   })
   try {
     await callTool(h.client, 'subscribe', { target: 'channel:home', session_id: sid })

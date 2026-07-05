@@ -36,7 +36,6 @@ import {
   TestClock,
   TestContext,
 } from 'effect'
-import type { SessionId } from './bootstrap.ts'
 import { EnvConfigError, NotInRepo, parseEnv, substrateAdapterLayer } from './bootstrap.ts'
 import type { CursorStore } from './cursor-store.ts'
 import { CursorStoreTag } from './cursor-store.ts'
@@ -77,12 +76,15 @@ const inMemoryCursorStore = (): CursorStore => {
  * homedir untouched, the same reason the cursor store is faked here.
  */
 const inMemorySubscriptionStore = (): SubscriptionStore => {
-  const store = new Map<string, ReadonlyArray<SubscribeIntent>>()
+  // Session-bound, id-blind: the boot tests never drive a tool call, so this
+  // single-slot holder is never read/written — it exists only to satisfy the
+  // store Tag without touching the runner's homedir.
+  const slot: { value: Option.Option<ReadonlyArray<SubscribeIntent>> } = { value: Option.none() }
   return {
-    read: (id: SessionId) => Effect.sync(() => Option.fromNullable(store.get(id as string))),
-    write: (id: SessionId, intents: ReadonlyArray<SubscribeIntent>) =>
+    read: () => Effect.sync(() => slot.value),
+    write: (intents: ReadonlyArray<SubscribeIntent>) =>
       Effect.sync(() => {
-        store.set(id as string, intents)
+        slot.value = Option.some(intents)
       }),
   }
 }
