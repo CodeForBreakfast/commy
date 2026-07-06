@@ -26,6 +26,7 @@ import {
   readGitContext as defaultReadGitContext,
   deriveProject,
   type EnvConfigError,
+  envConfigError,
   parseEnv,
   readBootSessionId,
   SubstrateAdapter,
@@ -379,6 +380,19 @@ export const makeProgram = (
       // captured once from context (NodeContext.layer, provided in the
       // app layer) instead of self-providing a platform layer per call.
       const fs = yield* FileSystem.FileSystem
+      // COMMY_DOWNLOAD_DIR, when set, roots download_file's per-download temp
+      // dir in a directory the caller can Read (its scratchpad) instead of
+      // $TMPDIR. A set-but-missing/non-directory base is operator misconfig —
+      // validate once here at boot and fail loudly rather than per-call.
+      if (parsed.downloadDir !== undefined) {
+        const base = parsed.downloadDir
+        const baseStat = yield* fs.stat(base).pipe(Effect.option)
+        if (Option.isNone(baseStat) || baseStat.value.type !== 'Directory') {
+          return yield* envConfigError([
+            `COMMY_DOWNLOAD_DIR is set to ${base} but is not an existing directory`,
+          ])
+        }
+      }
       // Diagnostics route to STDERR via the logger layer provided at the
       // program edge — STDOUT is the MCP JSON-RPC channel and must stay
       // pristine. onAcquire (cache edge) self-provides this same layer.
@@ -624,7 +638,15 @@ export const makeProgram = (
         downloadFile: (urlPath) =>
           Effect.gen(function* () {
             const result = yield* adapter.downloadFile(urlPath)
-            const dir = yield* fs.makeTempDirectory({ prefix: 'commy-dl-' })
+            // A fresh unique temp dir per download — rooted at the validated
+            // COMMY_DOWNLOAD_DIR base when set, else $TMPDIR. Because the dir is
+            // created fresh each call, the attachment-derived basename can never
+            // clobber an existing file or follow a planted symlink.
+            const dir = yield* fs.makeTempDirectory(
+              parsed.downloadDir === undefined
+                ? { prefix: 'commy-dl-' }
+                : { directory: parsed.downloadDir, prefix: 'commy-dl-' },
+            )
             const filePath = join(dir, basename(urlPath))
             yield* fs.writeFile(filePath, result.data)
             return { filePath, contentType: result.contentType, size: result.data.byteLength }

@@ -1,5 +1,13 @@
 import { expect, test } from 'bun:test'
-import { readdirSync, readFileSync, rmSync, type Stats, statSync, writeFileSync } from 'node:fs'
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  type Stats,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { captureLogger, stderrLoggerLayer } from '@commy/core/logging'
@@ -612,6 +620,54 @@ test('download_file: server FileSystem builder writes the download to a real tem
     const written = readFileSync(filePath as string)
     expect(written.byteLength).toBe(0)
     rmSync(filePath as string, { force: true })
+  } finally {
+    await h.cleanup()
+  }
+})
+
+test('download_file: COMMY_DOWNLOAD_DIR roots the fresh temp dir under the configured base', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'commy-base-'))
+  const h = await buildHarness({
+    seedChannels: ['home'],
+    seedAgents: ['alice'],
+    seedHumans: ['carol'],
+    env: { COMMY_DOWNLOAD_DIR: base },
+  })
+  try {
+    const result = await callTool(h.client, 'download_file', {
+      url_path: '/user_uploads/2/56/image.png',
+    })
+    const content = expectStructured(result)
+    const filePath = content['file_path'] as string
+    // Lands in a fresh commy-dl-XXXX temp dir *under the configured base*,
+    // keeping the attachment basename — Read-reachable from the caller's
+    // scratchpad, and a fresh dir so the basename can never clobber.
+    expect(filePath.startsWith(`${base}/commy-dl-`)).toBe(true)
+    expect(filePath.endsWith('/image.png')).toBe(true)
+    expect(readFileSync(filePath).byteLength).toBe(0)
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+    await h.cleanup()
+  }
+})
+
+test('download_file: falls back to a $TMPDIR temp dir when COMMY_DOWNLOAD_DIR is unset', async () => {
+  const h = await buildHarness({
+    seedChannels: ['home'],
+    seedAgents: ['alice'],
+    seedHumans: ['carol'],
+  })
+  try {
+    const result = await callTool(h.client, 'download_file', {
+      url_path: '/user_uploads/2/56/image.png',
+    })
+    const content = expectStructured(result)
+    const filePath = content['file_path'] as string
+    // No base configured → the fresh commy-dl-XXXX temp dir sits under $TMPDIR,
+    // exactly as before this feature (no breaking change).
+    expect(filePath.startsWith(join(tmpdir(), 'commy-dl-'))).toBe(true)
+    expect(filePath.endsWith('/image.png')).toBe(true)
+    rmSync(filePath, { force: true })
   } finally {
     await h.cleanup()
   }

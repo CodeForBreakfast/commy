@@ -32,7 +32,7 @@ export class EnvConfigError extends Data.TaggedError('EnvConfigError')<{
   readonly issues: ReadonlyArray<string>
 }> {}
 
-const envConfigError = (issues: ReadonlyArray<string>): EnvConfigError =>
+export const envConfigError = (issues: ReadonlyArray<string>): EnvConfigError =>
   new EnvConfigError({
     issues,
     message: `commy plugin env config invalid:\n  - ${issues.join('\n  - ')}`,
@@ -135,6 +135,13 @@ export interface ParsedEnv {
    * server applies a default; set to 0 to disable the catch-up.
    */
   readonly catchupWindowSeconds?: number
+  /**
+   * Operator-set base directory (`COMMY_DOWNLOAD_DIR`) that `download_file`
+   * roots its per-download temp directory in, so the fetched attachment lands
+   * somewhere the caller can Read (its own scratchpad) rather than `$TMPDIR`.
+   * Unset → `$TMPDIR` fallback. Existence is validated once at boot.
+   */
+  readonly downloadDir?: string
 }
 
 const placeholderShape = /^\$\{[^}]+\}$/
@@ -330,6 +337,7 @@ const envConfig: Config.Config<ParsedEnv> = Config.all({
   subscribe: optionalUserConfig('COMMY_SUBSCRIBE'),
   project: optionalNonEmpty('COMMY_PROJECT'),
   catchupWindowSeconds: optionalNonNegativeInt('COMMY_CATCHUP_WINDOW_SECONDS'),
+  downloadDir: optionalNonEmpty('COMMY_DOWNLOAD_DIR'),
 }).pipe(
   Config.mapOrFail((raw) => {
     // Attach mode needs both halves: a key with no name has no identity to bind
@@ -359,6 +367,10 @@ const envConfig: Config.Config<ParsedEnv> = Config.all({
       ...Option.match(raw.catchupWindowSeconds, {
         onNone: () => ({}),
         onSome: (catchupWindowSeconds) => ({ catchupWindowSeconds }),
+      }),
+      ...Option.match(raw.downloadDir, {
+        onNone: () => ({}),
+        onSome: (downloadDir) => ({ downloadDir }),
       }),
     })
   }),
