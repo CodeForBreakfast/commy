@@ -1045,7 +1045,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     optionalTools.push({
       name: 'download_file',
       description:
-        'Download a Zulip user upload by its /user_uploads/... path (visible in message bodies). Writes the file to a temp path and returns {file_path, content_type, size}. Use the Read tool on the returned file_path to view images.',
+        'Download a Zulip user upload by its /user_uploads/... path (visible in message bodies). Writes the file into a fresh temp directory and returns {file_path, content_type, size}. The temp directory is created under the operator-set COMMY_DOWNLOAD_DIR when configured (so the file lands in a directory you can Read), otherwise under $TMPDIR. Use the Read tool on the returned file_path to view images.',
       inputSchema: {
         type: 'object',
         properties: {

@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { EventEmitter } from 'node:events'
+import { tmpdir } from 'node:os'
 import { captureLogger, stderrLoggerLayer } from '@commy/core/logging'
 import type {
   AcquiredIdentity,
@@ -243,6 +244,26 @@ test('main propagates EnvConfigError when env is invalid', async () => {
   expect(failureValue(exit)).toBeInstanceOf(EnvConfigError)
   expect(fake.calls.acquired).toEqual([])
   expect(fake.calls.closes.count).toBe(0)
+})
+
+test('main fails boot with EnvConfigError when COMMY_DOWNLOAD_DIR is set but not a directory', async () => {
+  const fake = buildFakeAdapter()
+  // Operator misconfig — validated once at boot (a FileSystem stat), so a
+  // bad base fails the whole boot loudly rather than surfacing per download.
+  const exit = await runProgram(
+    { ...validEnv, COMMY_DOWNLOAD_DIR: '/commy-download-dir-does-not-exist-xyz' },
+    fake.adapter,
+  )
+  const error = failureValue(exit)
+  expect(error).toBeInstanceOf(EnvConfigError)
+  expect((error as EnvConfigError).message).toContain('COMMY_DOWNLOAD_DIR')
+})
+
+test('main boots cleanly when COMMY_DOWNLOAD_DIR points at an existing directory', async () => {
+  const fake = buildFakeAdapter()
+  const exit = await runProgram({ ...validEnv, COMMY_DOWNLOAD_DIR: tmpdir() }, fake.adapter)
+  expect(Exit.isSuccess(exit)).toBe(true)
+  expect(fake.calls.acquired).toEqual(['myproject-concierge'])
 })
 
 test('main writes acquire failure to stderr in the canonical format, fails boot, still closes adapter', async () => {
