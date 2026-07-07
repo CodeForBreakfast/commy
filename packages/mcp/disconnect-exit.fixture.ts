@@ -38,7 +38,6 @@ const inMemoryCursorStore = {
 const inMemorySubscriptionStore = {
   read: () => Effect.succeed(Option.none()),
   write: () => Effect.void,
-  advanceCursor: () => Effect.void,
 }
 
 /**

@@ -41,9 +41,9 @@ export interface QueueStateHooks {
  * layer builds these only when `botName` is unset) — a persistent bot passes no
  * hooks and keeps the server's default queue window.
  *
- * The session id is resolved NON-BLOCKING, mirroring the subscription store's
- * `advanceCursor`: register and advance fire on the producer's hot poll path,
- * so a blocking `Deferred.await` would park inbound delivery on an unfed id.
+ * The session id is resolved NON-BLOCKING: register and advance fire on the
+ * producer's hot poll path, so a blocking `Deferred.await` would park inbound
+ * delivery on an unfed id.
  * Poll instead — persist on `Some`, no-op on `None` (id not known yet, so
  * there is nothing to key against and the resume this feeds has not happened).
  * Every write swallows its own failures: persistence is best-effort and must

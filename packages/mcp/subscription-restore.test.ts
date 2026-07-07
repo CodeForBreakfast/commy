@@ -18,7 +18,6 @@ const sortIntents = (intents: ReadonlyArray<SubscribeIntent>): ReadonlyArray<Sub
 const stubStore = (read: SubscriptionStore['read']): SubscriptionStore => ({
   read,
   write: () => Effect.void,
-  advanceCursor: () => Effect.void,
 })
 
 // The seed half of the old restore-or-seed, split out for the reactive core:

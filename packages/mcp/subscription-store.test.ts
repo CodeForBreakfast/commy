@@ -32,7 +32,7 @@ const boundStore = (dir: string, id: SessionId): SubscriptionStore =>
     Effect.gen(function* () {
       const session = yield* Deferred.make<SessionId>()
       yield* Deferred.succeed(session, id)
-      return createFileSubscriptionStore({ dir, fs, cursorDir: join(dir, 'cursors'), session })
+      return createFileSubscriptionStore({ dir, fs, session })
     }),
   )
 
@@ -176,7 +176,6 @@ describe('createFileSubscriptionStore', () => {
       const store = createFileSubscriptionStore({
         dir: tmp.path,
         fs,
-        cursorDir: join(tmp.path, 'cursors'),
         session,
       })
       writeFileSync(join(tmp.path, `${SID_A}.json`), JSON.stringify([{ kind: 'mentions' }]))
