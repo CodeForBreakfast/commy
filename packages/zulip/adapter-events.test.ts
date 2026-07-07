@@ -142,6 +142,7 @@ const buildAdapterWithQueueConfig = (
     readonly onQueueRegister?: (queue: QueueState) => Effect.Effect<void>
     readonly onQueueAdvance?: (lastEventId: number) => Effect.Effect<void>
     readonly resumeQueue?: () => Effect.Effect<Option.Option<QueueState>>
+    readonly onResumeOutcome?: (queueReplayed: boolean) => Effect.Effect<void>
   },
 ): Effect.Effect<ZulipAdapter, IdentityError | UnknownIdentity> =>
   Effect.gen(function* () {
@@ -415,6 +416,99 @@ effectTest(
       expect(registers).toHaveLength(1)
       const polls = yield* eventPolls(stub)
       expect(polls[0]?.url.searchParams.get('queue_id')).toBe('queue-1')
+    }),
+  { layer: TestContext.TestContext },
+)
+
+// Resume-verdict wiring (the ephemeral history-catch-up fallback's rendezvous).
+// A surviving persisted queue whose resume-poll succeeds reports `true`, so the
+// seat's onAcquire skips history catch-up — the pump already replayed the
+// backlog, and catch-up would double-deliver.
+effectTest(
+  'inbox.events reports onResumeOutcome(true) when the persisted queue resume-poll succeeds',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const outcomes: boolean[] = []
+      const adapter = yield* buildAdapterWithQueueConfig(stub, {
+        resumeQueue: () => Effect.succeed(Option.some({ queueId: 'resumed-q', lastEventId: 41 })),
+        onResumeOutcome: (replayed) => Effect.sync(() => void outcomes.push(replayed)),
+      })
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        { body: { result: 'success', events: [messageEvent(42, aZulipMessage({ id: 100 }))] } },
+        { hang: true },
+      ])
+      const queue = yield* eventQueue(adapter)
+      yield* Queue.take(queue)
+      expect(outcomes).toEqual([true])
+    }),
+  { layer: TestContext.TestContext },
+)
+
+// A persisted queue that Zulip has since dropped (idle timeout exceeded) fails
+// the resume-poll with BAD_EVENT_QUEUE_ID: report `false` so the seat falls
+// back to history catch-up for the messages the dead queue can no longer
+// replay. (Reactions are unrecoverable this way — the accepted >24h limit.)
+effectTest(
+  'inbox.events reports onResumeOutcome(false) when the persisted queue is dead',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const outcomes: boolean[] = []
+      const adapter = yield* buildAdapterWithQueueConfig(stub, {
+        resumeQueue: () => Effect.succeed(Option.some({ queueId: 'dead-q', lastEventId: 41 })),
+        onResumeOutcome: (replayed) => Effect.sync(() => void outcomes.push(replayed)),
+      })
+      // Fresh register for the re-registration after the dead resume-poll.
+      yield* seedRegister(stub)
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        {
+          body: { result: 'error', code: 'BAD_EVENT_QUEUE_ID', msg: 'queue expired' },
+          status: 400,
+        },
+        {
+          body: {
+            result: 'success',
+            events: [messageEvent(5, aZulipMessage({ content: 'live' }))],
+          },
+        },
+        { hang: true },
+      ])
+      const queue = yield* eventQueue(adapter)
+      yield* Queue.take(queue)
+      expect(outcomes).toEqual([false])
+    }),
+  { layer: TestContext.TestContext },
+)
+
+// No persisted resume-state (fresh seat / nothing on disk): report `false`
+// immediately — before any poll — so a first-ever seat still runs its normal
+// boot catch-up. The producer never owns the verdict here (there was no resume).
+effectTest(
+  'inbox.events reports onResumeOutcome(false) immediately when resumeQueue yields None',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const outcomes: boolean[] = []
+      const adapter = yield* buildAdapterWithQueueConfig(stub, {
+        resumeQueue: () => Effect.succeedNone,
+        onResumeOutcome: (replayed) => Effect.sync(() => void outcomes.push(replayed)),
+      })
+      yield* seedRegister(stub)
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        {
+          body: {
+            result: 'success',
+            events: [messageEvent(5, aZulipMessage({ content: 'fresh' }))],
+          },
+        },
+        { hang: true },
+      ])
+      const queue = yield* eventQueue(adapter)
+      // Taking the first event proves the producer materialised; the verdict was
+      // reported as it did — a fresh register, not a resume, so `false` and once.
+      yield* Queue.take(queue)
+      expect(outcomes).toEqual([false])
     }),
   { layer: TestContext.TestContext },
 )

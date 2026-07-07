@@ -27,6 +27,7 @@ import {
 import type { NarrowSet } from './narrow-set.ts'
 import { buildQueueStateHooks } from './queue-state-hooks.ts'
 import { QueueStateStoreTag } from './queue-state-store.ts'
+import { ResumeOutcome as ResumeOutcomeTag } from './resume-outcome.ts'
 import { SessionId as SessionIdTag } from './session-id.ts'
 import type { SubscribeIntent, SubscribeTokenError } from './subscribe-parser.ts'
 import { intentToTarget, parseSubscribeTarget } from './subscribe-parser.ts'
@@ -622,7 +623,7 @@ export const substrateAdapterLayer = <E, R>(
 export const ZulipAdapterLive: Layer.Layer<
   SubstrateAdapter,
   EnvConfigError,
-  HttpClient.HttpClient | QueueStateStoreTag | SessionIdTag
+  HttpClient.HttpClient | QueueStateStoreTag | SessionIdTag | ResumeOutcomeTag
 > = substrateAdapterLayer(
   Effect.gen(function* () {
     const parsed = yield* parseEnv
@@ -638,6 +639,7 @@ export const ZulipAdapterLive: Layer.Layer<
             store: yield* QueueStateStoreTag,
             session: yield* SessionIdTag,
             idleTimeoutSecs: parsed.queueIdleTimeoutSecs,
+            resumeOutcome: yield* ResumeOutcomeTag,
           })
         : undefined
     return yield* zulipAdapter({
@@ -652,6 +654,7 @@ export const ZulipAdapterLive: Layer.Layer<
             onQueueRegister: queueHooks.onQueueRegister,
             onQueueAdvance: queueHooks.onQueueAdvance,
             resumeQueue: queueHooks.resumeQueue,
+            onResumeOutcome: queueHooks.onResumeOutcome,
           }),
     })
   }),

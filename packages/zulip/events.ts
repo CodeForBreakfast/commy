@@ -218,6 +218,18 @@ export interface EventsConfig {
    * and swallowing live in the closure.
    */
   readonly onQueueAdvance?: (lastEventId: number) => Effect.Effect<void>
+  /**
+   * One-shot hook reporting the outcome of the FIRST poll: `true` when it
+   * succeeds, `false` when it hits `BAD_EVENT_QUEUE_ID`. The adapter wires this
+   * only on a genuine resume (an `initialQueue` sourced from persisted
+   * queue-state), so `true` means "the surviving queue replayed the downtime
+   * backlog natively" and `false` means "the persisted queue was dead — the
+   * seat must fall back to history catch-up". Fired at most once; a later
+   * mid-life `BAD_EVENT_QUEUE_ID` never re-reports. Total by contract
+   * (`Effect<void>`); the rendezvous (a shared `Deferred`, first write wins)
+   * lives in the closure.
+   */
+  readonly onResumeOutcome?: (queueReplayed: boolean) => Effect.Effect<void>
 }
 
 const registerResponseSchema = Schema.Struct({
@@ -666,6 +678,20 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
         needsBreadcrumb: false,
       })
 
+      // Resume-outcome one-shot. The FIRST poll's terminal outcome (success vs
+      // BAD_EVENT_QUEUE_ID) is the seat's resume verdict; transient errors
+      // retry underneath so a network blip never reports a false 'missed'. A
+      // later mid-life BAD_EVENT_QUEUE_ID must not re-report, so the report is
+      // latched. No-op when the caller wired no hook (the non-resume path).
+      const resumeReported = yield* Ref.make(false)
+      const reportResume = (queueReplayed: boolean): Effect.Effect<void> => {
+        const onResumeOutcome = config.onResumeOutcome
+        if (onResumeOutcome === undefined) return Effect.void
+        return Ref.getAndSet(resumeReported, true).pipe(
+          Effect.flatMap((already) => (already ? Effect.void : onResumeOutcome(queueReplayed))),
+        )
+      }
+
       const recordTransientFailure = (cause: unknown): Effect.Effect<void> =>
         Ref.modify(breadcrumb, (s) => {
           const consecutiveFailures = s.consecutiveFailures + 1
@@ -697,6 +723,7 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
       )
 
       const handleBadQueue: Effect.Effect<StepResult> = Effect.gen(function* () {
+        yield* reportResume(false)
         const since = yield* watermark.get()
         if (config.replay === undefined || Option.isNone(since)) {
           return [[], undefined] as const
@@ -725,6 +752,10 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
             queue_id: currentQueue.queueId,
             last_event_id: currentQueue.lastEventId,
           })
+          // The poll returned, so the queue this step polled is live. On the
+          // first poll that is the resume verdict: the surviving queue is
+          // replaying the backlog — report it so history catch-up stands down.
+          yield* reportResume(true)
           const directory = res.events.length > 0 ? yield* config.resolveDirectory() : undefined
           let maxId = currentQueue.lastEventId
           const mapped: InboundEvent[] = []

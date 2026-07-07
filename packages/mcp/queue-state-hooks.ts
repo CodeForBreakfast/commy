@@ -25,6 +25,14 @@ export interface QueueStateHooks {
    * degrades to a fresh register rather than stranding the seat).
    */
   readonly resumeQueue: () => Effect.Effect<Option.Option<QueueState>>
+  /**
+   * Resume-verdict sink handed to the adapter: completes the shared
+   * {@link ResumeOutcome} deferred the seat's `onAcquire` awaits. `true` when
+   * the surviving queue's resume-poll replayed the backlog (skip catch-up),
+   * `false` on a dead/absent queue (run catch-up). First write wins — the
+   * deferred's own idempotency; not session-keyed (one verdict per boot).
+   */
+  readonly onResumeOutcome: (queueReplayed: boolean) => Effect.Effect<void>
 }
 
 /**
@@ -45,8 +53,9 @@ export const buildQueueStateHooks = (deps: {
   readonly store: QueueStateStore
   readonly session: Deferred.Deferred<SessionIdValue>
   readonly idleTimeoutSecs: number
+  readonly resumeOutcome: Deferred.Deferred<boolean>
 }): QueueStateHooks => {
-  const { store, session, idleTimeoutSecs } = deps
+  const { store, session, idleTimeoutSecs, resumeOutcome } = deps
   const withSession = (use: (id: SessionIdValue) => Effect.Effect<void>): Effect.Effect<void> =>
     Deferred.poll(session).pipe(
       Effect.flatMap(
@@ -76,5 +85,7 @@ export const buildQueueStateHooks = (deps: {
           }),
         ),
       ),
+    onResumeOutcome: (queueReplayed) =>
+      Deferred.succeed(resumeOutcome, queueReplayed).pipe(Effect.asVoid),
   }
 }

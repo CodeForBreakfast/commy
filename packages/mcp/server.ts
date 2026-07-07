@@ -46,6 +46,7 @@ import type { NarrowSet } from './narrow-set.ts'
 import { createNarrowSet } from './narrow-set.ts'
 import { FileQueueStateStoreLive, type QueueStateStoreTag } from './queue-state-store.ts'
 import { raceReleaseAgainstTimeout } from './release-shutdown.ts'
+import { ResumeOutcomeLive, ResumeOutcome as ResumeOutcomeTag } from './resume-outcome.ts'
 import { SessionIdLive, SessionId as SessionIdTag } from './session-id.ts'
 import type { SubscribeIntent, SubscribeTokenError } from './subscribe-parser.ts'
 import { intentToTarget } from './subscribe-parser.ts'
@@ -344,6 +345,7 @@ export const makeProgram = (
   | CursorStoreTag
   | SubscriptionStoreTag
   | SessionIdTag
+  | ResumeOutcomeTag
   | FileSystem.FileSystem
   | CommandExecutor.CommandExecutor
 > =>
@@ -365,6 +367,11 @@ export const makeProgram = (
       // seat with no boot-env source keeps the gap until another zero-action
       // source exists. Idempotent first-writer-wins.
       const sessionIdDeferred = yield* SessionIdTag
+      // The queue-resume verdict the ephemeral catch-up gates on. Completed by
+      // the adapter's resume wiring (false for a fresh/dead queue, true when the
+      // surviving queue replayed the backlog); awaited once per session in the
+      // ephemeral onAcquire hook below.
+      const resumeOutcome = yield* ResumeOutcomeTag
       yield* Effect.flatMap(
         readBootSessionId,
         Option.match({
@@ -536,11 +543,21 @@ export const makeProgram = (
             )
 
       // Ephemeral-mode post-acquire hook: restore (or
-      // seed) the narrow set on the first action of this session_id, then
-      // replay missed @-mentions. The cache runs this via ensure-bound's own
-      // runtime edge; the composed Effect self-provides the logger so
-      // diagnostics stay off the MCP STDOUT channel. Undefined in persistent
-      // mode (which uses its own post-acquire catch-up below).
+      // seed) the narrow set on the first action of this session_id, then —
+      // ONLY when the queue-resume failed — replay missed history. The cache
+      // runs this via ensure-bound's own runtime edge; the composed Effect
+      // self-provides the logger so diagnostics stay off the MCP STDOUT channel.
+      // Undefined in persistent mode (which uses its own post-acquire catch-up
+      // below).
+      //
+      // The catch-up is CONDITIONAL on the queue-resume verdict. A surviving
+      // queue (true) means the pump is replaying the entire downtime backlog
+      // natively — messages, reactions, mentions — so running REST catch-up too
+      // would double-deliver every missed message. Only a dead/absent queue
+      // (false) falls back to history: mentions (cursor-bounded) plus
+      // channels/threads (window-bounded) over the seat's restored runtime
+      // intents. Reactions are unrecoverable via history — the accepted
+      // >24h-downtime limit.
       const ephemeralOnAcquire =
         parsed.botName === undefined
           ? (
@@ -549,14 +566,33 @@ export const makeProgram = (
               sessionId: SessionId,
             ): Effect.Effect<void> =>
               ensureSessionSubscriptions(sessionId, project).pipe(
-                Effect.zipRight(
-                  catchUpMentions({
+                Effect.zipRight(Deferred.await(resumeOutcome)),
+                Effect.flatMap((queueReplayed) => {
+                  if (queueReplayed) return Effect.void
+                  const identityId = acquired.identity.id
+                  const windowSeconds =
+                    parsed.catchupWindowSeconds ?? DEFAULT_CATCHUP_WINDOW_SECONDS
+                  const catchUpIntents = narrowSet.intents()
+                  return catchUpMentions({
                     cursorStore,
                     inbox: adapter.inbox,
-                    identityId: acquired.identity.id,
+                    identityId,
                     notifier,
-                  }).pipe(Effect.catchAllCause(logCatchUpFailure('ephemeral mentions'))),
-                ),
+                  }).pipe(
+                    Effect.catchAllCause(logCatchUpFailure('ephemeral mentions')),
+                    Effect.zipRight(
+                      windowSeconds > 0 && catchUpIntents.length > 0
+                        ? catchUpChannels({
+                            intents: catchUpIntents,
+                            history: adapter.history,
+                            notifier,
+                            botIdentityId: identityId,
+                            windowSeconds,
+                          }).pipe(Effect.catchAllCause(logCatchUpFailure('ephemeral channels')))
+                        : Effect.void,
+                    ),
+                  )
+                }),
                 Effect.provide(loggerLayer),
               )
           : undefined
@@ -785,7 +821,12 @@ export const makeProgram = (
  * provided once (feeding the adapter's ephemeral persistence hooks).
  */
 const AppLayer: Layer.Layer<
-  SubstrateAdapter | CursorStoreTag | SubscriptionStoreTag | SessionIdTag | QueueStateStoreTag,
+  | SubstrateAdapter
+  | CursorStoreTag
+  | SubscriptionStoreTag
+  | SessionIdTag
+  | QueueStateStoreTag
+  | ResumeOutcomeTag,
   EnvConfigError,
   HttpClient.HttpClient | FileSystem.FileSystem
 > = Layer.mergeAll(
@@ -793,7 +834,11 @@ const AppLayer: Layer.Layer<
   FileCursorStoreLive,
   FileSubscriptionStoreLive,
   stderrLoggerLayer,
-).pipe(Layer.provideMerge(FileQueueStateStoreLive), Layer.provideMerge(SessionIdLive))
+).pipe(
+  Layer.provideMerge(FileQueueStateStoreLive),
+  Layer.provideMerge(SessionIdLive),
+  Layer.provideMerge(ResumeOutcomeLive),
+)
 
 /**
  * Production dependency bundle: the config source (read from
@@ -829,6 +874,7 @@ export const MainLive: Layer.Layer<
   | CursorStoreTag
   | SubscriptionStoreTag
   | SessionIdTag
+  | ResumeOutcomeTag
   | HttpClient.HttpClient
   | FileSystem.FileSystem
   | CommandExecutor.CommandExecutor,

@@ -122,7 +122,12 @@ effectTest(
       // state — CC injects the session id at boot), so the write-half hooks can
       // key against it from the very first register.
       yield* Deferred.succeed(session, sid(SID))
-      const hooks = buildQueueStateHooks({ store, session, idleTimeoutSecs: 3600 })
+      const hooks = buildQueueStateHooks({
+        store,
+        session,
+        idleTimeoutSecs: 3600,
+        resumeOutcome: yield* Deferred.make<boolean>(),
+      })
 
       const stub = yield* makeStubHttpClient
       yield* seedUsers(stub)
@@ -184,7 +189,12 @@ effectTest(
       // and leave the store untouched (nothing to key against).
       const store = yield* tmpQueueStore()
       const session = yield* Deferred.make<SessionId>()
-      const hooks = buildQueueStateHooks({ store, session, idleTimeoutSecs: 3600 })
+      const hooks = buildQueueStateHooks({
+        store,
+        session,
+        idleTimeoutSecs: 3600,
+        resumeOutcome: yield* Deferred.make<boolean>(),
+      })
 
       const outcome = yield* hooks
         .onQueueRegister({ queueId: 'queue-1', lastEventId: 0 })
@@ -212,7 +222,12 @@ effectTest(
       // filled the shared id, so the read-half resolver can key against it.
       yield* store.write(sid(SID), { queueId: 'resumed-q', lastEventId: 41 })
       yield* Deferred.succeed(session, sid(SID))
-      const hooks = buildQueueStateHooks({ store, session, idleTimeoutSecs: 3600 })
+      const hooks = buildQueueStateHooks({
+        store,
+        session,
+        idleTimeoutSecs: 3600,
+        resumeOutcome: yield* Deferred.make<boolean>(),
+      })
 
       const stub = yield* makeStubHttpClient
       yield* seedUsers(stub)
@@ -280,7 +295,12 @@ effectTest(
       const session = yield* Deferred.make<SessionId>()
       yield* store.write(sid(SID), { queueId: 'resumed-q', lastEventId: 41 })
       yield* Deferred.succeed(session, sid(SID))
-      const hooks = buildQueueStateHooks({ store, session, idleTimeoutSecs: 3600 })
+      const hooks = buildQueueStateHooks({
+        store,
+        session,
+        idleTimeoutSecs: 3600,
+        resumeOutcome: yield* Deferred.make<boolean>(),
+      })
 
       expect(yield* hooks.resumeQueue()).toEqual(
         Option.some({ queueId: 'resumed-q', lastEventId: 41 }),
@@ -296,7 +316,12 @@ effectTest(
       const store = yield* tmpQueueStore()
       const session = yield* Deferred.make<SessionId>()
       yield* Deferred.succeed(session, sid(SID))
-      const hooks = buildQueueStateHooks({ store, session, idleTimeoutSecs: 3600 })
+      const hooks = buildQueueStateHooks({
+        store,
+        session,
+        idleTimeoutSecs: 3600,
+        resumeOutcome: yield* Deferred.make<boolean>(),
+      })
 
       expect(Option.isNone(yield* hooks.resumeQueue())).toBe(true)
     }),
@@ -312,7 +337,12 @@ effectTest(
       // source has delivered the id yet.
       const store = yield* tmpQueueStore()
       const session = yield* Deferred.make<SessionId>()
-      const hooks = buildQueueStateHooks({ store, session, idleTimeoutSecs: 3600 })
+      const hooks = buildQueueStateHooks({
+        store,
+        session,
+        idleTimeoutSecs: 3600,
+        resumeOutcome: yield* Deferred.make<boolean>(),
+      })
 
       const outcome = yield* hooks.resumeQueue().pipe(Effect.timeoutOption('2 seconds'))
 

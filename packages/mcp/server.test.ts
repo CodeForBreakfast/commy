@@ -48,6 +48,7 @@ import type { IdentityCache } from './identity-cache.ts'
 // re-exports the `ZulipAdapter` type so this file names no `@commy/zulip` module
 // directly.
 import { completeAsSubstrate, type ZulipAdapter } from './memory-substrate.ts'
+import { ResumeOutcomeLive } from './resume-outcome.ts'
 import { clientDisconnect, forkIdleSweep, makeProgram, type ProgramParams } from './server.ts'
 import { SessionIdLive } from './session-id.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
@@ -113,6 +114,7 @@ const runProgram = (
             Layer.succeed(CursorStoreTag, inMemoryCursorStore()),
             Layer.succeed(SubscriptionStoreTag, inMemorySubscriptionStore()),
             SessionIdLive,
+            ResumeOutcomeLive,
             loggerLayer,
           ),
           testPlatformLayer(env),

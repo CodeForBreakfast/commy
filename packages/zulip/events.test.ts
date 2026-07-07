@@ -525,6 +525,126 @@ test(
   ITERATOR_TEST_TIMEOUT_MS,
 )
 
+// Resume-outcome one-shot: the read-half's rendezvous. When the adapter
+// resumed from a persisted queue it wires onResumeOutcome so the seat's
+// history catch-up runs ONLY when the queue was dead — a surviving queue
+// replays the backlog natively and catch-up would double-deliver.
+test(
+  'producer fires onResumeOutcome(true) when the resume-poll succeeds',
+  () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const outcomes: boolean[] = []
+        const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
+          http: fakeHttp({
+            // initialQueue supplied → no register; the first GET is the resume poll.
+            onGet: () => ({
+              result: 'success',
+              events: [{ id: 5, type: 'message', message: aChannelMessage() }],
+            }),
+          }),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
+          mode: 'all',
+          boundIdentity: HERMES,
+          messageRefCache: createMessageRefCache(),
+          initialQueue: { queueId: 'q-resumed', lastEventId: 4 },
+          onResumeOutcome: (replayed) => Effect.sync(() => void outcomes.push(replayed)),
+        }
+        yield* drainOne(config)
+        expect(outcomes).toEqual([true])
+      }),
+    ),
+  ITERATOR_TEST_TIMEOUT_MS,
+)
+
+test(
+  'producer fires onResumeOutcome(false) when the resume-poll hits BAD_EVENT_QUEUE_ID',
+  () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const outcomes: boolean[] = []
+        let getCalls = 0
+        const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
+          http: fakeHttp({
+            onPost: () => ({ result: 'success', queue_id: 'q-fresh', last_event_id: 0 }),
+            onGet: () => {
+              getCalls += 1
+              if (getCalls === 1) {
+                // The persisted queue is gone — resume poll fails.
+                throw new ZulipApiError({
+                  message: 'queue expired',
+                  status: 400,
+                  code: 'BAD_EVENT_QUEUE_ID',
+                  retryAfter: undefined,
+                })
+              }
+              return {
+                result: 'success',
+                events: [{ id: 9, type: 'message', message: aChannelMessage() }],
+              }
+            },
+          }),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
+          mode: 'all',
+          boundIdentity: HERMES,
+          messageRefCache: createMessageRefCache(),
+          initialQueue: { queueId: 'q-dead', lastEventId: 4 },
+          onResumeOutcome: (replayed) => Effect.sync(() => void outcomes.push(replayed)),
+        }
+        yield* drainOne(config)
+        expect(outcomes).toEqual([false])
+      }),
+    ),
+  ITERATOR_TEST_TIMEOUT_MS,
+)
+
+test(
+  'producer fires onResumeOutcome at most once — a mid-life BAD_EVENT_QUEUE_ID does not re-report',
+  () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const outcomes: boolean[] = []
+        let getCalls = 0
+        const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
+          http: fakeHttp({
+            onPost: () => ({ result: 'success', queue_id: 'q-fresh', last_event_id: 0 }),
+            onGet: () => {
+              getCalls += 1
+              // 1st poll succeeds (resume alive → true); 2nd poll dies mid-life;
+              // 3rd poll recovers. The mid-life death must NOT re-report.
+              if (getCalls === 2) {
+                throw new ZulipApiError({
+                  message: 'queue expired',
+                  status: 400,
+                  code: 'BAD_EVENT_QUEUE_ID',
+                  retryAfter: undefined,
+                })
+              }
+              return {
+                result: 'success',
+                events: [
+                  { id: getCalls, type: 'message', message: aChannelMessage({ id: getCalls }) },
+                ],
+              }
+            },
+          }),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
+          mode: 'all',
+          boundIdentity: HERMES,
+          messageRefCache: createMessageRefCache(),
+          initialQueue: { queueId: 'q-resumed', lastEventId: 0 },
+          onResumeOutcome: (replayed) => Effect.sync(() => void outcomes.push(replayed)),
+        }
+        yield* drainN(config, 2)
+        expect(outcomes).toEqual([true])
+      }),
+    ),
+  ITERATOR_TEST_TIMEOUT_MS,
+)
+
 test(
   'producer re-persists the new queue via onQueueRegister after BAD_EVENT_QUEUE_ID',
   () =>

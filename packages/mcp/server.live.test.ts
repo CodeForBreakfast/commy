@@ -51,6 +51,7 @@ import {
 } from 'effect'
 import { parseEnv, substrateAdapterLayer } from './bootstrap.ts'
 import { FileCursorStoreLive } from './cursor-store.ts'
+import { ResumeOutcomeLive } from './resume-outcome.ts'
 import { makeProgram } from './server.ts'
 import { SessionIdLive } from './session-id.ts'
 import { FileSubscriptionStoreLive } from './subscription-store.ts'
@@ -210,6 +211,7 @@ const buildHarness = (
             // awaits it — mergeAll won't wire a sibling's output to a sibling's
             // input, so a plain merge leaves the store's SessionId unsatisfied.
             Layer.provideMerge(FileSubscriptionStoreLive, SessionIdLive),
+            ResumeOutcomeLive,
             stderrLoggerLayer,
           ),
           testPlatformLayer(mainEnv),
