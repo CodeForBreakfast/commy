@@ -287,6 +287,148 @@ effectTest(
   { layer: TestContext.TestContext },
 )
 
+// ─── The COMMY_SUBSCRIBE clobber regression (comms-us7t) ──────────
+// The fleet's real resume shape: CC re-passes COMMY_SUBSCRIBE on every boot, so
+// server.ts runs an eager subscribe-time register BEFORE the producer resumes
+// (subscribeFromEnv at boot, pump forked after). That eager register must not
+// let its onQueueRegister store-write clobber the surviving queue-state the
+// producer is about to resume from — otherwise the seat silently registers a
+// fresh empty queue and loses its entire downtime backlog.
+effectTest(
+  'an eager subscribe-time register on resume boot does not clobber the surviving queue — the backlog replays off it',
+  () =>
+    Effect.gen(function* () {
+      const store = yield* tmpQueueStore()
+      const session = yield* Deferred.make<SessionId>()
+      const resumeOutcome = yield* Deferred.make<boolean>()
+      // A prior life's surviving queue-state on disk; the boot-env feeder has
+      // filled the shared id (the fleet's real state).
+      yield* store.write(sid(SID), { queueId: 'resumed-q', lastEventId: 41 })
+      yield* Deferred.succeed(session, sid(SID))
+      const hooks = buildQueueStateHooks({ store, session, idleTimeoutSecs: 3600, resumeOutcome })
+
+      const stub = yield* makeStubHttpClient
+      yield* seedUsers(stub)
+      yield* seedRegenerate(stub)
+      const adapter = yield* zulipAdapter({
+        realmUrl: yield* RealmUrl(REALM_URL).pipe(Effect.orDie),
+        minterEmail: yield* BotEmail('minter@example.com').pipe(Effect.orDie),
+        minterApiKey: Redacted.make(yield* ApiKey('minter-key').pipe(Effect.orDie)),
+        queueIdleTimeoutSecs: hooks.queueIdleTimeoutSecs,
+        onQueueRegister: hooks.onQueueRegister,
+        onQueueAdvance: hooks.onQueueAdvance,
+        resumeQueue: hooks.resumeQueue,
+        onResumeOutcome: hooks.onResumeOutcome,
+      }).pipe(Effect.provideService(HttpClient.HttpClient, stub.client))
+      yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+
+      // The eager COMMY_SUBSCRIBE register: a subscribe BEFORE the producer
+      // resumes, doing its own POST /register → queue-1. Its onQueueRegister
+      // write must be suppressed so it cannot overwrite the surviving state.
+      yield* seedRegister(stub)
+      yield* seedSubscribeOk(stub)
+      yield* adapter.inbox.subscribe(decodeChannelNameSync('general'))
+
+      // Surviving state intact — the eager register's queue-1 did not clobber it.
+      expect(yield* store.read(sid(SID))).toEqual(
+        Option.some({ queueId: 'resumed-q', lastEventId: 41 }),
+      )
+
+      // The downtime backlog the surviving server-side queue buffered.
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        {
+          body: {
+            result: 'success',
+            events: [
+              messageEvent(42),
+              reactionEvent(43, 'add', 142, 'thumbs_up', MAINTAINER.user_id),
+            ],
+          },
+        },
+        { hang: true },
+      ])
+      const queue = yield* Queue.unbounded<InboundEvent>()
+      yield* Effect.forkScoped(
+        adapter.inbox.events().pipe(
+          Stream.tap((event) => Queue.offer(queue, event)),
+          Stream.runDrain,
+        ),
+      )
+      const first = yield* Queue.take(queue)
+      const second = yield* Queue.take(queue)
+
+      // The resume-poll targets the SURVIVING queue at its stored cursor — proof
+      // the eager register's queue-1 did not shadow the resume candidate.
+      const polls = (yield* stub.captured).filter(
+        (r) => r.method === 'GET' && r.url.pathname === '/api/v1/events',
+      )
+      expect(polls[0]?.url.searchParams.get('queue_id')).toBe('resumed-q')
+      expect(polls[0]?.url.searchParams.get('last_event_id')).toBe('41')
+      // The backlog replays — message then the reaction only native replay recovers.
+      expect(first.kind).toBe('message-posted')
+      expect(second.kind).toBe('reaction-added')
+      // Resume verdict TRUE → the seat's REST catch-up stands down (no double-delivery).
+      expect(yield* Deferred.await(resumeOutcome)).toBe(true)
+    }),
+  { layer: TestContext.TestContext },
+)
+
+// The other side of the guard: preserving the surviving candidate must NOT
+// suppress the .3 fallback. When that candidate is dead server-side, the
+// producer's resume-poll still hits BAD_EVENT_QUEUE_ID and reports 'missed', so
+// the seat runs its REST catch-up. The eager register must not have masked the
+// dead queue behind a fresh-but-alive one (which would report 'replayed' and
+// wrongly skip the fallback).
+effectTest(
+  'an eager subscribe-time register on a queue-dead resume still reports missed so REST catch-up engages',
+  () =>
+    Effect.gen(function* () {
+      const store = yield* tmpQueueStore()
+      const session = yield* Deferred.make<SessionId>()
+      const resumeOutcome = yield* Deferred.make<boolean>()
+      // A surviving queue on disk that is dead server-side (expired past TTL).
+      yield* store.write(sid(SID), { queueId: 'dead-q', lastEventId: 41 })
+      yield* Deferred.succeed(session, sid(SID))
+      const hooks = buildQueueStateHooks({ store, session, idleTimeoutSecs: 3600, resumeOutcome })
+
+      const stub = yield* makeStubHttpClient
+      yield* seedUsers(stub)
+      yield* seedRegenerate(stub)
+      const adapter = yield* zulipAdapter({
+        realmUrl: yield* RealmUrl(REALM_URL).pipe(Effect.orDie),
+        minterEmail: yield* BotEmail('minter@example.com').pipe(Effect.orDie),
+        minterApiKey: Redacted.make(yield* ApiKey('minter-key').pipe(Effect.orDie)),
+        queueIdleTimeoutSecs: hooks.queueIdleTimeoutSecs,
+        onQueueRegister: hooks.onQueueRegister,
+        onQueueAdvance: hooks.onQueueAdvance,
+        resumeQueue: hooks.resumeQueue,
+        onResumeOutcome: hooks.onResumeOutcome,
+      }).pipe(Effect.provideService(HttpClient.HttpClient, stub.client))
+      yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+
+      yield* seedRegister(stub)
+      yield* seedSubscribeOk(stub)
+      yield* adapter.inbox.subscribe(decodeChannelNameSync('general'))
+
+      // The eager register preserved the (dead) surviving candidate for the
+      // producer to try — it did not overwrite it with a fresh live queue.
+      expect(yield* store.read(sid(SID))).toEqual(
+        Option.some({ queueId: 'dead-q', lastEventId: 41 }),
+      )
+
+      // The surviving queue is gone server-side: the resume-poll hits BAD_EVENT_QUEUE_ID.
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        { body: { result: 'error', code: 'BAD_EVENT_QUEUE_ID', msg: 'queue expired' } },
+        { hang: true },
+      ])
+      yield* Effect.forkScoped(adapter.inbox.events().pipe(Stream.runDrain))
+
+      // Resume verdict FALSE → the seat's REST catch-up fallback engages (no .3 regression).
+      expect(yield* Deferred.await(resumeOutcome)).toBe(false)
+    }),
+  { layer: TestContext.TestContext },
+)
+
 effectTest(
   'resumeQueue resolves the on-disk queue-state once the session id is known',
   () =>
