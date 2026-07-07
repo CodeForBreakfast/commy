@@ -51,9 +51,11 @@ import {
 } from 'effect'
 import { parseEnv, substrateAdapterLayer } from './bootstrap.ts'
 import { FileCursorStoreLive } from './cursor-store.ts'
-import { ResumeOutcomeLive } from './resume-outcome.ts'
+import { buildQueueStateHooks } from './queue-state-hooks.ts'
+import { FileQueueStateStoreLive, QueueStateStoreTag } from './queue-state-store.ts'
+import { ResumeOutcomeLive, ResumeOutcome as ResumeOutcomeService } from './resume-outcome.ts'
 import { makeProgram } from './server.ts'
-import { SessionIdLive } from './session-id.ts'
+import { SessionIdLive, SessionId as SessionIdService } from './session-id.ts'
 import { FileSubscriptionStoreLive } from './subscription-store.ts'
 import { testPlatformLayer } from './test-platform.ts'
 
@@ -116,6 +118,13 @@ const EPHEMERAL_BOT_B = `cc-${EPHEMERAL_SESSION_B.slice(0, 8)}`
 // confirmed separately on CC 2.1.201 (comms-k7cv.4, and live via comms-k7cv.7).
 const RESUME_SESSION = 'cccccccc-0000-0000-0000-000000000001'
 
+// A second fixed boot session id, distinct from RESUME_SESSION so the two
+// resume tests never share an on-disk store or a minted `cc-<8>` bot. This one
+// keys the DOWNTIME queue-replay acceptance: the reaction lands while the seat
+// is dead, so boot-2 must resume the surviving queue rather than catch a live
+// post-resume event.
+const DOWNTIME_RESUME_SESSION = 'dddddddd-0000-0000-0000-000000000001'
+
 const usersListSchema = Schema.Struct({
   result: Schema.Literal('success'),
   members: Schema.Array(
@@ -154,12 +163,50 @@ const expectStructured = (result: ToolCallResult): Record<string, unknown> => {
   return result.structuredContent as Record<string, unknown>
 }
 
-// Boot the plugin program against the live realm and connect an MCP
-// client, all under the caller's Scope. Mirrors tools.test.ts's
-// `mountAndConnect`: the program is forked under the scope and the
-// killSwitch + client.close are scope finalizers. Returns the connected
-// client. The MCP SDK is Promise-shaped, so `Effect.promise` bridges its
-// connect/close at the host boundary — the only place a Promise is owed.
+// Wrap `inbox.events()` so a harness can stop the event pump cleanly on scope
+// close. The deferred fires from the finalizer to interrupt the Stream —
+// without it, the program's `await pump.done` never resolves and the test
+// leaks the long-poll.
+const withKillSwitch = (
+  adapter: ZulipAdapter,
+  killSwitch: Deferred.Deferred<void>,
+): ZulipAdapter => ({
+  ...adapter,
+  inbox: {
+    ...adapter.inbox,
+    events: () => adapter.inbox.events().pipe(Stream.interruptWhenDeferred(killSwitch)),
+  },
+})
+
+// Fork the boot program as a scoped daemon, register the teardown finalizer,
+// and connect the MCP client — the tail every harness variant shares. The
+// `buildProgram` callback fully provides the program's layers (differing per
+// variant); the finalizer paces (the release runs a minter-authenticated
+// DELETE, so leave the substrate suite's inter-call gap), fires the killSwitch
+// to interrupt the pump's events stream so the scope unwinds (pump-cancel →
+// release → close), joins the fiber (boot/teardown failure surfaces there, but
+// the test body's assertions remain the sole pass/fail signal, so ignore the
+// Exit), and closes the client.
+const forkAndConnect = (
+  killSwitch: Deferred.Deferred<void>,
+  buildProgram: (serverTransport: InMemoryTransport) => Effect.Effect<unknown, unknown, never>,
+): Effect.Effect<Client, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair()
+    const client = new Client({ name: 'commy-live-test', version: '0.0.0' }, { capabilities: {} })
+    const fiber = yield* Effect.forkScoped(buildProgram(serverTransport))
+    yield* Effect.addFinalizer(() =>
+      Effect.gen(function* () {
+        yield* Effect.sleep(MINTER_PACE)
+        yield* Deferred.succeed(killSwitch, undefined)
+        yield* Fiber.join(fiber).pipe(Effect.ignore)
+        yield* Effect.promise(() => client.close())
+      }),
+    )
+    yield* Effect.promise(() => client.connect(clientTransport))
+    return client
+  })
+
 const buildHarness = (
   envOverrides: Readonly<Record<string, string>> = {},
 ): Effect.Effect<Client, never, Scope.Scope> =>
@@ -172,21 +219,8 @@ const buildHarness = (
       minterApiKey: Redacted.make(yield* ApiKey(e.minterApiKey).pipe(Effect.orDie)),
     }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient))
 
-    // Wrap `inbox.events()` so the harness can stop the event pump cleanly
-    // on scope close. The deferred fires from the finalizer to interrupt
-    // the Stream — without it, the program's `await pump.done` never
-    // resolves and the test leaks the long-poll.
     const killSwitch = yield* Deferred.make<void>()
-    const wrappedAdapter: ZulipAdapter = {
-      ...realAdapter,
-      inbox: {
-        ...realAdapter.inbox,
-        events: () => realAdapter.inbox.events().pipe(Stream.interruptWhenDeferred(killSwitch)),
-      },
-    }
-
-    const [serverTransport, clientTransport] = InMemoryTransport.createLinkedPair()
-    const client = new Client({ name: 'commy-live-test', version: '0.0.0' }, { capabilities: {} })
+    const wrappedAdapter = withKillSwitch(realAdapter, killSwitch)
 
     const mainEnv: Record<string, string | undefined> = {
       ZULIP_SITE: e.site,
@@ -198,46 +232,103 @@ const buildHarness = (
     // The boot program: the real adapter (parse-gated like
     // production's `ZulipAdapterLive`, so `close()` is a layer-scope
     // finalizer) and the file-backed cursor store arrive through the app
-    // Layer; the env through an outermost ConfigProvider. Forked under the
-    // scope; `killSwitch` interrupts the pump's events stream on cleanup so
-    // the scope unwinds (pump-cancel → release → close).
-    const program = makeProgram({ transport: serverTransport }).pipe(
-      Effect.provide(
-        Layer.provideMerge(
-          Layer.mergeAll(
-            substrateAdapterLayer(parseEnv.pipe(Effect.as(wrappedAdapter))),
-            FileCursorStoreLive,
-            // Feed the one shared session-id deferred into the store, which now
-            // awaits it — mergeAll won't wire a sibling's output to a sibling's
-            // input, so a plain merge leaves the store's SessionId unsatisfied.
-            Layer.provideMerge(FileSubscriptionStoreLive, SessionIdLive),
-            ResumeOutcomeLive,
-            stderrLoggerLayer,
+    // Layer; the env through an outermost ConfigProvider. No queue-state hooks:
+    // this harness's adapter always registers a fresh queue, so its resume
+    // coverage is the LIVE pump delivering a post-resume event — the DOWNTIME
+    // queue-replay case is `buildResumeHarness` below.
+    return yield* forkAndConnect(killSwitch, (serverTransport) =>
+      makeProgram({ transport: serverTransport }).pipe(
+        Effect.provide(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              substrateAdapterLayer(parseEnv.pipe(Effect.as(wrappedAdapter))),
+              FileCursorStoreLive,
+              // Feed the one shared session-id deferred into the store, which now
+              // awaits it — mergeAll won't wire a sibling's output to a sibling's
+              // input, so a plain merge leaves the store's SessionId unsatisfied.
+              Layer.provideMerge(FileSubscriptionStoreLive, SessionIdLive),
+              ResumeOutcomeLive,
+              stderrLoggerLayer,
+            ),
+            testPlatformLayer(mainEnv),
           ),
-          testPlatformLayer(mainEnv),
         ),
       ),
     )
-    const fiber = yield* Effect.forkScoped(program)
+  })
 
-    yield* Effect.addFinalizer(() =>
+// Harness variant that wires the production long-idle queue-resume hooks — the
+// write half (register the events queue with the idle timeout, persist
+// `{queueId, lastEventId}`) and the read half (`resumeQueue`) — over the SAME
+// shared `SessionId` / `ResumeOutcome` deferreds the boot program fills, plus a
+// file-backed `QueueStateStore` under the state home. This is the difference
+// from `buildHarness` (which wires NO queue hooks, so its adapter always
+// registers a fresh queue): only a resumed queue survives a downtime window and
+// replays the events that landed while the seat was dead. Topology mirrors
+// `ZulipAdapterLive` — one memoized `SessionId` the boot-env feeder fills and
+// the hooks poll; building the adapter OUTSIDE the layer would mint private
+// deferreds the feeder never fills, so `resumeQueue` would never see the id.
+const buildResumeHarness = (
+  envOverrides: Readonly<Record<string, string>> = {},
+): Effect.Effect<Client, never, Scope.Scope> =>
+  Effect.gen(function* () {
+    const e = liveEnv()
+    const killSwitch = yield* Deferred.make<void>()
+    const mainEnv: Record<string, string | undefined> = {
+      ZULIP_SITE: e.site,
+      ZULIP_MINTER_EMAIL: e.minterEmail,
+      ZULIP_MINTER_API_KEY: e.minterApiKey,
+      ...envOverrides,
+    }
+
+    const adapterLayer = substrateAdapterLayer(
       Effect.gen(function* () {
-        // Pace before the scope unwinds: the release finalizer issues a
-        // minter-authenticated DELETE, so leave the same gap the substrate
-        // live suite keeps between minter calls.
-        yield* Effect.sleep(MINTER_PACE)
-        yield* Deferred.succeed(killSwitch, undefined)
-        // Await the program: the scope unwind runs pump-cancel → release →
-        // close. A boot/teardown failure surfaces in the fiber's Exit but
-        // the assertions in the test body remain the sole pass/fail signal,
-        // so join here and ignore the outcome.
-        yield* Fiber.join(fiber).pipe(Effect.ignore)
-        yield* Effect.promise(() => client.close())
+        const parsed = yield* parseEnv
+        const hooks = buildQueueStateHooks({
+          store: yield* QueueStateStoreTag,
+          session: yield* SessionIdService,
+          idleTimeoutSecs: parsed.queueIdleTimeoutSecs,
+          resumeOutcome: yield* ResumeOutcomeService,
+        })
+        const realAdapter = yield* zulipAdapter({
+          realmUrl: yield* RealmUrl(e.site).pipe(Effect.orDie),
+          minterEmail: yield* BotEmail(e.minterEmail).pipe(Effect.orDie),
+          minterApiKey: Redacted.make(yield* ApiKey(e.minterApiKey).pipe(Effect.orDie)),
+          queueIdleTimeoutSecs: hooks.queueIdleTimeoutSecs,
+          onQueueRegister: hooks.onQueueRegister,
+          onQueueAdvance: hooks.onQueueAdvance,
+          resumeQueue: hooks.resumeQueue,
+          onResumeOutcome: hooks.onResumeOutcome,
+        }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient))
+        return withKillSwitch(realAdapter, killSwitch)
       }),
     )
 
-    yield* Effect.promise(() => client.connect(clientTransport))
-    return client
+    // Shared singletons under the platform base: `SessionIdLive` /
+    // `ResumeOutcomeLive` / `FileQueueStateStoreLive` are provided ONCE and fed
+    // to the adapter hooks, the subscription store, and the program — a single
+    // memoized `SessionId` deferred the boot-env feeder fills. The platform base
+    // (`FileSystem` + `ConfigProvider`) is the outermost provide, exactly as
+    // `buildHarness` layers it.
+    return yield* forkAndConnect(killSwitch, (serverTransport) =>
+      makeProgram({ transport: serverTransport }).pipe(
+        Effect.provide(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              adapterLayer,
+              FileCursorStoreLive,
+              FileSubscriptionStoreLive,
+              stderrLoggerLayer,
+            ).pipe(
+              Layer.provideMerge(
+                Layer.mergeAll(SessionIdLive, ResumeOutcomeLive, FileQueueStateStoreLive),
+              ),
+            ),
+            testPlatformLayer(mainEnv),
+          ),
+        ),
+      ),
+    )
   })
 
 const fetchActiveStatus = (
@@ -504,5 +595,189 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
         }),
       ),
     90_000,
+  )
+
+  test(
+    'downtime queue-replay: a reaction posted while the seat is DEAD is replayed on resume with zero tool calls',
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const e = liveEnv()
+          const minterHttp = yield* makeZulipHttp({
+            realmUrl: yield* RealmUrl(e.site).pipe(Effect.orDie),
+            email: yield* BotEmail(e.minterEmail).pipe(Effect.orDie),
+            apiKey: yield* ApiKey(e.minterApiKey).pipe(Effect.orDie),
+          }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient))
+
+          // Isolated on-disk state home shared by the two boots: the subscription
+          // store AND the queue-state store key off the fixed boot session id.
+          const stateHome = mkdtempSync(join(tmpdir(), 'commy-downtime-'))
+          const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+          const verifyTopic = `downtime-resume-${suffix}`
+          const marker = `downtime-marker-${suffix}`
+          // BOOT 1 subscribes the thread via COMMY_SUBSCRIBE so the producer polls
+          // an all-mode queue from its first poll (the pump captures the producer's
+          // queue+mode at boot and only re-registers on BAD_EVENT_QUEUE_ID, never on
+          // a live mode flip — so a post-boot subscribe would leave a second
+          // all-mode queue persisted-but-unpolled). BOOT 2 carries NO COMMY_SUBSCRIBE:
+          // a resumed ephemeral seat reboots with an empty narrow and rehydrates from
+          // the subscription store (restore), NOT from the env seed. This ordering is
+          // load-bearing — `subscribeFromEnv` runs before the pump, and its register
+          // writes the queue-state store, so a boot-2 env seed would clobber the
+          // persisted resume-state with a fresh empty queue before the producer ever
+          // resume-polls the surviving one.
+          const boot1Env = {
+            CLAUDE_CODE_SESSION_ID: DOWNTIME_RESUME_SESSION,
+            XDG_STATE_HOME: stateHome,
+            COMMY_SUBSCRIBE: `mentions,thread:${e.channelName}/${verifyTopic}`,
+          }
+          const boot2Env = {
+            CLAUDE_CODE_SESSION_ID: DOWNTIME_RESUME_SESSION,
+            XDG_STATE_HOME: stateHome,
+          }
+
+          // BOOT 1 — the all-mode events queue is registered at boot (idle timeout
+          // long enough to survive downtime) and its state persisted under the
+          // session id; the producer polls it, advancing `lastEventId`. Post a
+          // marker into the subscribed thread, subscribe that thread as a tool call
+          // (persists the narrow set to the store so boot-2's restore rehydrates it),
+          // let the producer drain past the marker, then tear down. The adapter's
+          // `close()` is a no-op and never DELETEs the queue, so the server keeps it
+          // alive for the idle window with no seat polling it.
+          const messageId = yield* Effect.scoped(
+            Effect.gen(function* () {
+              yield* Effect.sleep(MINTER_PACE)
+              const client = yield* buildResumeHarness(boot1Env)
+              yield* Effect.sleep(MINTER_PACE)
+              const posted = expectStructured(
+                yield* callTool(client, 'post', {
+                  channel_name: e.channelName,
+                  thread: verifyTopic,
+                  body: marker,
+                  session_id: DOWNTIME_RESUME_SESSION,
+                }),
+              )
+              const id = posted['message_id'] as string
+              expect(typeof id).toBe('string')
+              // Persist the narrow set (the thread is already subscribed via
+              // COMMY_SUBSCRIBE, so mode stays 'all' and no queue re-registers).
+              yield* callTool(client, 'subscribe', {
+                target: `thread:${e.channelName}/${verifyTopic}`,
+                session_id: DOWNTIME_RESUME_SESSION,
+              })
+              // Let the producer's long-poll return the marker and advance the
+              // persisted `lastEventId` past it, so boot-2 resumes from a recent
+              // cursor rather than replaying the whole queue.
+              yield* Effect.sleep(Duration.seconds(3))
+              return id
+            }),
+          )
+
+          // The persist half: boot-1 wrote BOTH stores under the session id — the
+          // narrow set (with the thread) for restore, and the queue-state
+          // (`{queueId, lastEventId}`) so boot-2 resume-polls the surviving queue.
+          const subsPath = join(
+            stateHome,
+            'commy',
+            'subscriptions',
+            `${DOWNTIME_RESUME_SESSION}.json`,
+          )
+          const subs = JSON.parse(readFileSync(subsPath, 'utf8')) as ReadonlyArray<{
+            readonly kind: string
+            readonly threadName?: string
+          }>
+          expect(subs.some((i) => i.kind === 'thread' && i.threadName === verifyTopic)).toBe(true)
+
+          const queueStatePath = join(
+            stateHome,
+            'commy',
+            'queue-state',
+            `${DOWNTIME_RESUME_SESSION}.json`,
+          )
+          const queueState = JSON.parse(readFileSync(queueStatePath, 'utf8')) as {
+            readonly queueId: string
+            readonly lastEventId: number
+          }
+          expect(typeof queueState.queueId).toBe('string')
+          expect(queueState.queueId.length).toBeGreaterThan(0)
+          expect(Number.isInteger(queueState.lastEventId)).toBe(true)
+
+          // DOWNTIME — no seat is running. React to the marker from the minter (a
+          // different identity than the resumed subject bot). The reaction lands
+          // in the surviving server-side queue while the child is dead; only a
+          // resumed queue can carry it across the gap.
+          yield* Effect.sleep(MINTER_PACE)
+          yield* minterHttp
+            .post(
+              `/messages/${messageId}/reactions`,
+              Schema.Struct({ result: Schema.Literal('success') }),
+              { emoji_name: 'thumbs_up' },
+            )
+            .pipe(Effect.orDie)
+
+          // BOOT 2 — same session id via boot env + same state home. A fresh MCP
+          // child boots session-blind; the boot-env feeder fills the id, the
+          // boot-forked restore rehydrates the narrow set, and the producer's
+          // resume-poll recovers the persisted queue and replays the reaction that
+          // landed during downtime — all with ZERO tool calls on this boot. The
+          // reaction is ALREADY queued before boot, so (unlike the live-pump resume
+          // test above) we do not post it here; we only capture the frame it
+          // replays into.
+          const frames: Array<{ readonly meta: Record<string, string> }> = []
+          const matchingFrame = yield* Effect.scoped(
+            Effect.gen(function* () {
+              yield* Effect.sleep(MINTER_PACE)
+              const client = yield* buildResumeHarness(boot2Env)
+              client.fallbackNotificationHandler = (n: {
+                readonly method: string
+                readonly params?: unknown
+              }): Promise<void> => {
+                if (
+                  n.method === 'notifications/claude/channel' &&
+                  typeof n.params === 'object' &&
+                  n.params !== null
+                ) {
+                  const p = n.params as { readonly meta?: Record<string, string> }
+                  if (p.meta !== undefined) frames.push({ meta: p.meta })
+                }
+                return Promise.resolve()
+              }
+
+              // Poll the captured frames for the downtime reaction, replayed off
+              // the resumed queue with no tool call on this boot. The outer timeout
+              // is the fail signal: if the reaction never lands, the queue did not
+              // survive/resume, or restore did not re-wire the narrow before the
+              // replay flowed.
+              return yield* Effect.suspend(() =>
+                Option.match(
+                  Option.fromNullable(
+                    frames.find(
+                      (f) =>
+                        f.meta['reaction_action'] === 'add' &&
+                        f.meta['reaction_emoji'] === 'thumbs_up' &&
+                        f.meta['target_thread'] === verifyTopic,
+                    ),
+                  ),
+                  {
+                    onNone: () => Effect.fail('not-yet' as const),
+                    onSome: (f) => Effect.succeed(f),
+                  },
+                ),
+              ).pipe(
+                Effect.retry(Schedule.spaced(Duration.millis(500))),
+                Effect.timeout(Duration.seconds(45)),
+              )
+            }),
+          )
+
+          expect(matchingFrame.meta['reaction_action']).toBe('add')
+          expect(matchingFrame.meta['reaction_emoji']).toBe('thumbs_up')
+          expect(matchingFrame.meta['target_thread']).toBe(verifyTopic)
+          expect(matchingFrame.meta['target_message_id']).toBe(messageId)
+
+          rmSync(stateHome, { recursive: true, force: true })
+        }),
+      ),
+    120_000,
   )
 })
