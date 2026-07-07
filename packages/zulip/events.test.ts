@@ -37,6 +37,7 @@ import {
   inboxEvents,
   mapMessageEvent,
   messageToInboundEvents,
+  registerQueue,
 } from './events.ts'
 import type { ZulipHttp } from './http.ts'
 import { ZulipApiError } from './http.ts'
@@ -289,6 +290,53 @@ const fakeHttp = (handlers: HttpHandlers): ZulipHttp =>
       return invokeHandler(schema, () => onGet(path, params))
     },
   }) as unknown as ZulipHttp
+
+const REGISTER_SUCCESS = { result: 'success', queue_id: 'q-1', last_event_id: 7 }
+
+const captureRegisterBody = (): {
+  readonly http: ZulipHttp
+  readonly captured: () => Record<string, unknown> | undefined
+} => {
+  let body: Record<string, unknown> | undefined
+  const http = fakeHttp({
+    onPost: (_path, requestBody) => {
+      body = requestBody
+      return REGISTER_SUCCESS
+    },
+  })
+  return { http, captured: () => body }
+}
+
+test('registerQueue maps the response to a QueueState', async () => {
+  const { http } = captureRegisterBody()
+  const state = await Effect.runPromise(registerQueue(http, 'all'))
+  expect(state).toEqual({ queueId: 'q-1', lastEventId: 7 })
+})
+
+test('registerQueue omits idle_queue_timeout when no timeout is supplied', async () => {
+  const { http, captured } = captureRegisterBody()
+  await Effect.runPromise(registerQueue(http, 'all'))
+  expect(captured()).toEqual({ event_types: JSON.stringify(['message', 'reaction']) })
+})
+
+test('registerQueue sends idle_queue_timeout when a timeout is supplied', async () => {
+  const { http, captured } = captureRegisterBody()
+  await Effect.runPromise(registerQueue(http, 'all', 3600))
+  expect(captured()).toEqual({
+    event_types: JSON.stringify(['message', 'reaction']),
+    idle_queue_timeout: 3600,
+  })
+})
+
+test('registerQueue in mentions mode keeps the narrow alongside idle_queue_timeout', async () => {
+  const { http, captured } = captureRegisterBody()
+  await Effect.runPromise(registerQueue(http, 'mentions', 100))
+  expect(captured()).toEqual({
+    event_types: JSON.stringify(['message', 'reaction']),
+    narrow: JSON.stringify([['is', 'mentioned']]),
+    idle_queue_timeout: 100,
+  })
+})
 
 const drainOne = (
   config: EventsConfig,

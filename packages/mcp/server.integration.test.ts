@@ -496,11 +496,13 @@ test('static audit: no plugin source imports or calls fs-write APIs', () => {
   //   cursor-store.ts        — per-identity mentions cursor under <XDG_STATE_HOME>
   //   subscription-store.ts  — per-session_id narrow-set snapshot under <XDG_STATE_HOME>
   //   target-cursor.ts       — per-(session,target) delivery cursor under <XDG_STATE_HOME>
+  //   queue-state-store.ts   — per-session events-queue state under <XDG_STATE_HOME>
   //   server.ts              — download_file temp files under os.tmpdir()
   const writeAllowlist = new Set([
     'cursor-store.ts',
     'subscription-store.ts',
     'target-cursor.ts',
+    'queue-state-store.ts',
     'server.ts',
   ])
   const sources = readdirSync(pluginDir).filter(

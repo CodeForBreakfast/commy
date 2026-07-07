@@ -44,7 +44,7 @@ const baseRequiredEnvEffect: Effect.Effect<ParsedEnv> = Effect.gen(function* () 
   const realmUrl = yield* RealmUrl('https://zulip.example.com')
   const minterEmail = yield* BotEmail('minter-bot@zulip.example.com')
   const minterApiKey = Redacted.make(yield* ApiKey('kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk1'))
-  return { realmUrl, minterEmail, minterApiKey }
+  return { realmUrl, minterEmail, minterApiKey, queueIdleTimeoutSecs: 86400 }
 }).pipe(Effect.orDie)
 
 const expectParseEnvError = (
@@ -219,6 +219,55 @@ test('parseEnv reads catchupWindowSeconds from canonical COMMY_CATCHUP_WINDOW_SE
     Effect.gen(function* () {
       const parsed = yield* parse({ ...requiredOnlyEnv, COMMY_CATCHUP_WINDOW_SECONDS: '3600' })
       expect(parsed.catchupWindowSeconds).toBe(3600)
+    }),
+  ))
+
+test('parseEnv reads queueIdleTimeoutSecs from canonical COMMY_QUEUE_IDLE_TIMEOUT_SECS', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const parsed = yield* parse({ ...requiredOnlyEnv, COMMY_QUEUE_IDLE_TIMEOUT_SECS: '3600' })
+      expect(parsed.queueIdleTimeoutSecs).toBe(3600)
+    }),
+  ))
+
+test('parseEnv defaults queueIdleTimeoutSecs to 24h when COMMY_QUEUE_IDLE_TIMEOUT_SECS is unset', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const parsed = yield* parse(requiredOnlyEnv)
+      expect(parsed.queueIdleTimeoutSecs).toBe(86400)
+    }),
+  ))
+
+test('parseEnv clamps queueIdleTimeoutSecs to Zulip 7-day max when set above it', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const parsed = yield* parse({
+        ...requiredOnlyEnv,
+        COMMY_QUEUE_IDLE_TIMEOUT_SECS: '999999999',
+      })
+      expect(parsed.queueIdleTimeoutSecs).toBe(604800)
+    }),
+  ))
+
+test('parseEnv rejects a non-positive COMMY_QUEUE_IDLE_TIMEOUT_SECS', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const err = yield* expectParseEnvError({
+        ...requiredOnlyEnv,
+        COMMY_QUEUE_IDLE_TIMEOUT_SECS: '0',
+      })
+      expect(err.message).toContain('COMMY_QUEUE_IDLE_TIMEOUT_SECS')
+    }),
+  ))
+
+test('parseEnv rejects a non-integer COMMY_QUEUE_IDLE_TIMEOUT_SECS', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const err = yield* expectParseEnvError({
+        ...requiredOnlyEnv,
+        COMMY_QUEUE_IDLE_TIMEOUT_SECS: 'not-a-number',
+      })
+      expect(err.message).toContain('COMMY_QUEUE_IDLE_TIMEOUT_SECS')
     }),
   ))
 

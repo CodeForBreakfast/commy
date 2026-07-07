@@ -420,15 +420,27 @@ export interface QueueState {
   readonly lastEventId: number
 }
 
+/**
+ * Zulip's server-side ceiling on `idle_queue_timeout` (`MAX_QUEUE_TIMEOUT_SECS`
+ * — 7 days). A requested timeout is clamped to this at the config edge, so the
+ * value {@link registerQueue} sends is already in range.
+ */
+export const MAX_QUEUE_TIMEOUT_SECS = 604800
+
 export const registerQueue = (
   http: ZulipHttp,
   mode: 'all' | 'mentions',
+  idleTimeoutSecs?: number,
 ): Effect.Effect<QueueState, ZulipApiError | ParseResult.ParseError> => {
   const baseParams = { event_types: JSON.stringify(['message', 'reaction']) }
-  const params =
+  const modeParams =
     mode === 'mentions'
       ? { ...baseParams, narrow: JSON.stringify([['is', 'mentioned']]) }
       : baseParams
+  const params =
+    idleTimeoutSecs === undefined
+      ? modeParams
+      : { ...modeParams, idle_queue_timeout: idleTimeoutSecs }
   return http
     .post('/register', registerResponseSchema, params)
     .pipe(Effect.map((res) => ({ queueId: res.queue_id, lastEventId: res.last_event_id })))

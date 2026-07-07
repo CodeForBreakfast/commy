@@ -2,6 +2,7 @@ import type { BotName, InboxError, MessageInbox } from '@commy/core/ports'
 import { decodeBotNameSync } from '@commy/core/ports'
 import type { ZulipAdapter } from '@commy/zulip/adapter'
 import { zulipAdapter } from '@commy/zulip/adapter'
+import { MAX_QUEUE_TIMEOUT_SECS } from '@commy/zulip/events'
 import type {
   ApiKey as ApiKeyType,
   BotEmail as BotEmailType,
@@ -136,6 +137,13 @@ export interface ParsedEnv {
    */
   readonly catchupWindowSeconds?: number
   /**
+   * Idle-timeout (in seconds) sent as `idle_queue_timeout` on an ephemeral
+   * session's `/register`, governing how long Zulip keeps the events queue
+   * alive between polls. Always present — `COMMY_QUEUE_IDLE_TIMEOUT_SECS`
+   * defaults to 24h and is clamped to Zulip's 7-day maximum.
+   */
+  readonly queueIdleTimeoutSecs: number
+  /**
    * Operator-set base directory (`COMMY_DOWNLOAD_DIR`) that `download_file`
    * roots its per-download temp directory in, so the fetched attachment lands
    * somewhere the caller can Read (its own scratchpad) rather than `$TMPDIR`.
@@ -254,6 +262,36 @@ const userConfigString = (key: string): Config.Config<string> =>
 const optionalUserConfig = (key: string): Config.Config<Option.Option<string>> =>
   Config.option(userConfigString(key))
 
+const QUEUE_IDLE_TIMEOUT_DEFAULT_SECS = 86400
+
+/**
+ * `COMMY_QUEUE_IDLE_TIMEOUT_SECS` — how many seconds an ephemeral session's
+ * events queue survives without a poll before Zulip garbage-collects it, sent
+ * as `idle_queue_timeout` on `/register`. Unset (or empty / placeholder) falls
+ * back to 24h; a set value is clamped to Zulip's 7-day
+ * {@link MAX_QUEUE_TIMEOUT_SECS} ceiling. A non-positive or non-integer value
+ * is rejected rather than silently coerced.
+ */
+const queueIdleTimeoutSecs = (key: string): Config.Config<number> =>
+  optionalUserConfig(key).pipe(
+    Config.mapOrFail((option) =>
+      Option.match(option, {
+        onNone: () => Either.right(QUEUE_IDLE_TIMEOUT_DEFAULT_SECS),
+        onSome: (raw) => {
+          const parsed = Number(raw)
+          return Number.isInteger(parsed) && parsed > 0
+            ? Either.right(Math.min(parsed, MAX_QUEUE_TIMEOUT_SECS))
+            : Either.left(
+                ConfigError.InvalidData(
+                  [key],
+                  `${key} must be a positive integer — received: ${raw}`,
+                ),
+              )
+        },
+      }),
+    ),
+  )
+
 const optionalNonNegativeInt = (key: string): Config.Config<Option.Option<number>> =>
   optionalUserConfig(key).pipe(
     Config.mapOrFail((option) =>
@@ -337,6 +375,7 @@ const envConfig: Config.Config<ParsedEnv> = Config.all({
   subscribe: optionalUserConfig('COMMY_SUBSCRIBE'),
   project: optionalNonEmpty('COMMY_PROJECT'),
   catchupWindowSeconds: optionalNonNegativeInt('COMMY_CATCHUP_WINDOW_SECONDS'),
+  queueIdleTimeoutSecs: queueIdleTimeoutSecs('COMMY_QUEUE_IDLE_TIMEOUT_SECS'),
   downloadDir: optionalNonEmpty('COMMY_DOWNLOAD_DIR'),
 }).pipe(
   Config.mapOrFail((raw) => {
@@ -355,6 +394,7 @@ const envConfig: Config.Config<ParsedEnv> = Config.all({
       realmUrl: raw.realmUrl,
       minterEmail: raw.minterEmail,
       minterApiKey: raw.minterApiKey,
+      queueIdleTimeoutSecs: raw.queueIdleTimeoutSecs,
       ...Option.match(raw.botName, { onNone: () => ({}), onSome: (botName) => ({ botName }) }),
       ...(Option.isSome(raw.botName) && Option.isSome(raw.botApiKey)
         ? { attachIdentity: { name: raw.botName.value, apiKey: raw.botApiKey.value } }
