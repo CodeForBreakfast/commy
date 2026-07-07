@@ -16,6 +16,15 @@ export interface QueueStateHooks {
   readonly queueIdleTimeoutSecs: number
   readonly onQueueRegister: (queue: QueueState) => Effect.Effect<void>
   readonly onQueueAdvance: (lastEventId: number) => Effect.Effect<void>
+  /**
+   * Read half: resolves the persisted queue-state a resuming seat should reuse,
+   * for the adapter to hand the producer as its `initialQueue`. Polls the shared
+   * session id (never parks) — `Some(queueState)` when the id is known and a
+   * queue-state is on disk, `None` for a fresh session, an id not yet delivered,
+   * or an unreadable/corrupt store (best-effort: a resume that can't be recovered
+   * degrades to a fresh register rather than stranding the seat).
+   */
+  readonly resumeQueue: () => Effect.Effect<Option.Option<QueueState>>
 }
 
 /**
@@ -54,6 +63,18 @@ export const buildQueueStateHooks = (deps: {
     onQueueAdvance: (lastEventId) =>
       withSession((id) =>
         store.advance(id, lastEventId).pipe(Effect.catchAllCause(() => Effect.void)),
+      ),
+    resumeQueue: () =>
+      Deferred.poll(session).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeedNone,
+            onSome: (awaitId) =>
+              Effect.flatMap(awaitId, (id) =>
+                store.read(id).pipe(Effect.catchAllCause(() => Effect.succeedNone)),
+              ),
+          }),
+        ),
       ),
   }
 }

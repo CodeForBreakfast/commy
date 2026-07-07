@@ -15,7 +15,7 @@ import { expect } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { decodeBotNameSync, decodeChannelNameSync } from '@commy/core/ports'
+import { decodeBotNameSync, decodeChannelNameSync, type InboundEvent } from '@commy/core/ports'
 import { effectTest } from '@commy/testing/effect-test'
 import { makeStubHttpClient, type StubHttpClient } from '@commy/testing/stub-http-client'
 import { zulipAdapter } from '@commy/zulip/adapter'
@@ -87,6 +87,20 @@ const messageEvent = (id: number): Record<string, unknown> => ({
   type: 'message',
   message: aZulipMessage(100 + id),
   flags: [],
+})
+const reactionEvent = (
+  id: number,
+  op: 'add' | 'remove',
+  messageId: number,
+  emojiName: string,
+  userId: number,
+): Record<string, unknown> => ({
+  id,
+  type: 'reaction',
+  op,
+  user_id: userId,
+  message_id: messageId,
+  emoji_name: emojiName,
 })
 
 const tmpQueueStore = (): Effect.Effect<QueueStateStore, never, Scope.Scope> =>
@@ -178,6 +192,133 @@ effectTest(
 
       expect(Option.isSome(outcome)).toBe(true)
       expect(Option.isNone(yield* store.read(sid(SID)))).toBe(true)
+    }),
+  { layer: TestContext.TestContext },
+)
+
+// ─── Queue-resume READ half ──────────────────────────────────────
+// The payoff: a resumed ephemeral seat whose surviving queue-state is on disk
+// resume-polls that queue from the stored cursor — skipping its own register —
+// and the backlog buffered during downtime, REACTIONS INCLUDED, replays through
+// the normal producer path with zero tool calls. Reactions are the reason this
+// path exists: no history-read catch-up can reconstruct them.
+effectTest(
+  'resumed seat resume-polls its on-disk queue and replays a buffered reaction with no fresh register',
+  () =>
+    Effect.gen(function* () {
+      const store = yield* tmpQueueStore()
+      const session = yield* Deferred.make<SessionId>()
+      // A prior life left the queue-state on disk; the boot-env feeder has
+      // filled the shared id, so the read-half resolver can key against it.
+      yield* store.write(sid(SID), { queueId: 'resumed-q', lastEventId: 41 })
+      yield* Deferred.succeed(session, sid(SID))
+      const hooks = buildQueueStateHooks({ store, session, idleTimeoutSecs: 3600 })
+
+      const stub = yield* makeStubHttpClient
+      yield* seedUsers(stub)
+      yield* seedRegenerate(stub)
+      const adapter = yield* zulipAdapter({
+        realmUrl: yield* RealmUrl(REALM_URL).pipe(Effect.orDie),
+        minterEmail: yield* BotEmail('minter@example.com').pipe(Effect.orDie),
+        minterApiKey: Redacted.make(yield* ApiKey('minter-key').pipe(Effect.orDie)),
+        queueIdleTimeoutSecs: hooks.queueIdleTimeoutSecs,
+        onQueueRegister: hooks.onQueueRegister,
+        onQueueAdvance: hooks.onQueueAdvance,
+        resumeQueue: hooks.resumeQueue,
+      }).pipe(Effect.provideService(HttpClient.HttpClient, stub.client))
+      yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+
+      // The backlog the surviving server-side queue buffered while dead: the
+      // reacted-to message (seeds the ref cache in-batch) then the reaction.
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        {
+          body: {
+            result: 'success',
+            events: [
+              messageEvent(42),
+              reactionEvent(43, 'add', 142, 'thumbs_up', MAINTAINER.user_id),
+            ],
+          },
+        },
+        { hang: true },
+      ])
+      const queue = yield* Queue.unbounded<InboundEvent>()
+      yield* Effect.forkScoped(
+        adapter.inbox.events().pipe(
+          Stream.tap((event) => Queue.offer(queue, event)),
+          Stream.runDrain,
+        ),
+      )
+      const first = yield* Queue.take(queue)
+      const second = yield* Queue.take(queue)
+
+      // Resume-poll: the first /events poll targets the persisted queue at the
+      // stored cursor.
+      const polls = (yield* stub.captured).filter(
+        (r) => r.method === 'GET' && r.url.pathname === '/api/v1/events',
+      )
+      expect(polls[0]?.url.searchParams.get('queue_id')).toBe('resumed-q')
+      expect(polls[0]?.url.searchParams.get('last_event_id')).toBe('41')
+      // No fresh register — the surviving queue is reused wholesale.
+      const registers = (yield* stub.captured).filter(
+        (r) => r.method === 'POST' && r.url.pathname === '/api/v1/register',
+      )
+      expect(registers).toHaveLength(0)
+      // The backlog replays: message first, then the reaction that no history
+      // catch-up could have recovered — all with zero tool calls.
+      expect(first.kind).toBe('message-posted')
+      expect(second.kind).toBe('reaction-added')
+    }),
+  { layer: TestContext.TestContext },
+)
+
+effectTest(
+  'resumeQueue resolves the on-disk queue-state once the session id is known',
+  () =>
+    Effect.gen(function* () {
+      const store = yield* tmpQueueStore()
+      const session = yield* Deferred.make<SessionId>()
+      yield* store.write(sid(SID), { queueId: 'resumed-q', lastEventId: 41 })
+      yield* Deferred.succeed(session, sid(SID))
+      const hooks = buildQueueStateHooks({ store, session, idleTimeoutSecs: 3600 })
+
+      expect(yield* hooks.resumeQueue()).toEqual(
+        Option.some({ queueId: 'resumed-q', lastEventId: 41 }),
+      )
+    }),
+  { layer: TestContext.TestContext },
+)
+
+effectTest(
+  'resumeQueue yields None when the session id is known but nothing is persisted',
+  () =>
+    Effect.gen(function* () {
+      const store = yield* tmpQueueStore()
+      const session = yield* Deferred.make<SessionId>()
+      yield* Deferred.succeed(session, sid(SID))
+      const hooks = buildQueueStateHooks({ store, session, idleTimeoutSecs: 3600 })
+
+      expect(Option.isNone(yield* hooks.resumeQueue())).toBe(true)
+    }),
+  { layer: TestContext.TestContext },
+)
+
+effectTest(
+  'resumeQueue yields None promptly on an unfed session deferred without parking',
+  () =>
+    Effect.gen(function* () {
+      // Mirrors the write-half hooks: the read-half resolver must poll the
+      // deferred and return promptly on None — never park on await — when no
+      // source has delivered the id yet.
+      const store = yield* tmpQueueStore()
+      const session = yield* Deferred.make<SessionId>()
+      const hooks = buildQueueStateHooks({ store, session, idleTimeoutSecs: 3600 })
+
+      const outcome = yield* hooks.resumeQueue().pipe(Effect.timeoutOption('2 seconds'))
+
+      // Completed within the timeout (Some) and resolved to no-resume (inner None).
+      expect(Option.isSome(outcome)).toBe(true)
+      expect(Option.isNone(Option.getOrThrow(outcome))).toBe(true)
     }),
   { layer: TestContext.TestContext },
 )

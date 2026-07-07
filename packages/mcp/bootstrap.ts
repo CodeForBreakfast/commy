@@ -626,10 +626,12 @@ export const ZulipAdapterLive: Layer.Layer<
 > = substrateAdapterLayer(
   Effect.gen(function* () {
     const parsed = yield* parseEnv
-    // Queue-state write half: EPHEMERAL seats only (`botName` unset). The hooks
-    // register with the configured idle timeout and persist `{queueId,
-    // lastEventId}` to the per-session store so a long-idle resume recovers it.
-    // Persistent bots pass no hooks and keep the server's default queue window.
+    // Queue-state resume hooks: EPHEMERAL seats only (`botName` unset). The
+    // write half registers with the configured idle timeout and persists
+    // `{queueId, lastEventId}` to the per-session store; the read half
+    // (`resumeQueue`) reads it back on boot so a resumed seat resume-polls the
+    // surviving queue instead of registering fresh. Persistent bots pass no
+    // hooks and keep the server's default queue window.
     const queueHooks =
       parsed.botName === undefined
         ? buildQueueStateHooks({
@@ -649,6 +651,7 @@ export const ZulipAdapterLive: Layer.Layer<
             queueIdleTimeoutSecs: queueHooks.queueIdleTimeoutSecs,
             onQueueRegister: queueHooks.onQueueRegister,
             onQueueAdvance: queueHooks.onQueueAdvance,
+            resumeQueue: queueHooks.resumeQueue,
           }),
     })
   }),
