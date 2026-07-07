@@ -137,6 +137,21 @@ export interface ZulipAdapterConfig {
    * (monotonic). Total by contract (`Effect<void>`).
    */
   readonly onQueueAdvance?: (lastEventId: number) => Effect.Effect<void>
+  /**
+   * Read half of long-idle queue resume: resolves the persisted queue-state a
+   * resuming ephemeral seat should reuse, consulted once when the producer
+   * materialises. A `Some` is handed to the producer as its `initialQueue`, so
+   * it skips its own `POST /register` and resume-polls the surviving
+   * server-side queue from the stored `lastEventId` — replaying the entire
+   * missed backlog (messages AND reactions) through the normal producer path.
+   * A `Some` wins over any eager subscribe-time registration: a boot-time
+   * `COMMY_SUBSCRIBE` register must not shadow a live persisted queue. `None`
+   * (fresh session, or the session id not yet known) leaves the register-time
+   * queue / lazy-register path untouched. The wiring layer's closure owns the
+   * session gate and the store read; total by contract (`Effect<Option>`).
+   * Omitted for persistent bots — they never resume-poll.
+   */
+  readonly resumeQueue?: () => Effect.Effect<Option.Option<QueueState>>
 }
 
 export type ZulipAdapter = AgentComms & {
@@ -1442,9 +1457,23 @@ export const zulipAdapter = (
         }).pipe(Effect.mapError((cause) => new InboxError({ operation: 'unsubscribe', cause }))),
       events: () =>
         Stream.unwrap(
-          Effect.all([SynchronizedRef.get(boundRef), SynchronizedRef.get(inboxRef)]).pipe(
-            Effect.map(([current, state]) =>
-              inboxEvents({
+          Effect.all([
+            SynchronizedRef.get(boundRef),
+            SynchronizedRef.get(inboxRef),
+            // Read half of long-idle queue resume: consulted once as the
+            // producer materialises (the pump calls events() exactly once, so
+            // this fires per pump lifetime). A persisted queue is preferred
+            // over the eager register-time queue below — a boot COMMY_SUBSCRIBE
+            // register must not shadow a live persisted queue. No resolver
+            // (persistent seat) or None (fresh session / session id not yet
+            // known) leaves the register-time / lazy-register path standing.
+            config.resumeQueue?.() ?? Effect.succeedNone,
+          ]).pipe(
+            Effect.map(([current, state, resumed]) => {
+              const initialQueue = Option.orElse(resumed, () =>
+                Option.map(state.registration, (r) => r.queue),
+              )
+              return inboxEvents({
                 http: minterHttp,
                 permalinkBase: base,
                 resolveDirectory: buildDirectoryLookup,
@@ -1472,12 +1501,12 @@ export const zulipAdapter = (
                   onNone: () => ({}),
                   onSome: (b) => ({ boundIdentity: b.identity }),
                 }),
-                ...Option.match(state.registration, {
+                ...Option.match(initialQueue, {
                   onNone: () => ({}),
-                  onSome: (r) => ({ initialQueue: r.queue }),
+                  onSome: (q) => ({ initialQueue: q }),
                 }),
-              }),
-            ),
+              })
+            }),
           ),
         ).pipe(Stream.filterEffect(shouldDeliver)),
       replay: (since) => {

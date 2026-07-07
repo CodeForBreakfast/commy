@@ -46,6 +46,7 @@ import { HttpClient } from '@effect/platform'
 import {
   Duration,
   Effect,
+  Option,
   Queue,
   Redacted,
   type Scope,
@@ -140,6 +141,7 @@ const buildAdapterWithQueueConfig = (
     readonly queueIdleTimeoutSecs?: number
     readonly onQueueRegister?: (queue: QueueState) => Effect.Effect<void>
     readonly onQueueAdvance?: (lastEventId: number) => Effect.Effect<void>
+    readonly resumeQueue?: () => Effect.Effect<Option.Option<QueueState>>
   },
 ): Effect.Effect<ZulipAdapter, IdentityError | UnknownIdentity> =>
   Effect.gen(function* () {
@@ -247,6 +249,21 @@ const messageEvent = (id: number, message: Record<string, unknown>): Record<stri
   flags: [],
 })
 
+const reactionEvent = (
+  id: number,
+  op: 'add' | 'remove',
+  messageId: number,
+  emojiName: string,
+  userId: number,
+): Record<string, unknown> => ({
+  id,
+  type: 'reaction',
+  op,
+  user_id: userId,
+  message_id: messageId,
+  emoji_name: emojiName,
+})
+
 const gapMessagesBody = (content: string): Record<string, unknown> => ({
   result: 'success',
   messages: [
@@ -320,6 +337,84 @@ effectTest(
       expect(new URLSearchParams(registers[0]?.body).get('idle_queue_timeout')).toBe('3600')
       // The eager register persisted the queue — the queueId a resume recovers.
       expect(registered).toEqual([{ queueId: 'queue-1', lastEventId: 0 }])
+    }),
+  { layer: TestContext.TestContext },
+)
+
+// Read half of long-idle queue resume: a resumed seat hands its persisted
+// queue-state to the producer as initialQueue, so the very first /events poll
+// resumes the surviving server-side queue from the stored last_event_id — no
+// fresh POST /register — and the missed backlog buffered during downtime,
+// reactions included, replays through the normal producer path. Reactions are
+// the payoff: no history-read catch-up can reconstruct them, only the surviving
+// queue carries them.
+effectTest(
+  'inbox.events resume-polls the persisted queue instead of registering, delivering a buffered reaction',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapterWithQueueConfig(stub, {
+        resumeQueue: () => Effect.succeed(Option.some({ queueId: 'resumed-q', lastEventId: 41 })),
+      })
+      // The backlog buffered while the seat was dead: the reacted-to message
+      // (which seeds the ref cache in-batch) followed by the reaction on it.
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        {
+          body: {
+            result: 'success',
+            events: [
+              messageEvent(42, aZulipMessage({ id: 100, content: 'reacted-to' })),
+              reactionEvent(43, 'add', 100, 'thumbs_up', MAINTAINER.user_id),
+            ],
+          },
+        },
+        { hang: true },
+      ])
+      const queue = yield* eventQueue(adapter)
+      const first = yield* Queue.take(queue)
+      const second = yield* Queue.take(queue)
+      // Resume-poll: the first /events poll targets the persisted queue at the
+      // stored cursor — not a fresh queue registered this boot.
+      const polls = yield* eventPolls(stub)
+      expect(polls[0]?.url.searchParams.get('queue_id')).toBe('resumed-q')
+      expect(polls[0]?.url.searchParams.get('last_event_id')).toBe('41')
+      // Zero fresh registers — the surviving queue is reused wholesale.
+      const registers = yield* registerPosts(stub)
+      expect(registers).toHaveLength(0)
+      // The buffered backlog replays: message first, then the reaction that no
+      // history catch-up could have recovered.
+      expect(first.kind).toBe('message-posted')
+      expect(second.kind).toBe('reaction-added')
+    }),
+  { layer: TestContext.TestContext },
+)
+
+// resumeQueue yielding None is the fresh-session signal: nothing persisted, so
+// the producer falls back to its own lazy POST /register exactly as before.
+effectTest(
+  'inbox.events falls back to a fresh register when resumeQueue yields None',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapterWithQueueConfig(stub, {
+        resumeQueue: () => Effect.succeedNone,
+      })
+      yield* seedRegister(stub)
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        {
+          body: {
+            result: 'success',
+            events: [messageEvent(5, aZulipMessage({ content: 'fresh' }))],
+          },
+        },
+        { hang: true },
+      ])
+      const queue = yield* eventQueue(adapter)
+      yield* Queue.take(queue)
+      const registers = yield* registerPosts(stub)
+      expect(registers).toHaveLength(1)
+      const polls = yield* eventPolls(stub)
+      expect(polls[0]?.url.searchParams.get('queue_id')).toBe('queue-1')
     }),
   { layer: TestContext.TestContext },
 )
