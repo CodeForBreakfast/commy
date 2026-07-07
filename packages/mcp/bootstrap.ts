@@ -25,6 +25,9 @@ import {
   String as Str,
 } from 'effect'
 import type { NarrowSet } from './narrow-set.ts'
+import { buildQueueStateHooks } from './queue-state-hooks.ts'
+import { QueueStateStoreTag } from './queue-state-store.ts'
+import { SessionId as SessionIdTag } from './session-id.ts'
 import type { SubscribeIntent, SubscribeTokenError } from './subscribe-parser.ts'
 import { intentToTarget, parseSubscribeTarget } from './subscribe-parser.ts'
 
@@ -619,15 +622,34 @@ export const substrateAdapterLayer = <E, R>(
 export const ZulipAdapterLive: Layer.Layer<
   SubstrateAdapter,
   EnvConfigError,
-  HttpClient.HttpClient
+  HttpClient.HttpClient | QueueStateStoreTag | SessionIdTag
 > = substrateAdapterLayer(
   Effect.gen(function* () {
     const parsed = yield* parseEnv
+    // Queue-state write half: EPHEMERAL seats only (`botName` unset). The hooks
+    // register with the configured idle timeout and persist `{queueId,
+    // lastEventId}` to the per-session store so a long-idle resume recovers it.
+    // Persistent bots pass no hooks and keep the server's default queue window.
+    const queueHooks =
+      parsed.botName === undefined
+        ? buildQueueStateHooks({
+            store: yield* QueueStateStoreTag,
+            session: yield* SessionIdTag,
+            idleTimeoutSecs: parsed.queueIdleTimeoutSecs,
+          })
+        : undefined
     return yield* zulipAdapter({
       realmUrl: parsed.realmUrl,
       minterEmail: parsed.minterEmail,
       minterApiKey: parsed.minterApiKey,
       ...(parsed.attachIdentity === undefined ? {} : { attachIdentity: parsed.attachIdentity }),
+      ...(queueHooks === undefined
+        ? {}
+        : {
+            queueIdleTimeoutSecs: queueHooks.queueIdleTimeoutSecs,
+            onQueueRegister: queueHooks.onQueueRegister,
+            onQueueAdvance: queueHooks.onQueueAdvance,
+          }),
     })
   }),
 )

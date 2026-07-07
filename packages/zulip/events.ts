@@ -192,6 +192,32 @@ export interface EventsConfig {
    * there is no watermark to anchor the replay window in that case.
    */
   readonly replay?: (since: Timestamp) => Effect.Effect<ReadonlyArray<InboundEvent>, InboxError>
+  /**
+   * Idle timeout (seconds) sent as `idle_queue_timeout` on the producer's
+   * own `POST /register` (the lazy / re-register-after-BAD_EVENT_QUEUE_ID
+   * path). Omit to register with no explicit timeout — the eager
+   * adapter-side register carries its own copy of this for the
+   * subscribe-time queue.
+   */
+  readonly queueIdleTimeoutSecs?: number
+  /**
+   * Best-effort hook fired with the freshly registered queue whenever the
+   * producer registers one itself (lazy first poll or re-register after a
+   * dead queue). The adapter persists the `{queueId, lastEventId}` to the
+   * per-session queue-state store so a long-idle resume can recover it.
+   * Total by contract (`Effect<void>` — never fails); the persistence
+   * discipline (session gate, swallow, non-blocking) lives in the closure.
+   */
+  readonly onQueueRegister?: (queue: QueueState) => Effect.Effect<void>
+  /**
+   * Best-effort hook fired with the per-poll maximum event id whenever a
+   * poll pulls the cursor forward. The adapter advances the persisted
+   * `lastEventId` (monotonic) so a resume replays only what was missed.
+   * Fired from the producer because only the `step` sees the per-poll max —
+   * the pump never does. Total by contract (`Effect<void>`); monotonicity
+   * and swallowing live in the closure.
+   */
+  readonly onQueueAdvance?: (lastEventId: number) => Effect.Effect<void>
 }
 
 const registerResponseSchema = Schema.Struct({
@@ -690,7 +716,11 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
         queue: QueueState | undefined,
       ): Effect.Effect<StepResult, ZulipApiError | ParseResult.ParseError> =>
         Effect.gen(function* () {
-          const currentQueue: QueueState = queue ?? (yield* registerQueue(config.http, config.mode))
+          const currentQueue: QueueState =
+            queue ??
+            (yield* registerQueue(config.http, config.mode, config.queueIdleTimeoutSecs).pipe(
+              Effect.tap((q) => config.onQueueRegister?.(q) ?? Effect.void),
+            ))
           const res = yield* config.http.get('/events', eventsResponseSchema, {
             queue_id: currentQueue.queueId,
             last_event_id: currentQueue.lastEventId,
@@ -723,6 +753,9 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
             if (ev.kind === 'message-posted' || ev.kind === 'mention-received') {
               yield* watermark.advance(ev.message.ts)
             }
+          }
+          if (config.onQueueAdvance !== undefined && maxId > currentQueue.lastEventId) {
+            yield* config.onQueueAdvance(maxId)
           }
           return [mapped, { queueId: currentQueue.queueId, lastEventId: maxId }] as const
         }).pipe(

@@ -30,7 +30,7 @@ import {
   TestClock,
   TestContext,
 } from 'effect'
-import type { DirectoryLookup, EventsConfig, ParsedZulipMessage } from './events.ts'
+import type { DirectoryLookup, EventsConfig, ParsedZulipMessage, QueueState } from './events.ts'
 import {
   createMessageRefCache,
   defaultRetrySchedule,
@@ -390,6 +390,191 @@ const aChannelMessage = (overrides: Partial<ParsedZulipMessage> = {}): Record<st
 // pump looping forever against an empty events stub) — fail fast
 // instead of hanging the suite.
 const ITERATOR_TEST_TIMEOUT_MS = 2_000
+
+// Queue-state write half: the producer threads the idle timeout onto its own
+// register and fires the persistence hooks so a long-idle resume can recover
+// the queue. Register site (queueId) + per-poll advance (lastEventId) are the
+// two writes the adapter persists to the per-session queue-state store.
+test(
+  'producer sends queueIdleTimeoutSecs as idle_queue_timeout on its lazy register',
+  () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        let registerBody: Record<string, unknown> | undefined
+        const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
+          http: fakeHttp({
+            onPost: (_path, body) => {
+              registerBody = body
+              return { result: 'success', queue_id: 'q1', last_event_id: 0 }
+            },
+            onGet: () => ({
+              result: 'success',
+              events: [{ id: 5, type: 'message', message: aChannelMessage() }],
+            }),
+          }),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
+          mode: 'all',
+          boundIdentity: HERMES,
+          messageRefCache: createMessageRefCache(),
+          queueIdleTimeoutSecs: 3600,
+        }
+        yield* drainOne(config)
+        expect(registerBody).toEqual({
+          event_types: JSON.stringify(['message', 'reaction']),
+          idle_queue_timeout: 3600,
+        })
+      }),
+    ),
+  ITERATOR_TEST_TIMEOUT_MS,
+)
+
+test(
+  'producer fires onQueueRegister with the freshly registered queue on lazy register',
+  () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const registered: QueueState[] = []
+        const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
+          http: fakeHttp({
+            onPost: () => ({ result: 'success', queue_id: 'q-fresh', last_event_id: 3 }),
+            onGet: () => ({
+              result: 'success',
+              events: [{ id: 5, type: 'message', message: aChannelMessage() }],
+            }),
+          }),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
+          mode: 'all',
+          boundIdentity: HERMES,
+          messageRefCache: createMessageRefCache(),
+          onQueueRegister: (q) => Effect.sync(() => void registered.push(q)),
+        }
+        yield* drainOne(config)
+        expect(registered).toEqual([{ queueId: 'q-fresh', lastEventId: 3 }])
+      }),
+    ),
+  ITERATOR_TEST_TIMEOUT_MS,
+)
+
+test(
+  'producer fires onQueueAdvance with the per-poll maximum event id',
+  () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const advanced: number[] = []
+        const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
+          http: fakeHttp({
+            onPost: () => ({ result: 'success', queue_id: 'q1', last_event_id: 0 }),
+            onGet: () => ({
+              result: 'success',
+              events: [
+                { id: 5, type: 'message', message: aChannelMessage() },
+                { id: 7, type: 'message', message: aChannelMessage({ id: 200 }) },
+              ],
+            }),
+          }),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
+          mode: 'all',
+          boundIdentity: HERMES,
+          messageRefCache: createMessageRefCache(),
+          onQueueAdvance: (id) => Effect.sync(() => void advanced.push(id)),
+        }
+        yield* drainOne(config)
+        expect(advanced).toContain(7)
+      }),
+    ),
+  ITERATOR_TEST_TIMEOUT_MS,
+)
+
+test(
+  'producer does not fire onQueueAdvance when a poll pulls the cursor nowhere',
+  () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        // A poll that returns no events leaves maxId at the queue's
+        // last_event_id — the guard must skip the (best-effort, but not free)
+        // advance rather than re-reading the store on every idle long-poll.
+        const advanced: number[] = []
+        let getCalls = 0
+        const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
+          http: fakeHttp({
+            onPost: () => ({ result: 'success', queue_id: 'q1', last_event_id: 9 }),
+            onGet: () => {
+              getCalls += 1
+              if (getCalls === 1) return { result: 'success', events: [] }
+              return {
+                result: 'success',
+                events: [{ id: 12, type: 'message', message: aChannelMessage() }],
+              }
+            },
+          }),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
+          mode: 'all',
+          boundIdentity: HERMES,
+          messageRefCache: createMessageRefCache(),
+          onQueueAdvance: (id) => Effect.sync(() => void advanced.push(id)),
+        }
+        yield* drainOne(config)
+        // The empty first poll advanced nothing; only the id-12 event moved it.
+        expect(advanced).toEqual([12])
+      }),
+    ),
+  ITERATOR_TEST_TIMEOUT_MS,
+)
+
+test(
+  'producer re-persists the new queue via onQueueRegister after BAD_EVENT_QUEUE_ID',
+  () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        // A dead queue forces a fresh register mid-stream — the new queueId must
+        // be persisted too, or a resume would replay against the expired queue.
+        const registered: QueueState[] = []
+        let registerCalls = 0
+        let getCalls = 0
+        const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
+          http: fakeHttp({
+            onPost: () => {
+              registerCalls += 1
+              return { result: 'success', queue_id: `q${registerCalls}`, last_event_id: 0 }
+            },
+            onGet: () => {
+              getCalls += 1
+              if (getCalls === 1) {
+                throw new ZulipApiError({
+                  message: 'queue expired',
+                  status: 400,
+                  code: 'BAD_EVENT_QUEUE_ID',
+                  retryAfter: undefined,
+                })
+              }
+              return {
+                result: 'success',
+                events: [{ id: 1, type: 'message', message: aChannelMessage({ id: 100 }) }],
+              }
+            },
+          }),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
+          mode: 'all',
+          boundIdentity: HERMES,
+          messageRefCache: createMessageRefCache(),
+          queueIdleTimeoutSecs: 100,
+          onQueueRegister: (q) => Effect.sync(() => void registered.push(q)),
+        }
+        yield* drainOne(config)
+        // Two registers (initial + post-dead-queue); both persisted.
+        expect(registered).toEqual([
+          { queueId: 'q1', lastEventId: 0 },
+          { queueId: 'q2', lastEventId: 0 },
+        ])
+      }),
+    ),
+  ITERATOR_TEST_TIMEOUT_MS,
+)
 
 test(
   'iterator skips malformed reaction event and yields subsequent valid events',
