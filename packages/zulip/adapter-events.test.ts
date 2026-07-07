@@ -55,6 +55,7 @@ import {
 } from 'effect'
 import type { ZulipAdapter } from './adapter.ts'
 import { zulipAdapter } from './adapter.ts'
+import type { QueueState } from './events.ts'
 import { ApiKey, BotEmail, RealmUrl } from './http.ts'
 
 const HERMES = {
@@ -123,6 +124,32 @@ const buildAttachAdapter = (
         name: decodeBotNameSync('hermes-agent'),
         apiKey: Redacted.make(yield* ApiKey('stable-provided-key').pipe(Effect.orDie)),
       },
+    }
+    const adapter = yield* zulipAdapter(config).pipe(
+      Effect.provideService(HttpClient.HttpClient, stub.client),
+    )
+    yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+    return adapter
+  })
+
+// Build an adapter carrying the queue-state write-half config (idle timeout +
+// persistence hooks) so the eager subscribe-time register can be inspected.
+const buildAdapterWithQueueConfig = (
+  stub: StubHttpClient,
+  queueConfig: {
+    readonly queueIdleTimeoutSecs?: number
+    readonly onQueueRegister?: (queue: QueueState) => Effect.Effect<void>
+    readonly onQueueAdvance?: (lastEventId: number) => Effect.Effect<void>
+  },
+): Effect.Effect<ZulipAdapter, IdentityError | UnknownIdentity> =>
+  Effect.gen(function* () {
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
+    yield* seedRegenerate(stub, HERMES.user_id)
+    const config = {
+      realmUrl: yield* RealmUrl(REALM_URL).pipe(Effect.orDie),
+      minterEmail: yield* BotEmail('minter@example.com').pipe(Effect.orDie),
+      minterApiKey: Redacted.make(yield* ApiKey('minter-key').pipe(Effect.orDie)),
+      ...queueConfig,
     }
     const adapter = yield* zulipAdapter(config).pipe(
       Effect.provideService(HttpClient.HttpClient, stub.client),
@@ -271,6 +298,28 @@ effectTest(
       expect(polls.length).toBeGreaterThanOrEqual(2)
       expect(polls[0]?.url.searchParams.get('last_event_id')).toBe('0')
       expect(polls[1]?.url.searchParams.get('last_event_id')).toBe('5')
+    }),
+  { layer: TestContext.TestContext },
+)
+
+effectTest(
+  'eager subscribe-time register carries idle_queue_timeout and fires onQueueRegister',
+  () =>
+    Effect.gen(function* () {
+      const registered: QueueState[] = []
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapterWithQueueConfig(stub, {
+        queueIdleTimeoutSecs: 3600,
+        onQueueRegister: (q) => Effect.sync(() => void registered.push(q)),
+      })
+      yield* seedRegister(stub)
+      yield* seedSubscribeOk(stub)
+      yield* adapter.inbox.subscribe(homeChannel.name)
+      const registers = yield* registerPosts(stub)
+      expect(registers).toHaveLength(1)
+      expect(new URLSearchParams(registers[0]?.body).get('idle_queue_timeout')).toBe('3600')
+      // The eager register persisted the queue — the queueId a resume recovers.
+      expect(registered).toEqual([{ queueId: 'queue-1', lastEventId: 0 }])
     }),
   { layer: TestContext.TestContext },
 )

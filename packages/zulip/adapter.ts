@@ -115,6 +115,28 @@ export interface ZulipAdapterConfig {
     readonly name: BotName
     readonly apiKey: Redacted.Redacted<ApiKeyType>
   }
+  /**
+   * Idle timeout (seconds) sent as `idle_queue_timeout` on every events-queue
+   * register — both the eager subscribe-time register here and the producer's
+   * own lazy / re-register path (threaded through {@link EventsConfig}). Set
+   * for ephemeral seats so Zulip keeps the queue alive across a long idle;
+   * omitted for persistent bots, which keep the server's default window.
+   */
+  readonly queueIdleTimeoutSecs?: number
+  /**
+   * Best-effort hook fired with the freshly registered queue at every register
+   * site (eager subscribe-time + producer lazy/re-register). The wiring layer
+   * persists `{queueId, lastEventId}` to the per-session queue-state store.
+   * Total by contract (`Effect<void>`); the session gate / swallow / poll
+   * discipline lives in the closure.
+   */
+  readonly onQueueRegister?: (queue: QueueState) => Effect.Effect<void>
+  /**
+   * Best-effort hook fired with the per-poll maximum event id whenever a poll
+   * moves the cursor. The wiring layer advances the persisted `lastEventId`
+   * (monotonic). Total by contract (`Effect<void>`).
+   */
+  readonly onQueueAdvance?: (lastEventId: number) => Effect.Effect<void>
 }
 
 export type ZulipAdapter = AgentComms & {
@@ -1327,7 +1349,8 @@ export const zulipAdapter = (
         if (Option.exists(state.registration, (r) => r.mode === mode)) {
           return Effect.succeed([undefined, state] as const)
         }
-        return registerQueue(minterHttp, mode).pipe(
+        return registerQueue(minterHttp, mode, config.queueIdleTimeoutSecs).pipe(
+          Effect.tap((q) => config.onQueueRegister?.(q) ?? Effect.void),
           Effect.map(
             (q) =>
               [
@@ -1428,6 +1451,18 @@ export const zulipAdapter = (
                 mode: currentMode(state),
                 messageRefCache,
                 watermarkStore,
+                // Queue-state write half: the timeout on the producer's own
+                // register + the persistence hooks so a long-idle resume can
+                // recover the queue. Undefined for persistent seats.
+                ...(config.queueIdleTimeoutSecs === undefined
+                  ? {}
+                  : { queueIdleTimeoutSecs: config.queueIdleTimeoutSecs }),
+                ...(config.onQueueRegister === undefined
+                  ? {}
+                  : { onQueueRegister: config.onQueueRegister }),
+                ...(config.onQueueAdvance === undefined
+                  ? {}
+                  : { onQueueAdvance: config.onQueueAdvance }),
                 // Wire the port's own replay() into the producer so BAD_EVENT_QUEUE_ID
                 // recovery can transparently backfill the gap window with replayed=true
                 // events. Late-bound to inbox.replay so the closure picks

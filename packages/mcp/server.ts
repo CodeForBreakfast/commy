@@ -44,6 +44,7 @@ import { buildMcpServer } from './mcp-server.ts'
 import { type CatchUpError, catchUpMentions } from './mentions-catch-up.ts'
 import type { NarrowSet } from './narrow-set.ts'
 import { createNarrowSet } from './narrow-set.ts'
+import { FileQueueStateStoreLive, type QueueStateStoreTag } from './queue-state-store.ts'
 import { raceReleaseAgainstTimeout } from './release-shutdown.ts'
 import { SessionIdLive, SessionId as SessionIdTag } from './session-id.ts'
 import type { SubscribeIntent, SubscribeTokenError } from './subscribe-parser.ts'
@@ -774,23 +775,25 @@ export const makeProgram = (
  * `ZulipAdapterLive`'s own `parseEnv` reads it during the layer build and
  * the program fiber inherits the same source.
  *
- * `SessionIdLive` is `provideMerge`d into the subscription store so the one
- * shared `Deferred<SessionIdValue>` is built once and memoized to a single
- * instance for the whole MCP child: the store's build captures that deferred,
- * and the same instance is re-exported so the program and every setter/awaiter
- * reference it. A plain merge would leave the store's `SessionId` requirement
- * unsatisfied — merge does not feed a sibling's output into a sibling's input.
+ * `SessionIdLive` is `provideMerge`d over the whole bundle so the one shared
+ * `Deferred<SessionIdValue>` is built once and memoized to a single instance
+ * for the whole MCP child: both the subscription store AND the Zulip adapter's
+ * queue-state hooks capture that same deferred, and it is re-exported so the
+ * program and every setter/awaiter reference it. Providing it separately to
+ * each requirer would mint distinct deferreds — a setter would complete one
+ * while awaiters block on another. `FileQueueStateStoreLive` is likewise
+ * provided once (feeding the adapter's ephemeral persistence hooks).
  */
 const AppLayer: Layer.Layer<
-  SubstrateAdapter | CursorStoreTag | SubscriptionStoreTag | SessionIdTag,
+  SubstrateAdapter | CursorStoreTag | SubscriptionStoreTag | SessionIdTag | QueueStateStoreTag,
   EnvConfigError,
   HttpClient.HttpClient | FileSystem.FileSystem
 > = Layer.mergeAll(
   ZulipAdapterLive,
   FileCursorStoreLive,
-  Layer.provideMerge(FileSubscriptionStoreLive, SessionIdLive),
+  FileSubscriptionStoreLive,
   stderrLoggerLayer,
-)
+).pipe(Layer.provideMerge(FileQueueStateStoreLive), Layer.provideMerge(SessionIdLive))
 
 /**
  * Production dependency bundle: the config source (read from
