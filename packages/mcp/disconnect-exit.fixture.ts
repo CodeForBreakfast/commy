@@ -25,6 +25,7 @@ import { ConfigProvider, Effect, Layer, Option } from 'effect'
 import { substrateAdapterLayer } from './bootstrap.ts'
 import { CursorStoreTag } from './cursor-store.ts'
 import { completeAsSubstrate } from './memory-substrate.ts'
+import { ResumeOutcomeLive } from './resume-outcome.ts'
 import { clientDisconnect, makeProgram } from './server.ts'
 import { SessionIdLive } from './session-id.ts'
 import { SubscriptionStoreTag } from './subscription-store.ts'
@@ -80,6 +81,7 @@ NodeRuntime.runMain(
           Layer.succeed(CursorStoreTag, inMemoryCursorStore),
           Layer.succeed(SubscriptionStoreTag, inMemorySubscriptionStore),
           SessionIdLive,
+          ResumeOutcomeLive,
           stderrLoggerLayer,
         ),
         Layer.mergeAll(

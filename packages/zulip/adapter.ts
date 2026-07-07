@@ -152,6 +152,18 @@ export interface ZulipAdapterConfig {
    * Omitted for persistent bots — they never resume-poll.
    */
   readonly resumeQueue?: () => Effect.Effect<Option.Option<QueueState>>
+  /**
+   * Resume-verdict sink for the ephemeral history-catch-up fallback. Fired once
+   * per pump lifetime: `false` the instant `resumeQueue` yields `None` (fresh
+   * session / nothing persisted — the seat must run its normal boot catch-up);
+   * otherwise wired through to the producer, which reports `true` when the
+   * surviving queue's resume-poll succeeds (backlog replays natively — catch-up
+   * must stand down) or `false` when it is dead (`BAD_EVENT_QUEUE_ID` — history
+   * catch-up backfills the gap). The wiring layer resolves a shared `Deferred`
+   * the seat's `onAcquire` awaits. Total by contract (`Effect<void>`). Omitted
+   * for persistent bots — their boot catch-up is unconditional.
+   */
+  readonly onResumeOutcome?: (queueReplayed: boolean) => Effect.Effect<void>
 }
 
 export type ZulipAdapter = AgentComms & {
@@ -1469,43 +1481,62 @@ export const zulipAdapter = (
             // known) leaves the register-time / lazy-register path standing.
             config.resumeQueue?.() ?? Effect.succeedNone,
           ]).pipe(
-            Effect.map(([current, state, resumed]) => {
+            Effect.flatMap(([current, state, resumed]) => {
               const initialQueue = Option.orElse(resumed, () =>
                 Option.map(state.registration, (r) => r.queue),
               )
-              return inboxEvents({
-                http: minterHttp,
-                permalinkBase: base,
-                resolveDirectory: buildDirectoryLookup,
-                mode: currentMode(state),
-                messageRefCache,
-                watermarkStore,
-                // Queue-state write half: the timeout on the producer's own
-                // register + the persistence hooks so a long-idle resume can
-                // recover the queue. Undefined for persistent seats.
-                ...(config.queueIdleTimeoutSecs === undefined
-                  ? {}
-                  : { queueIdleTimeoutSecs: config.queueIdleTimeoutSecs }),
-                ...(config.onQueueRegister === undefined
-                  ? {}
-                  : { onQueueRegister: config.onQueueRegister }),
-                ...(config.onQueueAdvance === undefined
-                  ? {}
-                  : { onQueueAdvance: config.onQueueAdvance }),
-                // Wire the port's own replay() into the producer so BAD_EVENT_QUEUE_ID
-                // recovery can transparently backfill the gap window with replayed=true
-                // events. Late-bound to inbox.replay so the closure picks
-                // up the function defined below in the same object literal.
-                replay: (since) => inbox.replay(since),
-                ...Option.match(current, {
-                  onNone: () => ({}),
-                  onSome: (b) => ({ boundIdentity: b.identity }),
-                }),
-                ...Option.match(initialQueue, {
-                  onNone: () => ({}),
-                  onSome: (q) => ({ initialQueue: q }),
-                }),
-              })
+              // Resume-verdict wiring. No persisted resume-state → report
+              // 'missed' now so the seat runs its normal boot catch-up; the
+              // eager register-time queue below is a fresh register, not a
+              // resume. A persisted `Some` defers the verdict to the producer's
+              // first resume-poll (alive → true, dead → false).
+              const reportAbsentResume = Option.isNone(resumed)
+                ? (config.onResumeOutcome?.(false) ?? Effect.void)
+                : Effect.void
+              return reportAbsentResume.pipe(
+                Effect.as(
+                  inboxEvents({
+                    http: minterHttp,
+                    permalinkBase: base,
+                    resolveDirectory: buildDirectoryLookup,
+                    mode: currentMode(state),
+                    messageRefCache,
+                    watermarkStore,
+                    // Queue-state write half: the timeout on the producer's own
+                    // register + the persistence hooks so a long-idle resume can
+                    // recover the queue. Undefined for persistent seats.
+                    ...(config.queueIdleTimeoutSecs === undefined
+                      ? {}
+                      : { queueIdleTimeoutSecs: config.queueIdleTimeoutSecs }),
+                    ...(config.onQueueRegister === undefined
+                      ? {}
+                      : { onQueueRegister: config.onQueueRegister }),
+                    ...(config.onQueueAdvance === undefined
+                      ? {}
+                      : { onQueueAdvance: config.onQueueAdvance }),
+                    // Wire the port's own replay() into the producer so BAD_EVENT_QUEUE_ID
+                    // recovery can transparently backfill the gap window with replayed=true
+                    // events. Late-bound to inbox.replay so the closure picks
+                    // up the function defined below in the same object literal.
+                    replay: (since) => inbox.replay(since),
+                    ...Option.match(current, {
+                      onNone: () => ({}),
+                      onSome: (b) => ({ boundIdentity: b.identity }),
+                    }),
+                    ...Option.match(initialQueue, {
+                      onNone: () => ({}),
+                      onSome: (q) => ({ initialQueue: q }),
+                    }),
+                    // Resume-verdict: only a genuine resume (persisted `Some`) lets
+                    // the producer report the verdict — a fresh register-time queue
+                    // must never report 'replayed'. The 'missed' for a None resume
+                    // was already reported above.
+                    ...(Option.isSome(resumed) && config.onResumeOutcome !== undefined
+                      ? { onResumeOutcome: config.onResumeOutcome }
+                      : {}),
+                  }),
+                ),
+              )
             }),
           ),
         ).pipe(Stream.filterEffect(shouldDeliver)),

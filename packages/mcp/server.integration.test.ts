@@ -47,6 +47,7 @@ import { CursorStoreTag } from './cursor-store.ts'
 // `completeAsSubstrate` is the single seam that completes it to the Zulip-shaped
 // `SubstrateAdapter` port; no Zulip type or brand is named directly here.
 import { completeAsSubstrate } from './memory-substrate.ts'
+import { ResumeOutcome as ResumeOutcomeTag } from './resume-outcome.ts'
 import { makeProgram } from './server.ts'
 import { SessionId as SessionIdTag, type SessionIdValue } from './session-id.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
@@ -159,6 +160,13 @@ interface AdapterOverrides {
    * argument so the cache can mint a lazy identity.
    */
   readonly ephemeral?: boolean
+  /**
+   * The queue-resume verdict the ephemeral `onAcquire` gates history catch-up
+   * on. Default `false` (no queue resume → catch-up runs, as it did before the
+   * conditional landed). Set `true` to simulate a surviving queue whose pump
+   * replay already covered the backlog — onAcquire must then SKIP catch-up.
+   */
+  readonly resumeQueueReplayed?: boolean
   /**
    * Capture stderr-shaped log output (default: route to the runner's
    * STDERR via the production logger). Pass an array to collect the
@@ -341,6 +349,12 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
     overrides.sessionIdDeferred ?? Deferred.unsafeMake<SessionIdValue>(FiberId.none)
   const subscriptionStore =
     overrides.subscriptionStore ?? createMemorySubscriptionStore(sessionIdDeferred)
+  // The memory adapter never fires the resume-outcome hook (only the real Zulip
+  // adapter's resume wiring does), so pre-resolve the shared deferred the
+  // ephemeral onAcquire awaits — default false (catch-up runs) unless a test
+  // simulates a surviving queue.
+  const resumeOutcomeDeferred = Deferred.unsafeMake<boolean>(FiberId.none)
+  Deferred.unsafeDone(resumeOutcomeDeferred, Effect.succeed(overrides.resumeQueueReplayed ?? false))
   const runExit = Effect.runPromiseExit(
     makeProgram({
       transport: serverTransport,
@@ -353,6 +367,7 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
             Layer.succeed(CursorStoreTag, cursorStore),
             Layer.succeed(SubscriptionStoreTag, subscriptionStore),
             Layer.succeed(SessionIdTag, sessionIdDeferred),
+            Layer.succeed(ResumeOutcomeTag, resumeOutcomeDeferred),
             loggerLayer,
           ),
           testPlatformLayer(env),
@@ -1631,6 +1646,189 @@ test('ephemeral catch-up failure is non-fatal: tool call succeeds, failure is lo
       (line) => line.includes('ephemeral mentions catch-up failed') && line.includes('replay boom'),
     ),
   ).toBe(true)
+})
+
+// ─── conditional catch-up: queue-resume verdict gates history replay ─────
+
+test('ephemeral queue-ALIVE resume: history catch-up does NOT run, no duplicate delivery', async () => {
+  // Everything a dead-queue resume would replay is staged: a prior mentions
+  // cursor (would fire inbox.replay) and a subscribed channel with recent
+  // history (would fire readChannel). But the queue SURVIVED — the pump is
+  // replaying the backlog natively — so onAcquire must skip BOTH: running
+  // either would double-deliver every message the pump already carries.
+  const PRIOR_CURSOR_TS = 1000
+  const cursorStore: CursorStore = {
+    read: () => Effect.succeed(Option.some(decodeTimestampSync(PRIOR_CURSOR_TS))),
+    write: () => Effect.void,
+  }
+  const replayCalls: number[] = []
+  const inboxOverrides: Partial<MessageInbox> = {
+    replay: (since) =>
+      Effect.sync(() => {
+        replayCalls.push(since)
+        return []
+      }),
+  }
+  const readChannelCalls: string[] = []
+  const historyOverrides: Partial<HistoryReader> = {
+    readChannel: (channel) =>
+      Effect.sync(() => {
+        readChannelCalls.push(channel as string)
+        return []
+      }),
+  }
+
+  const h = await buildHarness({
+    ephemeral: true,
+    resumeQueueReplayed: true,
+    cursorStore,
+    inboxOverrides,
+    historyOverrides,
+    subscribe: 'channel:home',
+    seedChannels: ['home'],
+  })
+  try {
+    const result = await callTool(h.client, 'post', {
+      channel_name: 'home',
+      body: 'hello from a resumed-alive ephemeral seat',
+      session_id: '9a11e000-0000-4000-8000-000000000009',
+    })
+    expect(result.isError).toBeFalsy()
+    // Neither catch-up path was consulted, and nothing was surfaced ahead of
+    // the tool result — the pump owns delivery of the missed backlog.
+    expect(replayCalls).toEqual([])
+    expect(readChannelCalls).toEqual([])
+    const channelNotifications = h.notifications.filter(
+      (n) => n.method === 'notifications/claude/channel',
+    )
+    expect(channelNotifications).toHaveLength(0)
+  } finally {
+    await h.cleanup()
+  }
+})
+
+test('ephemeral queue-DEAD resume: mentions + channels catch-up run and backfill missed messages', async () => {
+  // The persisted queue was dead on the resume-poll (verdict false), so the
+  // pump replayed nothing. Both history catch-ups must run: the mentions
+  // replay (cursor-bounded) AND the channel skim (window-bounded) backfill the
+  // messages the dead queue could not carry.
+  const PRIOR_CURSOR_TS = 1000
+  const cursorStore: CursorStore = {
+    read: () => Effect.succeed(Option.some(decodeTimestampSync(PRIOR_CURSOR_TS))),
+    write: () => Effect.void,
+  }
+  const mentionedIdentity = {
+    id: decodeIdentityIdSync('bot-placeholder'),
+    name: decodeDisplayNameSync('cc-resume-dead'),
+    kind: 'agent' as const,
+  }
+  const replayed: InboundEvent[] = [
+    {
+      kind: 'mention-received',
+      message: {
+        ref: {
+          id: decodeMessageIdSync('msg-mention-1'),
+          channel: {
+            id: decodeChannelIdSync('chan-home'),
+            name: decodeChannelNameSync('home'),
+            permalink: ChannelPermalinkSchema.make(
+              'https://zulip.example.com/#narrow/channel/chan-home-home',
+            ),
+          },
+          thread: Option.none(),
+          permalink: MessagePermalinkSchema.make(
+            'https://zulip.example.com/#narrow/channel/chan-home-home/near/msg-mention-1',
+          ),
+        },
+        sender: {
+          id: decodeIdentityIdSync('user-99'),
+          name: decodeDisplayNameSync('carol'),
+          kind: 'human' as const,
+        },
+        body: decodeMessageBodySync('you were @-mentioned while away'),
+        ts: decodeTimestampSync(PRIOR_CURSOR_TS + 50),
+        mentions: [mentionedIdentity],
+        reactions: [],
+      },
+      mentions: [mentionedIdentity],
+    },
+  ]
+  const replayCalls: number[] = []
+  const inboxOverrides: Partial<MessageInbox> = {
+    replay: (since) =>
+      Effect.sync(() => {
+        replayCalls.push(since)
+        return replayed
+      }),
+  }
+  const readChannelCalls: string[] = []
+  const historyOverrides: Partial<HistoryReader> = {
+    readChannel: (channel) =>
+      Effect.sync(() => {
+        readChannelCalls.push(channel as string)
+        if (channel !== ('home' as unknown as ChannelName)) return []
+        return [
+          {
+            ref: {
+              id: decodeMessageIdSync('catchup-home-1'),
+              channel: {
+                id: decodeChannelIdSync('chan-home'),
+                name: decodeChannelNameSync('home'),
+                permalink: ChannelPermalinkSchema.make(
+                  'https://zulip.example.com/#narrow/channel/chan-home-home',
+                ),
+              },
+              thread: Option.none(),
+              permalink: MessagePermalinkSchema.make(
+                'https://zulip.example.com/#narrow/channel/chan-home-home/near/catchup-home-1',
+              ),
+            },
+            sender: {
+              id: decodeIdentityIdSync('user-carol'),
+              name: decodeDisplayNameSync('carol'),
+              kind: 'human' as const,
+            },
+            body: decodeMessageBodySync('a channel message you missed'),
+            ts: decodeTimestampSync(PRIOR_CURSOR_TS + 60),
+            mentions: [],
+            reactions: [],
+          },
+        ]
+      }),
+  }
+
+  const h = await buildHarness({
+    ephemeral: true,
+    resumeQueueReplayed: false,
+    cursorStore,
+    inboxOverrides,
+    historyOverrides,
+    subscribe: 'channel:home',
+    seedChannels: ['home'],
+  })
+  try {
+    const postPromise = callTool(h.client, 'post', {
+      channel_name: 'home',
+      body: 'hello from a resumed-dead ephemeral seat',
+      session_id: 'dead0000-0000-4000-8000-00000000000d',
+    })
+    await waitFor(
+      () => h.notifications.filter((n) => n.method === 'notifications/claude/channel').length >= 2,
+      300,
+    )
+    await postPromise
+    // Both catch-up paths ran.
+    expect(replayCalls).toEqual([PRIOR_CURSOR_TS])
+    expect(readChannelCalls).toContain('home')
+    // Both missed messages were backfilled: the mention and the channel skim.
+    const bodies = h.notifications
+      .filter((n) => n.method === 'notifications/claude/channel')
+      .map((n) => (n.params as { content: string }).content)
+    expect(bodies).toContain('you were @-mentioned while away')
+    expect(bodies).toContain('a channel message you missed')
+  } finally {
+    await h.cleanup()
+  }
 })
 
 // ─── Type-2 default sub set for interactive CC sessions ─────────
