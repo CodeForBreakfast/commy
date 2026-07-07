@@ -28,7 +28,6 @@ import { Effect, Option, Ref, Schema, Stream, TestClock, TestContext } from 'eff
 import { channelNotifier, startEventPump } from './event-pump.ts'
 import type { ChannelEventPayload } from './events.ts'
 import { buildMcpServer } from './mcp-server.ts'
-import { type DeliveryTarget, deliveryTargetOf } from './target-cursor.ts'
 
 const BOT_ID: IdentityIdType = decodeIdentityIdSync('bot-42')
 
@@ -904,114 +903,6 @@ test('pump still calls onMention when mention-received is the deduped duplicate'
       yield* handle.done
       expect(collector.calls).toHaveLength(1)
       expect(mentionTs).toEqual([1715450500])
-    }),
-  ))
-
-test('pump calls onDelivery with the target + ts of a delivered plain message-posted (not just mentions)', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      // The whole point of the write half: a plain channel/thread message-posted
-      // — never a mention — advances its subscription's cursor. onMention would
-      // miss this entirely.
-      const inbox = queueInbox({
-        events: [{ kind: 'message-posted', message: msg({ ts: decodeTimestampSync(1715450700) }) }],
-        closeAfterDrain: true,
-      })
-      const collector = collectingNotifier()
-      const deliveries: Array<{ target: DeliveryTarget; ts: number }> = []
-      const handle = yield* startEventPump({
-        inbox: inbox.inbox,
-        notifier: collector.notifier,
-        getBotIdentityId: () => BOT_ID,
-        onDelivery: (target, ts) =>
-          Effect.sync(() => {
-            deliveries.push({ target, ts })
-          }),
-      })
-      yield* handle.done
-      expect(deliveries).toEqual([{ target: deliveryTargetOf(msg({})), ts: 1715450700 }])
-    }),
-  ))
-
-test('pump derives a thread-less target for a top-level message-posted', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const inbox = queueInbox({
-        events: [{ kind: 'message-posted', message: msg({ ref }) }],
-        closeAfterDrain: true,
-      })
-      const collector = collectingNotifier()
-      const deliveries: DeliveryTarget[] = []
-      const handle = yield* startEventPump({
-        inbox: inbox.inbox,
-        notifier: collector.notifier,
-        getBotIdentityId: () => BOT_ID,
-        onDelivery: (target) =>
-          Effect.sync(() => {
-            deliveries.push(target)
-          }),
-      })
-      yield* handle.done
-      expect(deliveries).toEqual([deliveryTargetOf(msg({ ref }))])
-      expect(Option.isNone(deliveries[0]?.thread ?? Option.some('x'))).toBe(true)
-    }),
-  ))
-
-test('pump does NOT call onDelivery for reaction events (no message ref)', () =>
-  runWithClockSeconds(
-    1715450010,
-    Effect.gen(function* () {
-      const inbox = queueInbox({
-        events: [
-          { kind: 'reaction-added', target: ref, emoji: decodeEmojiSync('tada'), by: sender },
-        ],
-        closeAfterDrain: true,
-      })
-      const collector = collectingNotifier()
-      const deliveries: DeliveryTarget[] = []
-      const handle = yield* startEventPump({
-        inbox: inbox.inbox,
-        notifier: collector.notifier,
-        getBotIdentityId: () => BOT_ID,
-        onDelivery: (target) =>
-          Effect.sync(() => {
-            deliveries.push(target)
-          }),
-      })
-      yield* handle.done
-      expect(deliveries).toEqual([])
-    }),
-  ))
-
-test('pump still calls onDelivery when the message is the deduped duplicate — the cursor is not swallowed', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      // A single Zulip message surfaces as message-posted + mention-received.
-      // The consumer sees one block, but the per-target cursor must advance for
-      // both (monotonic downstream), so onDelivery fires on the deduped one too.
-      const bot: Identity = { id: BOT_ID, name: decodeDisplayNameSync('cc-bot'), kind: 'agent' }
-      const portMessage = msg({ ts: decodeTimestampSync(1715450800), mentions: [bot] })
-      const inbox = queueInbox({
-        events: [
-          { kind: 'message-posted', message: portMessage },
-          { kind: 'mention-received', message: portMessage, mentions: [bot] },
-        ],
-        closeAfterDrain: true,
-      })
-      const collector = collectingNotifier()
-      const deliveryTs: number[] = []
-      const handle = yield* startEventPump({
-        inbox: inbox.inbox,
-        notifier: collector.notifier,
-        getBotIdentityId: () => BOT_ID,
-        onDelivery: (_target, ts) =>
-          Effect.sync(() => {
-            deliveryTs.push(ts)
-          }),
-      })
-      yield* handle.done
-      expect(collector.calls).toHaveLength(1)
-      expect(deliveryTs).toEqual([1715450800, 1715450800])
     }),
   ))
 

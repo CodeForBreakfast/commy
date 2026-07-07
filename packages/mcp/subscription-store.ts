@@ -1,12 +1,11 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { ChannelNameSchema, ThreadNameSchema, type Timestamp } from '@commy/core/ports'
+import { ChannelNameSchema, ThreadNameSchema } from '@commy/core/ports'
 import { FileSystem } from '@effect/platform'
 import type { PlatformError } from '@effect/platform/Error'
 import { Config, Context, Deferred, Effect, Layer, Option, type ParseResult, Schema } from 'effect'
 import { SessionId, type SessionIdValue } from './session-id.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
-import { advanceTargetCursor, type DeliveryTarget, targetCursorDirConfig } from './target-cursor.ts'
 
 /**
  * Persistent per-session_id narrow-set snapshot.
@@ -41,16 +40,6 @@ export interface SubscriptionStore {
     PlatformError | ParseResult.ParseError
   >
   write(intents: ReadonlyArray<SubscribeIntent>): Effect.Effect<void, PlatformError>
-  /**
-   * Advance the per-(session, target) cursor to `ts` on delivery — the write
-   * half of precise resume replay, backed by {@link advanceTargetCursor}'s
-   * own file, separate from the intents file. No `session_id` param: the id
-   * comes from the captured deferred, same as {@link read}/{@link write}.
-   *
-   * Unlike the sibling methods this resolves the id **non-blocking** via
-   * `Deferred.poll` — see the WHY on the implementation.
-   */
-  advanceCursor(target: DeliveryTarget, ts: Timestamp): Effect.Effect<void, PlatformError>
 }
 
 /**
@@ -72,11 +61,6 @@ export interface FileSubscriptionStoreDeps {
    * reads it from context (`NodeContext.layer`, provided once in the app layer).
    */
   readonly fs: FileSystem.FileSystem
-  /**
-   * Directory the per-(session, target) cursor files live under — separate
-   * from {@link dir} (the intents files). Created lazily on first advance.
-   */
-  readonly cursorDir: string
   /**
    * The one shared session-id deferred, captured at layer build (cheap and
    * non-blocking — capturing the deferred does not await it). Every read/write
@@ -142,7 +126,7 @@ const readSubscriptions = (
   )
 
 export const createFileSubscriptionStore = (deps: FileSubscriptionStoreDeps): SubscriptionStore => {
-  const { dir, fs, cursorDir, session } = deps
+  const { dir, fs, session } = deps
   const pathFor = (id: SessionIdValue): string => join(dir, subscriptionFilename(id))
 
   const read: SubscriptionStore['read'] = () =>
@@ -155,24 +139,7 @@ export const createFileSubscriptionStore = (deps: FileSubscriptionStoreDeps): Su
         .pipe(Effect.zipRight(fs.writeFileString(pathFor(id), JSON.stringify(intents)))),
     )
 
-  // Hot path: advanceCursor is fired from the event pump on EVERY delivery, so
-  // the id must resolve NON-BLOCKING. `read`/`write` are cold (boot-forked
-  // restore / poll-guarded persist) and may `Deferred.await`; here a blocking
-  // await would park inbound delivery on an unfed deferred — the exact drop
-  // this whole effort exists to kill. So poll the id: write on `Some`, no-op on
-  // `None` (id not known yet — nothing to persist against, and the resume this
-  // feeds hasn't happened).
-  const advanceCursor: SubscriptionStore['advanceCursor'] = (target, ts) =>
-    Effect.flatMap(
-      Deferred.poll(session),
-      Option.match({
-        onNone: () => Effect.void,
-        onSome: (awaitId) =>
-          Effect.flatMap(awaitId, (id) => advanceTargetCursor(fs, cursorDir, id, target, ts)),
-      }),
-    )
-
-  return { read, write, advanceCursor }
+  return { read, write }
 }
 
 const STATE_SEGMENT = 'commy'
@@ -211,14 +178,7 @@ export const FileSubscriptionStoreLive: Layer.Layer<
   FileSystem.FileSystem | SessionId
 > = Layer.effect(
   SubscriptionStoreTag,
-  Effect.all([
-    FileSystem.FileSystem,
-    Effect.orDie(subscriptionDirConfig),
-    Effect.orDie(targetCursorDirConfig),
-    SessionId,
-  ]).pipe(
-    Effect.map(([fs, dir, cursorDir, session]) =>
-      createFileSubscriptionStore({ dir, fs, cursorDir, session }),
-    ),
+  Effect.all([FileSystem.FileSystem, Effect.orDie(subscriptionDirConfig), SessionId]).pipe(
+    Effect.map(([fs, dir, session]) => createFileSubscriptionStore({ dir, fs, session })),
   ),
 )

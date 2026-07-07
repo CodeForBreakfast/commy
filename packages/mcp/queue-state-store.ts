@@ -17,11 +17,10 @@ import type { SessionIdValue } from './session-id.ts'
  * walks `lastEventId` forward; registering a fresh queue replaces the whole
  * state via {@link QueueStateStore.write}.
  *
- * Distinct from `cursor-store.ts` (a per-`IdentityId` mentions watermark) and
- * `target-cursor.ts` (a per-session target→ts map): different key shape,
- * different directory (`<state>/commy/queue-state`), no collision. One file per
- * session holds a single `QueueState`, stored as JSON so a human can inspect or
- * wipe it.
+ * Distinct from `cursor-store.ts` (a per-`IdentityId` mentions watermark):
+ * different key shape, different directory (`<state>/commy/queue-state`), no
+ * collision. One file per session holds a single `QueueState`, stored as JSON
+ * so a human can inspect or wipe it.
  *
  * `read` yields `Option.none` when no state file exists — the "fresh session,
  * nothing to resume" signal callers gate on. A present-but-unparseable file
@@ -140,8 +139,8 @@ const STATE_SEGMENT = 'commy'
 
 /**
  * The XDG state-home base, read from the ambient ConfigProvider at the boot
- * edge — identical to cursor-store's / target-cursor's. `XDG_STATE_HOME` is
- * the base; an unset or empty value falls back to `<home>/.local/state`.
+ * edge — identical to cursor-store's. `XDG_STATE_HOME` is the base; an unset
+ * or empty value falls back to `<home>/.local/state`.
  */
 const stateBaseConfig: Config.Config<string> = Config.nonEmptyString('XDG_STATE_HOME').pipe(
   Config.withDefault(join(homedir(), '.local', 'state')),
@@ -150,7 +149,7 @@ const stateBaseConfig: Config.Config<string> = Config.nonEmptyString('XDG_STATE_
 /**
  * Queue-state directory under the XDG state home. The plugin owns
  * `<state-home>/commy/queue-state` and writes only there — separate from
- * `commy/cursors`, `commy/target-cursors`, and `commy/subscriptions`.
+ * `commy/cursors` and `commy/subscriptions`.
  */
 export const queueStateDirConfig: Config.Config<string> = stateBaseConfig.pipe(
   Config.map((base) => join(base, STATE_SEGMENT, 'queue-state')),
