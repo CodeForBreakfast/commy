@@ -6,11 +6,12 @@ import type { SessionIdValue } from './session-id.ts'
 /**
  * The queue-state write-half hooks handed to the Zulip adapter: the idle
  * timeout its registers carry, plus the two best-effort persistence callbacks
- * the producer fires. `onQueueRegister` writes the fresh `{queueId,
- * lastEventId}` at every register site; `onQueueAdvance` walks the persisted
- * `lastEventId` forward (monotonic, guarded by the store) on every poll that
- * moves the cursor. Both are total (`Effect<void>`) — the adapter/producer
- * simply call them.
+ * the producer fires. `onQueueRegister` persists the fresh `{queueId,
+ * lastEventId}` at a register site — but only when it will not clobber an
+ * unconsumed resume candidate (see the guard below); `onQueueAdvance` walks the
+ * persisted `lastEventId` forward (monotonic, guarded by the store) on every
+ * poll that moves the cursor. Both are total (`Effect<void>`) — the
+ * adapter/producer simply call them.
  */
 export interface QueueStateHooks {
   readonly queueIdleTimeoutSecs: number
@@ -67,8 +68,33 @@ export const buildQueueStateHooks = (deps: {
     )
   return {
     queueIdleTimeoutSecs: idleTimeoutSecs,
+    // Register-time persistence, guarded against clobbering an unconsumed resume
+    // candidate. `resumeOutcome` still pending means the producer has not yet
+    // reported its resume verdict, so this register is a PRE-producer eager one
+    // — the `subscribeFromEnv` register that fires at boot, before the pump
+    // resume-polls. Such a register must never overwrite the surviving
+    // queue-state a resume is about to recover: write only when nothing is
+    // persisted (a genuine fresh session, or an unreadable store treated as
+    // fresh), and otherwise leave the candidate untouched. Once the verdict is
+    // reported the producer owns the queue lifecycle (e.g. a fresh register
+    // after BAD_EVENT_QUEUE_ID), so a wholesale replace is correct.
     onQueueRegister: (queue) =>
-      withSession((id) => store.write(id, queue).pipe(Effect.catchAllCause(() => Effect.void))),
+      withSession((id) =>
+        Deferred.poll(resumeOutcome).pipe(
+          Effect.flatMap(
+            Option.match({
+              onSome: () => store.write(id, queue),
+              onNone: () =>
+                store.read(id).pipe(
+                  Effect.map(Option.isNone),
+                  Effect.catchAll(() => Effect.succeed(true)),
+                  Effect.flatMap((isFresh) => (isFresh ? store.write(id, queue) : Effect.void)),
+                ),
+            }),
+          ),
+          Effect.catchAllCause(() => Effect.void),
+        ),
+      ),
     onQueueAdvance: (lastEventId) =>
       withSession((id) =>
         store.advance(id, lastEventId).pipe(Effect.catchAllCause(() => Effect.void)),
