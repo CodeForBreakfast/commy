@@ -23,7 +23,7 @@ import {
 import { effectTest } from '@commy/testing/effect-test'
 import { makeStubHttpClient, type StubHttpClient } from '@commy/testing/stub-http-client'
 import { HttpClient } from '@effect/platform'
-import { Cause, Effect, Exit, Option, Redacted } from 'effect'
+import { Cause, Effect, Exit, Fiber, Option, Redacted, TestClock, TestContext } from 'effect'
 import type { ZulipAdapter, ZulipAdapterConfig } from './adapter.ts'
 import { attachmentReference, zulipAdapter as zulipAdapterRaw } from './adapter.ts'
 import { ApiKey, BotEmail, decodeUserUploadPathSync, RealmUrl, ZulipApiError } from './http.ts'
@@ -362,6 +362,34 @@ effectTest('identity.acquire rejects with ZulipApiError when /users lookup fails
     expect(err).toBeInstanceOf(IdentityError)
     expect((err as { cause: unknown }).cause).toBeInstanceOf(ZulipApiError)
   }),
+)
+
+// A hung/slow minter call must not wedge acquire indefinitely: the acquire-path
+// HTTP round-trip carries an Effect.timeout, so a parked GET /users surfaces as
+// a prompt IdentityError (which the plugin layer escalates) instead of blocking
+// every subsequent post/react behind the held boundRef lock.
+effectTest(
+  'identity.acquire times out with IdentityError when the minter /users call hangs',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* stub.respond('GET', '/api/v1/users', { hang: true })
+      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+
+      const fiber = yield* Effect.fork(
+        Effect.exit(adapter.identity.acquire(decodeBotNameSync('hermes-agent'))),
+      )
+      // Without a timeout the fiber parks on Effect.never forever; advancing the
+      // TestClock past the acquire bound must instead resolve it to a failure.
+      yield* TestClock.adjust('30 seconds')
+      const exit = yield* Fiber.join(fiber)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      const err = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined
+      expect(err).toBeInstanceOf(IdentityError)
+      expect((err as IdentityError).operation).toBe('acquire')
+    }),
+  { layer: TestContext.TestContext },
 )
 
 effectTest('zulipAdapter construction does NOT call /users — the call is deferred to acquire', () =>
