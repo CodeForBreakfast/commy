@@ -37,6 +37,7 @@ import {
   inboxEvents,
   mapMessageEvent,
   messageToInboundEvents,
+  RESUME_VERDICT_FALLBACK,
   registerQueue,
 } from './events.ts'
 import type { ZulipHttp } from './http.ts'
@@ -642,6 +643,58 @@ test(
         expect(outcomes).toEqual([true])
       }),
     ),
+  ITERATOR_TEST_TIMEOUT_MS,
+)
+
+// The bounded-fallback verdict: a resuming seat (onResumeOutcome wired) whose
+// FIRST poll never reaches a terminal success (Arm B) or BAD_EVENT_QUEUE_ID
+// (Arm C) — here a non-BAD_EVENT_QUEUE_ID error that re-fails into the
+// never-give-up retry — must not leave the resume-verdict latch pending forever.
+// Without a fallback the pump retries the wedged poll indefinitely,
+// onResumeOutcome is never called, and the seat's inline post/react await hangs.
+// After RESUME_VERDICT_FALLBACK the producer reports `false` (no resume → history
+// catch-up) so the await unblocks. The pump's own retry is untouched.
+test(
+  'producer fires onResumeOutcome(false) via the bounded fallback when the first resume-poll never terminates',
+  () =>
+    Effect.gen(function* () {
+      const outcomes: boolean[] = []
+      const logLines: string[] = []
+      const config: EventsConfig = {
+        permalinkBase: PERMALINK_BASE,
+        http: fakeHttp({
+          // initialQueue supplied → resumed=Some; the first GET is the resume
+          // poll. A 502 with no BAD_EVENT_QUEUE_ID code re-fails into
+          // defaultRetrySchedule, so neither Arm B nor Arm C ever fires.
+          onGet: () => {
+            throw new ZulipApiError({
+              message: 'gateway blip',
+              status: 502,
+              code: undefined,
+              retryAfter: undefined,
+            })
+          },
+        }),
+        resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
+        mode: 'all',
+        boundIdentity: HERMES,
+        messageRefCache: createMessageRefCache(),
+        initialQueue: { queueId: 'q-wedged', lastEventId: 4 },
+        onResumeOutcome: (replayed) => Effect.sync(() => void outcomes.push(replayed)),
+      }
+      // The wedged poll retries forever, so the pump never completes: run it in
+      // the background and drive the virtual clock past the fallback bound. The
+      // captured logger keeps the retry breadcrumbs off stdout.
+      const fiber = yield* Effect.fork(
+        Stream.runDrain(inboxEvents(config)).pipe(Effect.provide(captureLogger(logLines))),
+      )
+      yield* TestClock.adjust(RESUME_VERDICT_FALLBACK)
+      yield* Fiber.interrupt(fiber)
+      expect(outcomes).toEqual([false])
+      // The pump's never-give-up retry is untouched — it keeps re-polling the
+      // wedged queue underneath; the fallback only de-starves the verdict.
+      expect(logLines[0]).toBe('commy zulip events: transient error (attempt 1): gateway blip')
+    }).pipe(Effect.provide(TestContext.TestContext), Effect.runPromise),
   ITERATOR_TEST_TIMEOUT_MS,
 )
 

@@ -546,6 +546,21 @@ export const defaultRetrySchedule: Schedule.Schedule<[Duration.Duration, number]
     Schedule.either(Schedule.spaced(Duration.seconds(30))),
   )
 
+/**
+ * Bounded fallback for the resume verdict. On a resuming seat (`onResumeOutcome`
+ * wired) the verdict normally rides the first poll — `true` on a live queue,
+ * `false` on `BAD_EVENT_QUEUE_ID`. A first poll that never reaches either
+ * terminal (a deterministic `ParseError`, a non-`BAD_EVENT_QUEUE_ID` error, or a
+ * wedged `429`) retries forever under {@link defaultRetrySchedule}, which would
+ * leave the verdict latch pending and hang the seat's first `post`/`react`. This
+ * timer guarantees the latch completes: after the bound, report `false` (no
+ * resume → history catch-up). It is deliberately long enough that a healthy
+ * resume-poll — which returns in well under a second — always wins the race and
+ * reports the honest verdict first; the fallback only fires when the poll is
+ * genuinely starved. The pump's own never-give-up retry is untouched.
+ */
+export const RESUME_VERDICT_FALLBACK: Duration.Duration = Duration.seconds(60)
+
 type EventEnvelope = {
   readonly id: number
   readonly type: string
@@ -669,7 +684,7 @@ interface BreadcrumbState {
 }
 
 export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =>
-  Stream.unwrap(
+  Stream.unwrapScoped(
     Effect.gen(function* () {
       const watermark = config.watermarkStore ?? (yield* createWatermarkStore())
 
@@ -689,6 +704,23 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
         if (onResumeOutcome === undefined) return Effect.void
         return Ref.getAndSet(resumeReported, true).pipe(
           Effect.flatMap((already) => (already ? Effect.void : onResumeOutcome(queueReplayed))),
+        )
+      }
+
+      // Bounded fallback so the resume-verdict latch always completes. Arms B
+      // (first poll succeeds → true) and C (first poll BAD_EVENT_QUEUE_ID →
+      // false) both need the first poll to reach a terminal outcome; a poll that
+      // never does — a deterministic decode ParseError, a non-BAD_EVENT_QUEUE_ID
+      // error, or a wedged 429 — retries forever under the never-give-up schedule
+      // and the verdict is starved, hanging the seat's inline post/react await.
+      // A scoped timer reports `false` (no resume → history catch-up) after the
+      // bound, losing the race to any healthy poll (reportResume is one-shot, so
+      // this no-ops once B or C fired) and winning only when the poll is starved.
+      // Gated to a resuming seat — onResumeOutcome is wired solely for a genuine
+      // resume — and scoped to the stream so it is interrupted when the pump ends.
+      if (config.onResumeOutcome !== undefined) {
+        yield* Effect.forkScoped(
+          Effect.sleep(RESUME_VERDICT_FALLBACK).pipe(Effect.zipRight(reportResume(false))),
         )
       }
 
