@@ -233,6 +233,23 @@ const sanitiseShortName = (name: string): string => {
   return collapsed.replace(/^-+|-+$/g, '') || 'bot'
 }
 
+/**
+ * Wall-clock ceiling on the acquire mint round-trip. None of the minter HTTP
+ * calls (`GET /users`, `POST /bots`, reactivate, regenerate) is otherwise
+ * bounded, so a stalled socket parks `acquire` on `Effect.never` forever —
+ * and because the round-trip runs while `boundRef` is write-locked, that one
+ * hang wedges every later acquire, hence every `post`/`react`. Bounding it
+ * turns a silent indefinite hang into a prompt `IdentityError` the plugin
+ * layer can escalate.
+ *
+ * 30s clears the healthy p99 (a few sub-second sequential calls) with room to
+ * spare, and tolerates a call riding most of its 429 retry budget
+ * (`RATE_LIMIT_RETRY_BUDGET_MS` = 15s per call in http.ts) without a false
+ * timeout — while staying firmly in "seconds, not minutes" so a human is never
+ * left cancelling a wedged tool call by hand.
+ */
+const ACQUIRE_MINT_TIMEOUT = Duration.seconds(30)
+
 const userSchema = Schema.Struct({
   user_id: Schema.Int,
   email: Schema.String,
@@ -848,6 +865,10 @@ export const zulipAdapter = (
             },
             onNone: () =>
               provideMintedFor(name).pipe(
+                // A minter call that never returns must not park acquire (and
+                // the held boundRef lock) indefinitely — bound the round-trip
+                // so the timeout surfaces as the IdentityError mapped below.
+                Effect.timeout(ACQUIRE_MINT_TIMEOUT),
                 Effect.flatMap((minted) =>
                   Effect.gen(function* () {
                     const innerHttp = yield* makeZulipHttp(
