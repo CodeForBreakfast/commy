@@ -443,6 +443,25 @@ export interface MessagePublisher {
    * when it next reads the thread. A substrate failure (including a thread the
    * substrate has no messages for) surfaces as a typed `PublisherError`;
    * calling before `identity.acquire` is a defect, not a typed failure.
+   *
+   * **Occupied-name semantics — these verbs MERGE.** Where a substrate expresses
+   * resolution by renaming (see `post` above), a thread can exist in *both*
+   * forms at once: a realm forked by a write that addressed the clean name of a
+   * resolved thread holds a resolved half and a bare-name sibling. Flipping such
+   * a thread renames one form onto a name the other already occupies. That is
+   * defined, not a collision: the two halves **merge into a single thread under
+   * the target name**, ordered by the substrate's message order — i.e. send
+   * order, a chronological interleave of the halves rather than one block
+   * appended after the other. No message is dropped, duplicated or reordered,
+   * and the source form ceases to exist.
+   *
+   * The consequence worth naming: `unresolveThread` **is the repair** for a
+   * thread already forked this way — one call rejoins it with its chronology
+   * intact. Adapters MUST NOT guard against the occupied name, and callers MAY
+   * rely on the merge. (Verified against a real Zulip realm in
+   * `realm.live.test.ts` — `propagate_mode: change_all` onto an existing topic.
+   * A substrate that instead errored, refused, or clobbered on an occupied name
+   * would fail that assertion, which is the point of pinning it.)
    */
   resolveThread(channel: ChannelName, thread: ThreadName): Effect.Effect<void, PublisherError>
   unresolveThread(channel: ChannelName, thread: ThreadName): Effect.Effect<void, PublisherError>

@@ -1182,6 +1182,15 @@ export const zulipAdapter = (
     // its presence between a pre-resolve and a post-resolve message is
     // substrate-side proof the two landed in one conversation, which is the
     // whole claim `addressThread` below exists to make good on.
+    //
+    // The absent occupied-name guard is deliberate. In a realm forked by the
+    // resolve-then-post bug both topic forms exist, so this PATCH renames one
+    // onto a name the other already holds — and Zulip merges them, folding the
+    // source topic's messages into the destination in message-id order (a
+    // chronological interleave; nothing dropped or reordered) and leaving no
+    // source topic behind. Measured on the realm, pinned in `realm.live.test.ts`,
+    // and now part of the port's contract. So `unresolveThread` is the *repair*
+    // for a forked thread: guarding the occupied name would break it.
     const setThreadResolved = (
       channel: ChannelName,
       thread: ThreadName,

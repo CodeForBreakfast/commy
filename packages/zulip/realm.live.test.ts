@@ -16,6 +16,9 @@
  *   real realm can prove a post by clean name lands in the resolved topic
  *   rather than minting a bare-name sibling. A fake substrate that models
  *   resolution as a flag masks this class of bug entirely.
+ * - **unresolve onto an occupied bare name merges the two halves** — the
+ *   rename is a server-side move, so only the realm can say what it does when
+ *   the destination topic already exists. It merges, in message-id order.
  *
  * **Local-only** — env-gated, never runs in CI. With env vars unset the
  * suite skips silently so default `bun test` stays green.
@@ -44,6 +47,7 @@ import { Duration, Effect, Option, Redacted, Schema } from 'effect'
 import type { ZulipAdapter } from './adapter.ts'
 import { zulipAdapter } from './adapter.ts'
 import { ApiKey, BotEmail, makeZulipHttp, RealmUrl, type ZulipHttp } from './http.ts'
+import { applyResolvedPrefix } from './resolved-topic.ts'
 
 interface LiveEnv {
   readonly site: string
@@ -132,6 +136,17 @@ const botHttp = (e: LiveEnv, creds: { email: string; apiKey: string }): Effect.E
 
 const minterHttp = (e: LiveEnv): Effect.Effect<ZulipHttp> =>
   botHttp(e, { email: e.minterEmail, apiKey: e.minterApiKey })
+
+const sendMessageSchema = Schema.Struct({
+  result: Schema.Literal('success'),
+  id: Schema.Int,
+})
+
+/** Just enough of GET /messages to prove a topic is empty. */
+const messagesInTopicSchema = Schema.Struct({
+  result: Schema.Literal('success'),
+  messages: Schema.Array(Schema.Struct({ id: Schema.Int })),
+})
 
 const usersMeSchema = Schema.Struct({
   result: Schema.Literal('success'),
@@ -281,6 +296,123 @@ describeLiveChannel('zulip live resolve-then-post — zulip.example.com', () => 
         }),
       ),
     30_000,
+  )
+
+  // What `unresolveThread` does when the bare name it renames onto is ALREADY
+  // OCCUPIED (comms-g4oa). `setThreadResolved` has no occupied-name guard — it
+  // PATCHes `✔ X` onto `X` with propagate_mode=change_all regardless — so commy
+  // inherits whatever the server does, and only the realm can say what that is.
+  //
+  // Measured: Zulip MERGES. The source topic's messages fold into the occupied
+  // destination and the ✔ sibling ceases to exist. The merge is ordered by
+  // message id — a true chronological interleave, not a block-append — because
+  // a Zulip topic is a narrow over the id-ordered message store. Nothing is
+  // reordered and nothing is dropped. That makes `unresolveThread` the repair
+  // for a thread already forked by the resolve-then-post bug, not a hazard.
+  //
+  // The interleave is the load-bearing assertion, and it needs a fork whose
+  // halves are id-interleaved — which the bug alone cannot produce (once a bare
+  // sibling exists, every later post lands in it). So the fork here is built by
+  // hand: a `late` message is planted in the ✔ half with an id BETWEEN two
+  // bare-half ids. A block-append would put it last; a merge puts it in the
+  // middle.
+  test(
+    'unresolveThread onto an occupied bare name merges both halves into it, in message-id order',
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const channel = decodeChannelNameSync(liveChannelName ?? '')
+          const thread = decodeThreadNameSync(
+            `cc-live-fork-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+          )
+          const bareTopic = applyResolvedPrefix(thread, false)
+          const resolvedTopic = applyResolvedPrefix(thread, true)
+          const adapter = yield* buildAdapter()
+          yield* Effect.acquireUseRelease(
+            pacedAcquire(adapter, decodeBotNameSync(uniqueName('fork'))),
+            (acquired) =>
+              Effect.gen(function* () {
+                // Raw sends, addressed at an explicit topic string — the point is
+                // to bypass `addressThread` and mint the bare-name sibling the way
+                // pre-comms-00t0 commy did. The publisher can no longer do this.
+                const http = yield* botHttp(liveEnv(), credentialsOf(acquired.credentials))
+                const sendTo = (topic: string, content: string) =>
+                  http.post('/messages', sendMessageSchema, {
+                    type: 'stream',
+                    to: liveChannelName ?? '',
+                    topic,
+                    content,
+                  })
+
+                // The resolved half: two messages, then the rename to `✔ X`.
+                yield* adapter.publisher.post(channel, decodeMessageBodySync('pre-resolve one'), {
+                  thread,
+                })
+                yield* adapter.publisher.post(channel, decodeMessageBodySync('pre-resolve two'), {
+                  thread,
+                })
+                yield* adapter.publisher.resolveThread(channel, thread)
+
+                // The fork, and the id-interleave that discriminates merge from
+                // block-append: `late` sits in the ✔ half but between the two
+                // bare-half messages by id.
+                yield* sendTo(bareTopic, 'forked sibling three')
+                yield* sendTo(resolvedTopic, 'late, in the resolved half')
+                yield* sendTo(bareTopic, 'forked sibling four')
+
+                // The write under test — the destination topic already exists.
+                yield* adapter.publisher.unresolveThread(channel, thread)
+
+                // The ✔ sibling is gone. Probed at the substrate, by literal topic
+                // string, rather than through `readThread` (whose bare-name-first
+                // fallback would muddy what is being claimed): the topic held four
+                // messages a moment ago and now holds none — so the source topic
+                // moved wholesale, it did not partially merge.
+                const leftBehind = yield* http.get('/messages', messagesInTopicSchema, {
+                  anchor: 'newest',
+                  num_before: 50,
+                  num_after: 0,
+                  narrow: JSON.stringify([
+                    { operator: 'channel', operand: liveChannelName ?? '' },
+                    { operator: 'topic', operand: resolvedTopic },
+                  ]),
+                  apply_markdown: false,
+                })
+                expect(leftBehind.messages).toEqual([])
+
+                const messages = yield* adapter.history.readThread(channel, thread, {})
+                const bodies = messages.map((m) => m.body)
+                const at = (needle: string) => bodies.findIndex((b) => b.includes(needle))
+
+                // Every message from both halves survives, exactly once, in send
+                // order. `late` between the two siblings is the interleave: it
+                // came from the OTHER half, so a block-append could not place it
+                // there.
+                expect(at('pre-resolve one')).toBeGreaterThanOrEqual(0)
+                expect(at('pre-resolve two')).toBeGreaterThan(at('pre-resolve one'))
+                expect(at('forked sibling three')).toBeGreaterThan(at('pre-resolve two'))
+                expect(at('late, in the resolved half')).toBeGreaterThan(at('forked sibling three'))
+                expect(at('forked sibling four')).toBeGreaterThan(at('late, in the resolved half'))
+
+                // Both of Zulip's own status notices ride along into the merged
+                // topic — the resolve notice as a mid-thread artefact of the fork,
+                // the unresolve notice appended by the write under test.
+                expect(at('marked this topic as resolved')).toBeGreaterThan(at('pre-resolve two'))
+                expect(at('marked this topic as unresolved')).toBeGreaterThan(
+                  at('forked sibling four'),
+                )
+
+                // One thread, under the bare name, unresolved.
+                for (const m of messages) {
+                  expect(Option.map(m.ref.thread, (t) => t.name)).toEqual(Option.some(thread))
+                  expect(Option.map(m.ref.thread, (t) => t.resolved)).toEqual(Option.some(false))
+                }
+              }),
+            () => pacedRelease(adapter),
+          )
+        }),
+      ),
+    45_000,
   )
 })
 
