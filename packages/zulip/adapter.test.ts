@@ -21,7 +21,11 @@ import {
   type UnknownIdentity,
 } from '@commy/core/ports'
 import { effectTest } from '@commy/testing/effect-test'
-import { makeStubHttpClient, type StubHttpClient } from '@commy/testing/stub-http-client'
+import {
+  makeStubHttpClient,
+  type StubBody,
+  type StubHttpClient,
+} from '@commy/testing/stub-http-client'
 import { HttpClient } from '@effect/platform'
 import { Cause, Effect, Exit, Fiber, Option, Redacted, TestClock, TestContext } from 'effect'
 import type { ZulipAdapter, ZulipAdapterConfig } from './adapter.ts'
@@ -716,11 +720,27 @@ const bobHuman: Identity = {
   kind: 'human',
 }
 
+/** A `GET /messages` page — the shape every narrow read answers with. */
+const messagesPage = (messages: ReadonlyArray<Record<string, unknown>>): StubBody => ({
+  body: {
+    result: 'success',
+    messages,
+    anchor: 0,
+    found_anchor: false,
+    found_newest: true,
+    found_oldest: false,
+    history_limited: false,
+  },
+})
+
 const seedSendMessage = (stub: StubHttpClient, id: number): Effect.Effect<void> =>
   // publisher.post now pre-flights against GET /streams so unknown channels
   // surface as UnknownChannel instead of being silently routed to
-  // Notification Bot. Helper bundles both stubs because every caller posts
-  // to `generalChannel`.
+  // Notification Bot, and probes GET /messages to find the addressed thread's
+  // current substrate form. Helper bundles all three stubs because every
+  // caller posts to `generalChannel`; the empty probe page is the
+  // thread-doesn't-exist-yet default, which callers override to model an
+  // existing (or resolved) topic.
   Effect.gen(function* () {
     yield* stub.respond('GET', '/api/v1/streams', {
       body: {
@@ -728,6 +748,7 @@ const seedSendMessage = (stub: StubHttpClient, id: number): Effect.Effect<void> 
         streams: [{ stream_id: 1234, name: 'general' }],
       },
     })
+    yield* stub.respond('GET', '/api/v1/messages', messagesPage([]))
     yield* stub.respond('POST', '/api/v1/messages', {
       body: { result: 'success', id },
     })
@@ -1104,18 +1125,7 @@ effectTest('publisher.unreact DELETEs /messages/{id}/reactions with emoji_name',
 const seedMessages = (
   stub: StubHttpClient,
   messages: ReadonlyArray<Record<string, unknown>>,
-): Effect.Effect<void> =>
-  stub.respond('GET', '/api/v1/messages', {
-    body: {
-      result: 'success',
-      messages,
-      anchor: 0,
-      found_anchor: false,
-      found_newest: true,
-      found_oldest: false,
-      history_limited: false,
-    },
-  })
+): Effect.Effect<void> => stub.respond('GET', '/api/v1/messages', messagesPage(messages))
 
 effectTest('history.readChannel narrows by channel and maps each message to the port shape', () =>
   Effect.gen(function* () {
@@ -1248,6 +1258,115 @@ effectTest(
       )
       expect(Option.map(found.ref.thread, (t) => t.resolved)).toEqual(Option.some(true))
     }),
+)
+
+// Resolution renames the topic (✔ prefix), so a resolved thread no longer has
+// the bare name. Zulip creates topics implicitly on post, so a write addressed
+// to the bare name mints a sibling topic and splits the conversation at the
+// resolve. post probes for the thread's current substrate form — bare first,
+// then the ✔ form, the same precedence readThread uses — so both verbs always
+// mean the same topic.
+effectTest('publisher.post addresses the ✔-prefixed topic when the thread is resolved', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 300)
+    yield* stub.respondSequence('GET', '/api/v1/messages', [
+      messagesPage([]),
+      messagesPage([
+        {
+          id: 299,
+          sender_id: 5,
+          sender_full_name: 'Robin Reyes',
+          stream_id: 1234,
+          display_recipient: 'general',
+          subject: '✔ planning',
+          content: 'the resolved conversation',
+          timestamp: 1715000000,
+        },
+      ]),
+    ])
+    const adapter = yield* buildAdapter(stub)
+    const ref = yield* adapter.publisher.post(
+      generalChannel.name,
+      decodeMessageBodySync('one more thing'),
+      { thread: decodeThreadNameSync('planning') },
+    )
+    const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
+    expect(params.get('topic')).toBe('✔ planning')
+    // Appending leaves the thread resolved, and the ref says so: the port's
+    // clean name plus an honest flag. Re-opening is the caller's own
+    // unresolveThread call — post never mutates thread state.
+    expect(Option.map(ref.thread, (t) => t.name)).toEqual(
+      Option.some(decodeThreadNameSync('planning')),
+    )
+    expect(Option.map(ref.thread, (t) => t.resolved)).toEqual(Option.some(true))
+  }),
+)
+
+effectTest('publisher.post does not unresolve the thread it appends to', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 303)
+    yield* stub.respondSequence('GET', '/api/v1/messages', [
+      messagesPage([]),
+      messagesPage([
+        {
+          id: 299,
+          sender_id: 5,
+          sender_full_name: 'Robin Reyes',
+          stream_id: 1234,
+          display_recipient: 'general',
+          subject: '✔ planning',
+          content: 'the resolved conversation',
+          timestamp: 1715000000,
+        },
+      ]),
+    ])
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('one more thing'), {
+      thread: decodeThreadNameSync('planning'),
+    })
+    const patches = (yield* stub.captured).filter((r) => r.method === 'PATCH')
+    expect(patches).toEqual([])
+  }),
+)
+
+effectTest('publisher.post addresses the bare topic when an unresolved thread already exists', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 301)
+    yield* seedMessages(stub, [
+      {
+        id: 298,
+        sender_id: 5,
+        sender_full_name: 'Robin Reyes',
+        stream_id: 1234,
+        display_recipient: 'general',
+        subject: 'planning',
+        content: 'the open conversation',
+        timestamp: 1715000000,
+      },
+    ])
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('carrying on'), {
+      thread: decodeThreadNameSync('planning'),
+    })
+    const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
+    expect(params.get('topic')).toBe('planning')
+  }),
+)
+
+effectTest('publisher.post addresses the bare topic when the thread exists in neither form', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 302)
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('opening'), {
+      thread: decodeThreadNameSync('brand-new'),
+    })
+    const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
+    expect(params.get('topic')).toBe('brand-new')
+  }),
 )
 
 effectTest(

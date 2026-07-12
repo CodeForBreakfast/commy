@@ -11,6 +11,11 @@
  *   always mint (a substrate capability Discord will not share).
  * - **repeat-acquire regenerates the API key** — the regenerated key
  *   authenticates as the same bot.
+ * - **resolve-then-post appends to the resolved topic** — resolution is a
+ *   *rename* (✔ prefix) and Zulip creates topics implicitly on send, so only a
+ *   real realm can prove a post by clean name lands in the resolved topic
+ *   rather than minting a bare-name sibling. A fake substrate that models
+ *   resolution as a flag masks this class of bug entirely.
  *
  * **Local-only** — env-gated, never runs in CI. With env vars unset the
  * suite skips silently so default `bun test` stays green.
@@ -19,13 +24,23 @@
  * - `ZULIP_SITE`              e.g. `https://zulip.example.com`
  * - `ZULIP_MINTER_EMAIL`      minter user email
  * - `ZULIP_MINTER_API_KEY`    minter user API key
+ *
+ * The resolve-then-post suite additionally needs a channel to post into, and
+ * skips on its own when it is absent:
+ * - `ZULIP_LIVE_CHANNEL_NAME` an existing channel the live tests post into
  */
 
 import { describe, expect, test } from 'bun:test'
 import type { BotName, Credentials, DisplayName, ReleaseOpts } from '@commy/core/ports'
-import { decodeBotNameSync, decodeDisplayNameSync } from '@commy/core/ports'
+import {
+  decodeBotNameSync,
+  decodeChannelNameSync,
+  decodeDisplayNameSync,
+  decodeMessageBodySync,
+  decodeThreadNameSync,
+} from '@commy/core/ports'
 import { FetchHttpClient, HttpClient } from '@effect/platform'
-import { Duration, Effect, Redacted, Schema } from 'effect'
+import { Duration, Effect, Option, Redacted, Schema } from 'effect'
 import type { ZulipAdapter } from './adapter.ts'
 import { zulipAdapter } from './adapter.ts'
 import { ApiKey, BotEmail, makeZulipHttp, RealmUrl, type ZulipHttp } from './http.ts'
@@ -178,6 +193,89 @@ describeLive('zulip live identity — Zulip-only addendum — zulip.example.com'
           yield* Effect.acquireUseRelease(
             pacedAcquire(adapter, decodeBotNameSync(name)),
             (acquired) => Effect.sync(() => expect(acquired.identity.name).toEqual(name)),
+            () => pacedRelease(adapter),
+          )
+        }),
+      ),
+    30_000,
+  )
+})
+
+const liveChannelName = process.env['ZULIP_LIVE_CHANNEL_NAME']
+const describeLiveChannel =
+  env === undefined || liveChannelName === undefined || liveChannelName.length === 0
+    ? describe.skip
+    : describe
+
+describeLiveChannel('zulip live resolve-then-post — zulip.example.com', () => {
+  // The regression this file exists to catch (comms-00t0). Zulip has no
+  // resolved flag — resolution *renames* the topic to `✔ <name>` — and Zulip
+  // creates topics implicitly on send. So a post addressed to the clean name of
+  // a resolved topic used to mint a bare-name *sibling*, silently splitting the
+  // conversation at the resolve. The unit tests can only assert the topic
+  // string we put on the wire; only a real realm proves Zulip agrees the two
+  // messages are one conversation.
+  //
+  // The discriminating assertion is `readThread` returning BOTH messages.
+  // readThread reads the bare name first and only falls back to the ✔ form when
+  // it is empty — so had post forked a sibling, the bare name would hold just
+  // the second message and this would come back with one. Two messages means no
+  // sibling exists.
+  test(
+    'a post by clean name into a resolved topic appends to it, stays resolved, and mints no sibling',
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const channel = decodeChannelNameSync(liveChannelName ?? '')
+          const thread = decodeThreadNameSync(
+            `cc-live-resolve-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+          )
+          const adapter = yield* buildAdapter()
+          yield* Effect.acquireUseRelease(
+            pacedAcquire(adapter, decodeBotNameSync(uniqueName('resolve'))),
+            () =>
+              Effect.gen(function* () {
+                yield* adapter.publisher.post(
+                  channel,
+                  decodeMessageBodySync('opening the conversation'),
+                  { thread },
+                )
+                yield* adapter.publisher.resolveThread(channel, thread)
+
+                // The write under test: address the thread by its clean name
+                // while the substrate knows it as `✔ <name>`.
+                const appended = yield* adapter.publisher.post(
+                  channel,
+                  decodeMessageBodySync('appending after the resolve'),
+                  { thread },
+                )
+                expect(Option.map(appended.thread, (t) => t.name)).toEqual(Option.some(thread))
+                expect(Option.map(appended.thread, (t) => t.resolved)).toEqual(Option.some(true))
+
+                // Both of our messages come back from ONE topic, in order. Had
+                // post forked a sibling, the bare name would hold only the
+                // second message — and readThread reads the bare name first, so
+                // the opening message would be missing here.
+                const messages = yield* adapter.history.readThread(channel, thread, {})
+                const bodies = messages.map((m) => m.body)
+                const opened = bodies.indexOf(decodeMessageBodySync('opening the conversation'))
+                const appendedAt = bodies.indexOf(
+                  decodeMessageBodySync('appending after the resolve'),
+                )
+                expect(opened).toBeGreaterThanOrEqual(0)
+                expect(appendedAt).toBeGreaterThan(opened)
+                // Between them sits Zulip's own resolve notification — the realm
+                // posts one into the topic it renames. Asserted rather than
+                // filtered out: its presence in this same topic is independent
+                // proof the resolve and the append addressed one conversation.
+                const notice = bodies.findIndex((b) => b.includes('marked this topic as resolved'))
+                expect(notice).toBeGreaterThan(opened)
+                expect(notice).toBeLessThan(appendedAt)
+                // Appending did not re-open it — post never mutates thread state.
+                for (const m of messages) {
+                  expect(Option.map(m.ref.thread, (t) => t.resolved)).toEqual(Option.some(true))
+                }
+              }),
             () => pacedRelease(adapter),
           )
         }),
