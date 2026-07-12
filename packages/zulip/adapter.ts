@@ -1170,6 +1170,18 @@ export const zulipAdapter = (
     // already exists as an idempotent no-op, and both absent as a thread that
     // isn't there to (un)resolve. Reads route through the minter; the
     // attributed edit goes through the bound identity.
+    //
+    // Substrate fact worth knowing before you touch any resolution-aware path:
+    // the realm posts its own "<user> has marked this topic as resolved"
+    // notification *into the topic it just renamed*. So a resolved topic always
+    // holds at least one message nobody in commy sent, and reading one back
+    // yields a message with no counterpart on our side. It lands in the ✔ form
+    // (the rename runs first), which is why an emptiness probe for the bare name
+    // stays a sound test for "this thread is not here under its plain name".
+    // `realm.live.test.ts` asserts that notice rather than filtering it out —
+    // its presence between a pre-resolve and a post-resolve message is
+    // substrate-side proof the two landed in one conversation, which is the
+    // whole claim `addressThread` below exists to make good on.
     const setThreadResolved = (
       channel: ChannelName,
       thread: ThreadName,
