@@ -400,6 +400,23 @@ export interface MessagePublisher {
    * Zulip cannot silently swallow it — see the class doc) and with a
    * `PublisherError` wrapping any other substrate failure. Calling before
    * `identity.acquire` is a defect, not a typed failure.
+   *
+   * `opts.thread` names a thread by its clean name — resolution is never
+   * encoded in the name (see `ObservedThreadSchema`). A post into a **resolved**
+   * thread **appends to it and leaves it resolved**, and the returned
+   * `MessageRef` reports `thread.resolved: true`. `post` never mutates thread
+   * state: a caller who wants a reply to re-open the thread calls
+   * `unresolveThread` itself. The alternative — auto-unresolving on post —
+   * would bury a state mutation in the substrate's hottest write path and make
+   * `post` partially failable (message lands, unresolve doesn't).
+   *
+   * Where a substrate expresses resolution by *renaming* the thread (Zulip's
+   * ✔-prefixed topic) and creates threads implicitly on write, an adapter MUST
+   * address the thread's current substrate form rather than the clean name, or
+   * it will mint a sibling thread and split the conversation at the resolve.
+   * When both forms exist, the adapter resolves the ambiguity the same way
+   * `HistoryReader.readThread` does, so post and read can never disagree about
+   * which thread a name means.
    */
   post(
     channel: ChannelName,

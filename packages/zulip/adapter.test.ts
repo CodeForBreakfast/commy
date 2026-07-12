@@ -1286,11 +1286,48 @@ effectTest('publisher.post addresses the ✔-prefixed topic when the thread is r
       ]),
     ])
     const adapter = yield* buildAdapter(stub)
+    const ref = yield* adapter.publisher.post(
+      generalChannel.name,
+      decodeMessageBodySync('one more thing'),
+      { thread: decodeThreadNameSync('planning') },
+    )
+    const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
+    expect(params.get('topic')).toBe('✔ planning')
+    // Appending leaves the thread resolved, and the ref says so: the port's
+    // clean name plus an honest flag. Re-opening is the caller's own
+    // unresolveThread call — post never mutates thread state.
+    expect(Option.map(ref.thread, (t) => t.name)).toEqual(
+      Option.some(decodeThreadNameSync('planning')),
+    )
+    expect(Option.map(ref.thread, (t) => t.resolved)).toEqual(Option.some(true))
+  }),
+)
+
+effectTest('publisher.post does not unresolve the thread it appends to', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 303)
+    yield* stub.respondSequence('GET', '/api/v1/messages', [
+      messagesPage([]),
+      messagesPage([
+        {
+          id: 299,
+          sender_id: 5,
+          sender_full_name: 'Robin Reyes',
+          stream_id: 1234,
+          display_recipient: 'general',
+          subject: '✔ planning',
+          content: 'the resolved conversation',
+          timestamp: 1715000000,
+        },
+      ]),
+    ])
+    const adapter = yield* buildAdapter(stub)
     yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('one more thing'), {
       thread: decodeThreadNameSync('planning'),
     })
-    const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
-    expect(params.get('topic')).toBe('✔ planning')
+    const patches = (yield* stub.captured).filter((r) => r.method === 'PATCH')
+    expect(patches).toEqual([])
   }),
 )
 
