@@ -1219,6 +1219,42 @@ export const zulipAdapter = (
       )
     }
 
+    // Zulip creates topics implicitly on post, and resolution *renames* the
+    // topic (✔ prefix) rather than flagging it — so a write addressed to the
+    // plain name of a resolved thread mints a bare-name sibling and splits the
+    // conversation at the resolve. Probe for the thread's current substrate
+    // form and address that. Precedence matches `readThread`: plain first,
+    // then the resolved form, so post and read always mean the same topic —
+    // including in a realm already forked by this bug. A thread that exists in
+    // neither form is genuinely new, so it takes the plain name and Zulip
+    // creates it. The common (unresolved, non-empty) case costs one probe; a
+    // resolved-or-new thread pays for the second.
+    const addressThread = (
+      channel: ChannelName,
+      thread: ThreadName,
+    ): Effect.Effect<
+      { readonly topic: string; readonly resolved: boolean },
+      ZulipApiError | ParseResult.ParseError
+    > => {
+      const resolvedTopic = applyResolvedPrefix(thread, true)
+      return findNewestInTopic(channel, thread).pipe(
+        Effect.flatMap(
+          Option.match({
+            onSome: () => Effect.succeed({ topic: thread as string, resolved: false }),
+            onNone: () =>
+              findNewestInTopic(channel, resolvedTopic).pipe(
+                Effect.map(
+                  Option.match({
+                    onSome: () => ({ topic: resolvedTopic, resolved: true }),
+                    onNone: () => ({ topic: thread as string, resolved: false }),
+                  }),
+                ),
+              ),
+          }),
+        ),
+      )
+    }
+
     const publisher: MessagePublisher = {
       post: (channel, body, opts?: PostOpts) => {
         const thread = opts?.thread
@@ -1236,33 +1272,45 @@ export const zulipAdapter = (
                 // `mandatory_topics: true` (a common realm default). Default to
                 // the server-canonical "(no topic)" placeholder when the caller
                 // omits a thread — same string Zulip's UI uses for empty
-                // topics. `opts.mentions` is metadata-only per PostOpts: we
+                // topics; an unnamed thread has no resolution state to probe
+                // for. `opts.mentions` is metadata-only per PostOpts: we
                 // don't fold it into `content`. Zulip pings are driven by
                 // `@**Name**` markup inside the body, so callers that want a
                 // ping write the markup themselves where they want it rendered.
-                http
-                  .post('/messages', sentMessageSchema, {
-                    type: 'channel',
-                    to: effective.name,
-                    content: body,
-                    topic: thread ?? '(no topic)',
-                  })
-                  .pipe(
-                    Effect.flatMap((sent) =>
-                      decodeMessageId(String(sent.id)).pipe(
-                        Effect.map(
-                          (id): MessageRef =>
-                            // A just-posted thread is unresolved (post returns
-                            // only an id; the topic is the plain name).
-                            decorateMessageRef(
-                              id,
-                              effective,
-                              thread === undefined ? undefined : { name: thread, resolved: false },
+                (thread === undefined
+                  ? Effect.succeed({ topic: '(no topic)', resolved: false })
+                  : addressThread(effective.name, thread)
+                ).pipe(
+                  Effect.flatMap((addressed) =>
+                    http
+                      .post('/messages', sentMessageSchema, {
+                        type: 'channel',
+                        to: effective.name,
+                        content: body,
+                        topic: addressed.topic,
+                      })
+                      .pipe(
+                        Effect.flatMap((sent) =>
+                          decodeMessageId(String(sent.id)).pipe(
+                            Effect.map(
+                              (id): MessageRef =>
+                                // The probe tells us which substrate form the
+                                // message landed in, so the ref reports the
+                                // thread's real resolution state rather than
+                                // assuming an unresolved one.
+                                decorateMessageRef(
+                                  id,
+                                  effective,
+                                  thread === undefined
+                                    ? undefined
+                                    : { name: thread, resolved: addressed.resolved },
+                                ),
                             ),
+                          ),
                         ),
                       ),
-                    ),
                   ),
+                ),
               ),
             ),
           ),
