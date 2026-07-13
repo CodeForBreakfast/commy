@@ -43,6 +43,7 @@ import {
   HistoryError,
   IdentityError,
   InboxError,
+  MessageEditRefused,
   PublisherError,
   UnknownChannel,
   UnresolvedMention,
@@ -294,6 +295,28 @@ const sentMessageSchema = Schema.Struct({
 })
 
 const successSchema = Schema.Struct({ result: Schema.Literal('success') })
+
+/**
+ * Classify a failed content edit. Zulip walls a content edit two ways —
+ * edit-window expired, and not-the-original-sender — but raises both as a
+ * bare 400 with the same generic code; only the human message string
+ * distinguishes them (verified against Zulip's `validate_user_can_edit_message`).
+ * Match on stable substrings of those two messages so a caller gets a typed
+ * `MessageEditRefused` reason; every other failure (network, 5xx, an
+ * unrecognised 400) stays a generic, retryable `PublisherError`.
+ */
+const classifyEditFailure = (cause: unknown): MessageEditRefused | PublisherError => {
+  if (cause instanceof ZulipApiError) {
+    const text = cause.message.toLowerCase()
+    if (text.includes('time limit for editing this message')) {
+      return new MessageEditRefused({ reason: 'window-expired', cause })
+    }
+    if (text.includes('permission to edit this message')) {
+      return new MessageEditRefused({ reason: 'not-original-sender', cause })
+    }
+  }
+  return new PublisherError({ operation: 'edit', cause })
+}
 
 interface HistoricalReaction {
   readonly userId: ZulipUserRef
@@ -1468,9 +1491,7 @@ export const zulipAdapter = (
           ),
           Effect.asVoid,
           Effect.mapError((cause) =>
-            cause instanceof UnresolvedMention
-              ? cause
-              : new PublisherError({ operation: 'edit', cause }),
+            cause instanceof UnresolvedMention ? cause : classifyEditFailure(cause),
           ),
         ),
       react: (message, emoji) =>
