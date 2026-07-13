@@ -106,3 +106,31 @@ test('unresolvedMentions deduplicates a repeated dead token', () => {
   const dir = directoryFor(GRAEME)
   expect(unresolvedMentions('@**Ghost** @**Ghost**', dir)).toEqual(['Ghost'])
 })
+
+// Channel-/topic-wide wildcard mentions share the `@**...**` sigil but are not
+// users, so byName never resolves them. They are legitimate, deliverable Zulip
+// constructs, not dead forms — the write path must not reject a post that
+// carries one. The full Zulip set (zerver/lib/mention.py): stream wildcards
+// all/everyone/stream/channel plus the topic wildcard, case-sensitive.
+test.each([
+  'all',
+  'everyone',
+  'stream',
+  'channel',
+  'topic',
+])('unresolvedMentions exempts the @**%s** wildcard', (wildcard) => {
+  const dir = directoryFor(GRAEME)
+  expect(unresolvedMentions(`heads up @**${wildcard}** — deploying`, dir)).toEqual([])
+})
+
+test('unresolvedMentions still reports a dead form alongside a wildcard', () => {
+  const dir = directoryFor(GRAEME)
+  // The wildcard is exempt; a genuinely dead @**Name** in the same body is not.
+  expect(unresolvedMentions('@**all** and @**Graeme Foster**', dir)).toEqual(['Graeme Foster'])
+})
+
+test('unresolvedMentions does not exempt a capitalised wildcard look-alike', () => {
+  const dir = directoryFor(GRAEME)
+  // Zulip matches wildcards case-sensitively; @**All** is a failed user mention.
+  expect(unresolvedMentions('ping @**All** now', dir)).toEqual(['All'])
+})

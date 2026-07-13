@@ -57,6 +57,23 @@ export const mentionTokens = (content: string): ReadonlyArray<string> => {
   return tokens
 }
 
+/**
+ * Zulip's channel- and topic-wide wildcard mentions (zerver/lib/mention.py:
+ * `stream_wildcards` all/everyone/stream/channel plus the `topic` wildcard,
+ * matched case-sensitively). They share the `@**...**` sigil with a personal
+ * mention but are not users, so `byName` never resolves them. They are
+ * legitimate, deliverable constructs — not dead forms — so the write path must
+ * not count them as unresolved. Reporting them in `mentions[]` needs a type
+ * wider than `ReadonlyArray<Identity>`; that read-path modelling is comms-6fqc.
+ */
+const WILDCARD_MENTIONS: ReadonlySet<string> = new Set([
+  'all',
+  'everyone',
+  'stream',
+  'channel',
+  'topic',
+])
+
 const resolveToken = (token: string, directory: MentionDirectory): Identity | undefined => {
   const disambiguated = DISAMBIGUATED.exec(token)
   if (disambiguated?.groups !== undefined) {
@@ -100,6 +117,7 @@ export const unresolvedMentions = (
   const results: string[] = []
   const seen = new Set<string>()
   for (const token of mentionTokens(content)) {
+    if (WILDCARD_MENTIONS.has(token)) continue
     if (resolveToken(token, directory) !== undefined) continue
     if (seen.has(token)) continue
     seen.add(token)
