@@ -91,6 +91,27 @@ test('fires mention-received when bound identity is in content even if flags lac
   }
 })
 
+test('does not fire mention-received when the bound identity is only mentioned inside a code span', () => {
+  // The phantom-mention case: a message that TALKS ABOUT the bound bot's
+  // mention token — inside backticks — is not a mention. Zulip renders no
+  // mention there and notifies nobody, so synthesis must not fire and the
+  // reported mentions[] must be empty.
+  const directory = directoryFor(HERMES, MAINTAINER)
+  const message: ParsedZulipMessage = {
+    ...messageMentioning(HERMES, MAINTAINER),
+    content: 'never write `@**hermes-agent**` in a code span',
+  }
+
+  const events = Effect.runSync(messageToInboundEvents(message, directory, HERMES, PERMALINK_BASE))
+
+  expect(events.find((e) => e.kind === 'mention-received')).toBeUndefined()
+  const posted = events.find((e) => e.kind === 'message-posted')
+  expect(posted).toBeDefined()
+  if (posted !== undefined && posted.kind === 'message-posted') {
+    expect(posted.message.mentions).toEqual([])
+  }
+})
+
 test('decorates the inbound message ref with message, channel and topic permalinks', () => {
   const directory = directoryFor(HERMES, MAINTAINER)
   const message = messageMentioning(HERMES, MAINTAINER)

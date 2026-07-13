@@ -421,9 +421,12 @@ export interface MessagePublisher {
   /**
    * Publish a message to a channel as the bound identity. Fails with a typed
    * `UnknownChannel` when the substrate has no such channel (pre-flighted so
-   * Zulip cannot silently swallow it — see the class doc) and with a
-   * `PublisherError` wrapping any other substrate failure. Calling before
-   * `identity.acquire` is a defect, not a typed failure.
+   * Zulip cannot silently swallow it — see the class doc), a typed
+   * `UnresolvedMention` when the body carries a mention token no identity
+   * resolves (pre-flighted for the same reason — the substrate would post it
+   * and notify nobody), and a `PublisherError` wrapping any other substrate
+   * failure. Calling before `identity.acquire` is a defect, not a typed
+   * failure.
    *
    * `opts.thread` names a thread by its clean name — resolution is never
    * encoded in the name (see `ObservedThreadSchema`). A post into a **resolved**
@@ -446,7 +449,7 @@ export interface MessagePublisher {
     channel: ChannelName,
     body: MessageBody,
     opts?: PostOpts,
-  ): Effect.Effect<MessageRef, UnknownChannel | PublisherError>
+  ): Effect.Effect<MessageRef, UnknownChannel | UnresolvedMention | PublisherError>
   /**
    * Replace the body of an existing message attributed to the bound
    * identity. Adapters target the substrate's in-place edit primitive
@@ -454,7 +457,10 @@ export interface MessagePublisher {
    * a substrate-shaped error. Edits do not emit InboundEvents — the
    * port surfaces the new body via history.readChannel only.
    */
-  edit(message: MessageRef, body: MessageBody): Effect.Effect<void, PublisherError>
+  edit(
+    message: MessageRef,
+    body: MessageBody,
+  ): Effect.Effect<void, UnresolvedMention | PublisherError>
   react(message: MessageRef, emoji: Emoji): Effect.Effect<void, PublisherError>
   unreact(message: MessageRef, emoji: Emoji): Effect.Effect<void, PublisherError>
   /**
@@ -718,6 +724,33 @@ export class ChannelDescriptionRejected extends Data.TaggedError('ChannelDescrip
 }> {
   override get message(): string {
     return `setChannelDescription(${this.channel}) failed — ${this.substrate} rejected the description: ${this.detail}`
+  }
+}
+
+/**
+ * Failure of a `MessagePublisher` write whose body carries a mention token that
+ * resolves to no known identity — a stale `@**Full Name**` the substrate would
+ * post verbatim and notify nobody for. Surfaced instead of delivering silence,
+ * for the same reason as `UnknownChannel`: the substrate accepts the write and
+ * the sender sees success, so the dead mention is invisible without this. Only
+ * tokens the substrate would actually render as mentions count — a dead form
+ * inside a code span is literal text, not a failed delivery, and does not
+ * trigger it. `tokens` lists the unresolved forms so the caller can fix the
+ * name. Adapters with a directory (Zulip) produce it; the in-memory adapter
+ * never does. Tagged so the MCP edge and callers discriminate it from a
+ * generic `PublisherError`.
+ */
+export class UnresolvedMention extends Data.TaggedError('UnresolvedMention')<{
+  readonly operation: 'post' | 'edit'
+  readonly tokens: ReadonlyArray<string>
+  readonly substrate: string
+}> {
+  override get message(): string {
+    return `${this.operation} failed — ${this.substrate} substrate has no identity for mention ${this.tokens
+      .map((t) => `@**${t}**`)
+      .join(
+        ', ',
+      )}; the message would notify nobody. Fix the name or list_agents/list_humans to find the live form.`
   }
 }
 
