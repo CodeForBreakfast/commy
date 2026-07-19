@@ -6,7 +6,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
  * enforced by manifests.test.ts. Update only via the `release-plugin`
  * skill, which edits all three sites and tags the result.
  */
-export const PLUGIN_VERSION = '0.20.0'
+export const PLUGIN_VERSION = '0.21.0'
 
 /**
  * Echoed to every connected MCP client via the server `instructions:`
