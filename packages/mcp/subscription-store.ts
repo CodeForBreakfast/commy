@@ -111,10 +111,37 @@ const isRetired = (
 ): intent is Schema.Schema.Type<typeof RetiredMentionsSchema> => intent.kind === 'mentions'
 
 const SubscriptionsFileSchema = Schema.parseJson(Schema.Array(PersistedIntentSchema))
+
+/**
+ * Shares the `commy plugin: <component> drop (<reason>) …` shape the event
+ * pump's discards use (`event-pump.ts`), so one grep answers "what did this
+ * seat silently lose?" across both layers. Session rather than identity
+ * because the store is keyed on session_id — see the header doc for why
+ * keying on identity would be wrong.
+ *
+ * Observability only. This is NOT an expiry instrument: the on-disk entry is
+ * cleared solely by `persistSubscriptions`, which fires on a runtime
+ * subscribe/unsubscribe, so a listen-only seat keeps it forever and
+ * re-discards on every resume. Listen-only is precisely the population the
+ * retired schema protects, so these lines will never go quiet for the seats
+ * that matter — silence here is not permission to delete the shim.
+ */
+const traceRetiredDiscards = (
+  id: SessionIdValue,
+  intents: ReadonlyArray<Schema.Schema.Type<typeof PersistedIntentSchema>>,
+): Effect.Effect<void> =>
+  Effect.forEach(Arr.filter(intents, isRetired), (retired) =>
+    Effect.logInfo(
+      `commy plugin: subscription-store drop (retired-intent) kind=${retired.kind} session=${id as string}`,
+    ),
+  ).pipe(Effect.asVoid)
+
 const decodeSubscriptionsFile = (
+  id: SessionIdValue,
   raw: string,
 ): Effect.Effect<ReadonlyArray<SubscribeIntent>, ParseResult.ParseError> =>
   Schema.decodeUnknown(SubscriptionsFileSchema)(raw).pipe(
+    Effect.tap((intents) => traceRetiredDiscards(id, intents)),
     Effect.map(Arr.filter((intent) => !isRetired(intent))),
   )
 
@@ -141,13 +168,14 @@ const isNotFound = (error: PlatformError | ParseResult.ParseError): boolean =>
  */
 const readSubscriptions = (
   fs: FileSystem.FileSystem,
+  id: SessionIdValue,
   path: string,
 ): Effect.Effect<
   Option.Option<ReadonlyArray<SubscribeIntent>>,
   PlatformError | ParseResult.ParseError
 > =>
   fs.readFileString(path).pipe(
-    Effect.flatMap(decodeSubscriptionsFile),
+    Effect.flatMap((raw) => decodeSubscriptionsFile(id, raw)),
     Effect.map((intents) => Option.some(intents)),
     Effect.catchIf(isNotFound, () => Effect.succeed(Option.none<ReadonlyArray<SubscribeIntent>>())),
   )
@@ -157,7 +185,7 @@ export const createFileSubscriptionStore = (deps: FileSubscriptionStoreDeps): Su
   const pathFor = (id: SessionIdValue): string => join(dir, subscriptionFilename(id))
 
   const read: SubscriptionStore['read'] = () =>
-    Effect.flatMap(Deferred.await(session), (id) => readSubscriptions(fs, pathFor(id)))
+    Effect.flatMap(Deferred.await(session), (id) => readSubscriptions(fs, id, pathFor(id)))
 
   const write: SubscriptionStore['write'] = (intents) =>
     Effect.flatMap(Deferred.await(session), (id) =>

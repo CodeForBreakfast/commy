@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { captureLogger } from '@commy/core/logging'
 import { decodeChannelNameSync, decodeThreadNameSync } from '@commy/core/ports'
 import { FileSystem } from '@effect/platform'
 import { NodeFileSystem } from '@effect/platform-node'
@@ -229,8 +230,49 @@ describe('createFileSubscriptionStore', () => {
         join(tmp.path, `${SID_A}.json`),
         JSON.stringify([{ kind: 'mentions' }, { kind: 'channel', channelName: 'commy' }]),
       )
-      const result = await Effect.runPromise(store.read())
+      // Swallowed rather than asserted: the discard's trace is the subject of
+      // the two tests below, and an unwrapped run would spray it through the
+      // runner's output.
+      const result = await Effect.runPromise(store.read().pipe(Effect.provide(captureLogger([]))))
       expect(result).toEqual(Option.some([channel('commy')]))
+    } finally {
+      tmp.cleanup()
+    }
+  })
+
+  // comms-n1my, ruled by Graeme. The discard above is silent by construction —
+  // a resuming seat's set quietly shrinks by one entry and nothing records it.
+  // These two pin the trace: it fires with the session it fired for, and it
+  // fires ONLY on a set that actually held a retired entry.
+  test('read traces the discard of a retired mentions intent', async () => {
+    const tmp = buildTmpDir()
+    const lines: Array<string> = []
+    try {
+      const store = boundStore(tmp.path, sid(SID_A))
+      writeFileSync(
+        join(tmp.path, `${SID_A}.json`),
+        JSON.stringify([{ kind: 'mentions' }, { kind: 'channel', channelName: 'commy' }]),
+      )
+      await Effect.runPromise(store.read().pipe(Effect.provide(captureLogger(lines))))
+      expect(lines).toEqual([
+        `commy plugin: subscription-store drop (retired-intent) kind=mentions session=${SID_A}`,
+      ])
+    } finally {
+      tmp.cleanup()
+    }
+  })
+
+  test('read traces nothing when no retired intent is present', async () => {
+    const tmp = buildTmpDir()
+    const lines: Array<string> = []
+    try {
+      const store = boundStore(tmp.path, sid(SID_A))
+      writeFileSync(
+        join(tmp.path, `${SID_A}.json`),
+        JSON.stringify([{ kind: 'channel', channelName: 'commy' }]),
+      )
+      await Effect.runPromise(store.read().pipe(Effect.provide(captureLogger(lines))))
+      expect(lines).toEqual([])
     } finally {
       tmp.cleanup()
     }
