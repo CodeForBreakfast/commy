@@ -45,6 +45,7 @@ import {
   InboxError,
   PublisherError,
   UnknownChannel,
+  UnresolvedMention,
 } from '@commy/core/ports'
 import { HttpClient } from '@effect/platform'
 import {
@@ -88,6 +89,12 @@ import type {
   ZulipHttpConfig,
 } from './http.ts'
 import { ApiKey, BotEmail, makeZulipHttp, ZulipApiError } from './http.ts'
+import {
+  extractMentions,
+  type MentionDirectory,
+  mentionTokens,
+  unresolvedMentions,
+} from './mentions.ts'
 import type { ReconcileReport } from './minter-reconciler.ts'
 import { reconcileMinterSubscriptions } from './minter-reconciler.ts'
 import { buildMessageRef, permalinkBase, withChannelPermalink } from './permalink.ts'
@@ -578,25 +585,37 @@ export const zulipAdapter = (
         })),
       )
 
-    const MENTION_PATTERN = /@\*\*([^*]+)\*\*/g
+    // A directory the shared mention helpers can resolve against — the
+    // name-keyed map plus an id resolver for the disambiguated `@**Name|id**`
+    // form, adapting this path's `ZulipUserRef`-keyed `byId` to a raw id.
+    const mentionDirectory = (directory: DirectoryLookup): MentionDirectory => ({
+      byName: directory.byName,
+      byUserId: (userId) => directory.byId.get(ZulipUserRef(userId)),
+    })
 
-    const extractMentions = (
-      content: string,
-      byName: ReadonlyMap<string, Identity>,
-    ): ReadonlyArray<Identity> => {
-      const results: Identity[] = []
-      const seen = new Set<string>()
-      for (const match of content.matchAll(MENTION_PATTERN)) {
-        const name = match[1]
-        if (name === undefined) continue
-        const ident = byName.get(name)
-        if (ident === undefined) continue
-        if (seen.has(ident.id)) continue
-        seen.add(ident.id)
-        results.push(ident)
-      }
-      return results
-    }
+    // Write-path mention pre-flight: a `@**Name**` token in an outbound body
+    // that resolves to no known identity would be posted verbatim and notify
+    // nobody — Zulip accepts it silently. Reject the write instead. The token
+    // scan is markdown-aware (a dead form quoted inside a code span is literal
+    // text Zulip never delivers, not a failed mention) and runs first so a
+    // mention-free body — the common case — never pays for a directory fetch
+    // onto the rate-limited realm.
+    const validateOutboundMentions = (
+      operation: 'post' | 'edit',
+      body: string,
+    ): Effect.Effect<void, UnresolvedMention | ZulipApiError | ParseResult.ParseError> =>
+      mentionTokens(body).length === 0
+        ? Effect.void
+        : buildDirectoryLookup().pipe(
+            Effect.flatMap((directory) => {
+              const dead = unresolvedMentions(body, mentionDirectory(directory))
+              return dead.length === 0
+                ? Effect.void
+                : Effect.fail(
+                    new UnresolvedMention({ operation, tokens: dead, substrate: 'zulip' }),
+                  )
+            }),
+          )
 
     const mapHistoricalReactions = (
       raw: ReadonlyArray<HistoricalReaction>,
@@ -643,7 +662,7 @@ export const zulipAdapter = (
           sender,
           body,
           ts: m.ts,
-          mentions: extractMentions(m.content, directory.byName),
+          mentions: extractMentions(m.content, mentionDirectory(directory)),
           reactions,
         }
       })
@@ -1380,7 +1399,8 @@ export const zulipAdapter = (
         // failure as a PublisherError carrying the cause.
         return boundHttp().pipe(
           Effect.flatMap((http) =>
-            resolvePublishChannel(channel).pipe(
+            validateOutboundMentions('post', body).pipe(
+              Effect.zipRight(resolvePublishChannel(channel)),
               Effect.flatMap((effective) =>
                 // Zulip rejects stream messages without a topic on realms with
                 // `mandatory_topics: true` (a common realm default). Default to
@@ -1429,7 +1449,7 @@ export const zulipAdapter = (
             ),
           ),
           Effect.mapError((cause) =>
-            cause instanceof UnknownChannel
+            cause instanceof UnknownChannel || cause instanceof UnresolvedMention
               ? cause
               : new PublisherError({ operation: 'post', cause }),
           ),
@@ -1438,12 +1458,20 @@ export const zulipAdapter = (
       edit: (message, body) =>
         boundHttp().pipe(
           Effect.flatMap((http) =>
-            http.patch(`/messages/${encodeURIComponent(message.id)}`, successSchema, {
-              content: body,
-            }),
+            validateOutboundMentions('edit', body).pipe(
+              Effect.zipRight(
+                http.patch(`/messages/${encodeURIComponent(message.id)}`, successSchema, {
+                  content: body,
+                }),
+              ),
+            ),
           ),
           Effect.asVoid,
-          Effect.mapError((cause) => new PublisherError({ operation: 'edit', cause })),
+          Effect.mapError((cause) =>
+            cause instanceof UnresolvedMention
+              ? cause
+              : new PublisherError({ operation: 'edit', cause }),
+          ),
         ),
       react: (message, emoji) =>
         boundHttp().pipe(

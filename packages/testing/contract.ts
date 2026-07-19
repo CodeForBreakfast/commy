@@ -41,6 +41,7 @@ import {
   PublisherError,
   UnknownChannel,
   UnknownIdentity,
+  type UnresolvedMention,
 } from '@commy/core/ports'
 import { Duration, Effect, Exit, Option, Queue, type Scope, Stream } from 'effect'
 import { REALM_HOOK_TIMEOUT_MS } from './realm-hooks.ts'
@@ -193,7 +194,7 @@ const postSpaced = (
   comms: AgentComms,
   channel: ChannelName,
   bodies: ReadonlyArray<MessageBody>,
-): Effect.Effect<void, UnknownChannel | PublisherError> =>
+): Effect.Effect<void, UnknownChannel | UnresolvedMention | PublisherError> =>
   Effect.forEach(
     bodies,
     (body, index) =>

@@ -19,6 +19,7 @@ import {
   ThreadPermalinkSchema,
   UnknownChannel,
   type UnknownIdentity,
+  UnresolvedMention,
 } from '@commy/core/ports'
 import { effectTest } from '@commy/testing/effect-test'
 import {
@@ -79,6 +80,19 @@ const BOB = {
   is_bot: false,
   is_active: true,
   role: 100,
+} as const
+
+// Raw directory member behind the `aliceBot` Identity (id '1'). The write-path
+// mention validator resolves outbound `@**alice**` markup through the
+// directory, so a body that mentions her only posts when she is a seeded
+// member.
+const ALICE = {
+  user_id: 1,
+  email: 'alice-bot@example.com',
+  full_name: 'alice',
+  is_bot: true,
+  is_active: true,
+  role: 400,
 } as const
 
 const REALM_URL = 'https://zulip.example.com'
@@ -876,6 +890,9 @@ effectTest('publisher.post with body-only mention markup posts body verbatim', (
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 103)
     const adapter = yield* buildAdapter(stub)
+    // The body mentions alice, so the write-path validator resolves her against
+    // the directory before the post — she must be a seeded member.
+    yield* seedUsers(stub, [HERMES, ALICE])
     yield* adapter.publisher.post(
       generalChannel.name,
       decodeMessageBodySync('hey @**alice** look'),
@@ -894,6 +911,7 @@ effectTest('publisher.post with both body markup AND opts.mentions does not doub
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 104)
     const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, ALICE])
     yield* adapter.publisher.post(
       generalChannel.name,
       decodeMessageBodySync('@**alice** wake up'),
@@ -1045,6 +1063,97 @@ effectTest('publisher.post fails with a tagged UnknownChannel on an unknown chan
   }),
 )
 
+// A `@**Name**` token in an outbound body that resolves to no known identity
+// would be posted verbatim and notify nobody — Zulip accepts it silently.
+// The write-path validator turns that silent non-delivery into a typed failure.
+effectTest('publisher.post fails with a tagged UnresolvedMention on a dead mention form', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 200)
+    const adapter = yield* buildAdapter(stub)
+    // The directory holds HERMES only; @**Graeme Foster** resolves to nobody.
+    const error = yield* Effect.flip(
+      adapter.publisher.post(
+        generalChannel.name,
+        decodeMessageBodySync('decision for @**Graeme Foster** to make'),
+      ),
+    )
+    expect(error).toBeInstanceOf(UnresolvedMention)
+    if (error instanceof UnresolvedMention) {
+      expect(error._tag).toBe('UnresolvedMention')
+      expect(error.operation).toBe('post')
+      expect(error.tokens).toEqual(['Graeme Foster'])
+    }
+    // The dead post never reached the substrate.
+    const posted = yield* stub.captured.pipe(
+      Effect.map((reqs) =>
+        reqs.filter((r) => r.method === 'POST' && r.url.pathname === '/api/v1/messages'),
+      ),
+    )
+    expect(posted).toHaveLength(0)
+  }),
+)
+
+// A dead form written as an example inside a code span is literal text Zulip
+// never delivers as a mention — validating it would block agents from
+// discussing mention discipline. It must post verbatim, not fail.
+effectTest('publisher.post posts verbatim when a dead form appears only inside a code span', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 201)
+    const adapter = yield* buildAdapter(stub)
+    const body = 'the dead form `@**Graeme Foster**` resolves to nobody'
+    yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync(body))
+    const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
+    expect(params.get('content')).toBe(body)
+  }),
+)
+
+// The token scan is markdown-aware and runs first, so a mention-free body never
+// fetches the directory — a post succeeds even when GET /users would fail.
+effectTest('publisher.post skips the directory fetch when the body has no mention tokens', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 202)
+    const adapter = yield* buildAdapter(stub)
+    // Make any post-time /users fetch fail; a mention-free body must not do one.
+    yield* stub.respond('GET', '/api/v1/users', { status: 500, body: { result: 'error' } })
+    const ref = yield* adapter.publisher.post(
+      generalChannel.name,
+      decodeMessageBodySync('no mentions here'),
+    )
+    expect(ref.id).toEqual(decodeMessageIdSync('202'))
+  }),
+)
+
+// The same directory validation guards the edit body — a stale mention in an
+// edit is as silent as one in a fresh post.
+effectTest('publisher.edit fails with a tagged UnresolvedMention on a dead mention form', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* stub.respond('PATCH', '/api/v1/messages/42', { body: { result: 'success' } })
+    const adapter = yield* buildAdapter(stub)
+    const target: MessageRef = {
+      id: decodeMessageIdSync('42'),
+      channel: generalChannel,
+      thread: Option.none(),
+      permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
+    }
+    const error = yield* Effect.flip(
+      adapter.publisher.edit(target, decodeMessageBodySync('now pinging @**Graeme Foster**')),
+    )
+    expect(error).toBeInstanceOf(UnresolvedMention)
+    if (error instanceof UnresolvedMention) {
+      expect(error.operation).toBe('edit')
+      expect(error.tokens).toEqual(['Graeme Foster'])
+    }
+    const patched = yield* stub.captured.pipe(
+      Effect.map((reqs) => reqs.filter((r) => r.method === 'PATCH')),
+    )
+    expect(patched).toHaveLength(0)
+  }),
+)
+
 effectTest('publisher.edit PATCHes /messages/{id} with the new content', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
@@ -1169,6 +1278,30 @@ effectTest('history.readChannel narrows by channel and maps each message to the 
       mentions: [],
       reactions: [],
     })
+  }),
+)
+
+// comms-trln at the history seam: a message whose only mention token sits in a
+// code span reports no mention, while a real one alongside it still counts.
+effectTest('history.readChannel excludes a code-span mention but keeps a real one', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
+    yield* seedMessages(stub, [
+      {
+        id: 556,
+        sender_id: 9,
+        sender_full_name: 'hermes-agent',
+        stream_id: 1234,
+        display_recipient: 'general',
+        subject: 'lobby',
+        content: '@**Robin Reyes** — never write `@**Robin Reyes**` in a code span',
+        timestamp: 1715000001,
+      },
+    ])
+    const messages = yield* adapter.history.readChannel(generalChannel.name, { limit: 50 })
+    expect(messages[0]?.mentions.map((m) => m.name)).toEqual([decodeDisplayNameSync('Robin Reyes')])
   }),
 )
 

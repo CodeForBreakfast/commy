@@ -39,6 +39,7 @@ import {
   Stream,
 } from 'effect'
 import type { ZulipApiError, ZulipHttp } from './http.ts'
+import { extractMentions } from './mentions.ts'
 import { buildMessageRef } from './permalink.ts'
 import { splitTopic } from './resolved-topic.ts'
 
@@ -286,26 +287,6 @@ const decodeZulipReactionEvent = Schema.decodeUnknownEither(zulipReactionEventSc
 
 export type ParsedZulipReactionEvent = Schema.Schema.Type<typeof zulipReactionEventSchema>
 
-const MENTION_PATTERN = /@\*\*([^*]+)\*\*/g
-
-const extractMentions = (
-  content: string,
-  byName: ReadonlyMap<string, Identity>,
-): ReadonlyArray<Identity> => {
-  const results: Identity[] = []
-  const seen = new Set<string>()
-  for (const match of content.matchAll(MENTION_PATTERN)) {
-    const name = match[1]
-    if (name === undefined) continue
-    const ident = byName.get(name)
-    if (ident === undefined) continue
-    if (seen.has(ident.id)) continue
-    seen.add(ident.id)
-    results.push(ident)
-  }
-  return results
-}
-
 const decodeMessageRef = (
   message: ParsedZulipMessage,
   base: string,
@@ -355,7 +336,10 @@ export const messageToInboundEvents = (
       sender,
       body,
       ts,
-      mentions: extractMentions(message.content, directory.byName),
+      mentions: extractMentions(message.content, {
+        byName: directory.byName,
+        byUserId: (userId) => directory.byId.get(userId),
+      }),
       // Reactions arrive as separate `reaction` events. A freshly-posted
       // message carries no reaction state — anything that exists already
       // (via history reads) surfaces through the HistoryReader path.
