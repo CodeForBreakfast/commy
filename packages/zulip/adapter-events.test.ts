@@ -529,6 +529,20 @@ effectTest(
       yield* seedSubscribeOk(stub)
       yield* seedRegister(stub)
       yield* adapter.inbox.subscribe(homeChannel.name)
+      // The mention sigil in the body buys one rendered read; this is what
+      // Zulip answers it with, and it is what decides who was mentioned.
+      yield* stub.respond('GET', '/api/v1/messages', {
+        body: {
+          result: 'success',
+          messages: [
+            {
+              id: 300,
+              content:
+                '<p>hey <span class="user-mention" data-user-id="9">@hermes-agent</span> thoughts?</p>',
+            },
+          ],
+        },
+      })
       yield* stub.respondSequence('GET', '/api/v1/events', [
         {
           body: {

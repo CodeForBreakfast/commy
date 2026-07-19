@@ -48,8 +48,9 @@ import {
   Stream,
 } from 'effect'
 import type { ZulipApiError, ZulipHttp } from './http.ts'
-import { extractMentions } from './mentions.ts'
 import { buildMessageRef } from './permalink.ts'
+import { type RenderedContentLookup, renderedContentPerMessage } from './rendered-content.ts'
+import { mentionsOfMessage } from './rendered-mentions.ts'
 import { splitTopic } from './resolved-topic.ts'
 
 export interface DirectoryLookup {
@@ -383,7 +384,8 @@ export const messageToInboundEvents = (
   directory: DirectoryLookup,
   boundIdentity: Identity | undefined,
   base: string,
-): Effect.Effect<ReadonlyArray<InboundEvent>, ParseResult.ParseError> =>
+  renderedFor: RenderedContentLookup,
+): Effect.Effect<ReadonlyArray<InboundEvent>, ZulipApiError | ParseResult.ParseError> =>
   Effect.gen(function* () {
     const sender = yield* decodeSenderIdentity(message, directory)
     const ref = yield* decodeMessageRef(message, base)
@@ -394,7 +396,7 @@ export const messageToInboundEvents = (
       sender,
       body,
       ts,
-      mentions: yield* extractMentions(message.content, {
+      mentions: yield* mentionsOfMessage(renderedFor, message, {
         byName: directory.byName,
         byUserId: (userId) => directory.byId.get(userId),
       }),
@@ -404,11 +406,11 @@ export const messageToInboundEvents = (
       reactions: [],
     }
     const out: InboundEvent[] = [{ kind: 'message-posted', message: portMessage }]
-    // Synthesise from content, not from Zulip's `flags.mentioned` — on the
-    // real realm the events queue is registered against the minter, so the
-    // flag is keyed to the queue owner rather than the bound bot. The
-    // extracted mentions list is the authoritative answer to "was the bound
-    // bot mentioned in this message?".
+    // Not from Zulip's `flags.mentioned` — the queue is registered against the
+    // minter, permanently, so that flag answers "was the *minter* mentioned".
+    // The rendered spans are viewer-independent: a render is a property of the
+    // message, not of whoever reads it, so they answer "was the bound bot
+    // mentioned" from a queue the bound bot does not own.
     if (boundIdentity !== undefined && mentionsIdentity(portMessage.mentions, boundIdentity.id)) {
       out.push({
         kind: 'mention-received',
@@ -450,13 +452,16 @@ export const mapMessageEvent = (
   directory: DirectoryLookup,
   boundIdentity: Identity | undefined,
   base: string,
-): Effect.Effect<ReadonlyArray<InboundEvent>, ParseResult.ParseError> => {
+  renderedFor: RenderedContentLookup,
+): Effect.Effect<ReadonlyArray<InboundEvent>, ZulipApiError | ParseResult.ParseError> => {
   const message = raw['message']
   if (Either.isLeft(decodeChannelShape(message))) {
     return Effect.succeed([])
   }
   return decodeZulipMessageContent(message).pipe(
-    Effect.flatMap((parsed) => messageToInboundEvents(parsed, directory, boundIdentity, base)),
+    Effect.flatMap((parsed) =>
+      messageToInboundEvents(parsed, directory, boundIdentity, base, renderedFor),
+    ),
   )
 }
 
@@ -624,7 +629,13 @@ const processSingleEvent = (
     // through mapMessageEvent's ParseError channel. A malformed channel
     // message is logged+skipped here so a single shape-violating event
     // can't crash the pump.
-    return mapMessageEvent(evt, directory, config.boundIdentity, config.permalinkBase).pipe(
+    return mapMessageEvent(
+      evt,
+      directory,
+      config.boundIdentity,
+      config.permalinkBase,
+      renderedContentPerMessage(config.http),
+    ).pipe(
       Effect.tap((events) =>
         Effect.sync(() => {
           if (config.messageRefCache !== undefined) {

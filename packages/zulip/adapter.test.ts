@@ -1479,22 +1479,112 @@ effectTest('history.readChannel excludes a code-span mention but keeps a real on
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
     yield* seedUsers(stub, [HERMES, MAINTAINER])
-    yield* seedMessages(stub, [
-      {
-        id: 556,
-        sender_id: 9,
-        sender_full_name: 'hermes-agent',
-        stream_id: 1234,
-        display_recipient: 'general',
-        subject: 'lobby',
-        content: '@**Robin Reyes** — never write `@**Robin Reyes**` in a code span',
-        timestamp: 1715000001,
-      },
+    // The raw read, then the one rendered read the mention sigil buys. Zulip
+    // rendered a span for the real ping and nothing for the coded example —
+    // which is the entire adjudication; commy does not re-derive it.
+    yield* stub.respondSequence('GET', '/api/v1/messages', [
+      messagesPage([
+        {
+          id: 556,
+          sender_id: 9,
+          sender_full_name: 'hermes-agent',
+          stream_id: 1234,
+          display_recipient: 'general',
+          subject: 'lobby',
+          content: '@**Robin Reyes** — never write `@**Robin Reyes**` in a code span',
+          timestamp: 1715000001,
+        },
+      ]),
+      messagesPage([
+        {
+          id: 556,
+          sender_id: 9,
+          sender_full_name: 'hermes-agent',
+          stream_id: 1234,
+          display_recipient: 'general',
+          subject: 'lobby',
+          content:
+            '<p><span class="user-mention" data-user-id="5">@Robin Reyes</span> — never write <code>@**Robin Reyes**</code> in a code span</p>',
+          timestamp: 1715000001,
+        },
+      ]),
     ])
     const messages = yield* adapter.history.readChannel(generalChannel.name, { limit: 50 })
     expect(mentionedIdentities(messages[0]?.mentions ?? []).map((m) => m.name)).toEqual([
       decodeDisplayNameSync('Robin Reyes'),
     ])
+  }),
+)
+
+// The bound on the whole design: a history read costs ONE extra request
+// whether the batch holds one mention or a hundred. A refactor into a
+// per-message rendered fetch would reintroduce exactly the cost this bounds,
+// and would do it silently — so the count is asserted, not argued.
+effectTest('history.readChannel renders a whole batch with a single extra request', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
+    const mentionBearing = [601, 602, 603, 604].map((id) => ({
+      id,
+      sender_id: 9,
+      sender_full_name: 'hermes-agent',
+      stream_id: 1234,
+      display_recipient: 'general',
+      subject: 'lobby',
+      content: `@**Robin Reyes** number ${id}`,
+      timestamp: 1715000000 + id,
+    }))
+    yield* stub.respondSequence('GET', '/api/v1/messages', [
+      messagesPage(mentionBearing),
+      messagesPage(
+        mentionBearing.map((m) => ({
+          ...m,
+          content: `<p><span class="user-mention" data-user-id="5">@Robin Reyes</span> number ${m.id}</p>`,
+        })),
+      ),
+    ])
+    const messages = yield* adapter.history.readChannel(generalChannel.name, { limit: 50 })
+    expect(messages).toHaveLength(4)
+    for (const message of messages) {
+      expect(mentionedIdentities(message.mentions).map((m) => m.name)).toEqual([
+        decodeDisplayNameSync('Robin Reyes'),
+      ])
+    }
+    const rendered = (yield* stub.captured).filter(
+      (r) =>
+        r.method === 'GET' &&
+        r.url.pathname === '/api/v1/messages' &&
+        r.url.searchParams.get('apply_markdown') === 'true',
+    )
+    expect(rendered).toHaveLength(1)
+  }),
+)
+
+// The other half of the bound: a batch nobody was mentioned in pays nothing.
+effectTest('history.readChannel makes no rendered request when no body carries a sigil', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
+    yield* seedMessages(stub, [
+      {
+        id: 610,
+        sender_id: 9,
+        sender_full_name: 'hermes-agent',
+        stream_id: 1234,
+        display_recipient: 'general',
+        subject: 'lobby',
+        content: 'no one is mentioned here',
+        timestamp: 1715000002,
+      },
+    ])
+    const messages = yield* adapter.history.readChannel(generalChannel.name, { limit: 50 })
+    expect(messages[0]?.mentions).toEqual([])
+    const rendered = (yield* stub.captured).filter(
+      (r) => r.url.searchParams.get('apply_markdown') === 'true',
+    )
+    expect(rendered).toHaveLength(0)
   }),
 )
 
@@ -2476,7 +2566,7 @@ effectTest(
       const stub = yield* makeStubHttpClient
       const adapter = yield* buildAdapter(stub)
       yield* seedUsers(stub, [HERMES])
-      yield* stub.respond('GET', '/api/v1/messages', {
+      const replayPage = (content: string) => ({
         body: {
           result: 'success',
           messages: [
@@ -2487,7 +2577,7 @@ effectTest(
               stream_id: 100,
               display_recipient: 'general',
               subject: 'lobby',
-              content: '@**hermes-agent** wake up',
+              content,
               timestamp: 5000,
               flags: ['mentioned'],
             },
@@ -2499,6 +2589,12 @@ effectTest(
           history_limited: false,
         },
       })
+      yield* stub.respondSequence('GET', '/api/v1/messages', [
+        replayPage('@**hermes-agent** wake up'),
+        replayPage(
+          '<p><span class="user-mention" data-user-id="9">@hermes-agent</span> wake up</p>',
+        ),
+      ])
       const events = yield* adapter.inbox.replay(decodeTimestampSync(0))
       expect(events.map((e) => e.kind)).toEqual(['message-posted', 'mention-received'])
     }),

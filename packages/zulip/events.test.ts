@@ -43,6 +43,7 @@ import {
 } from './events.ts'
 import type { ZulipHttp } from './http.ts'
 import { ZulipApiError } from './http.ts'
+import type { RenderedContentLookup } from './rendered-content.ts'
 
 const PERMALINK_BASE = 'https://zulip.example.com'
 
@@ -74,6 +75,17 @@ const messageMentioning = (target: Identity, sender: Identity): ParsedZulipMessa
   timestamp: 1_700_000_000,
 })
 
+// Mentions now come from Zulip's own render, so a test that expects one has
+// to say what Zulip rendered. `rendering` is the whole substrate answer these
+// tests stand in for; `NO_RENDER` is a message Zulip declined to render a
+// mention span for.
+const rendering = (target: Identity): RenderedContentLookup => {
+  const html = `<p>oi <span class="user-mention" data-user-id="${target.id}">@${target.name}</span> wake up</p>`
+  return () => Effect.succeedSome(html)
+}
+
+const NO_RENDER: RenderedContentLookup = () => Effect.succeedNone
+
 test('fires mention-received when bound identity is in content even if flags lack "mentioned"', () => {
   // The minter-routing gap: on the real realm, the events
   // queue is registered against the minter, so `flags.mentioned` is keyed
@@ -83,7 +95,9 @@ test('fires mention-received when bound identity is in content even if flags lac
   const directory = directoryFor(HERMES, MAINTAINER)
   const message = messageMentioning(HERMES, MAINTAINER)
 
-  const events = Effect.runSync(messageToInboundEvents(message, directory, HERMES, PERMALINK_BASE))
+  const events = Effect.runSync(
+    messageToInboundEvents(message, directory, HERMES, PERMALINK_BASE, rendering(HERMES)),
+  )
   const mention = events.find((e) => e.kind === 'mention-received')
 
   expect(mention).toBeDefined()
@@ -103,7 +117,9 @@ test('does not fire mention-received when the bound identity is only mentioned i
     content: 'never write `@**hermes-agent**` in a code span',
   }
 
-  const events = Effect.runSync(messageToInboundEvents(message, directory, HERMES, PERMALINK_BASE))
+  const events = Effect.runSync(
+    messageToInboundEvents(message, directory, HERMES, PERMALINK_BASE, NO_RENDER),
+  )
 
   expect(events.find((e) => e.kind === 'mention-received')).toBeUndefined()
   const posted = events.find((e) => e.kind === 'message-posted')
@@ -118,7 +134,13 @@ test('decorates the inbound message ref with message, channel and topic permalin
   const message = messageMentioning(HERMES, MAINTAINER)
 
   const events = Effect.runSync(
-    messageToInboundEvents(message, directory, HERMES, 'https://zulip.example.com'),
+    messageToInboundEvents(
+      message,
+      directory,
+      HERMES,
+      'https://zulip.example.com',
+      rendering(HERMES),
+    ),
   )
   const posted = events.find((e) => e.kind === 'message-posted')
 
@@ -153,7 +175,9 @@ test('does not fire mention-received when bound identity is not in content', () 
   const directory = directoryFor(HERMES, MAINTAINER, RIQ)
   const message = messageMentioning(RIQ, MAINTAINER)
 
-  const events = Effect.runSync(messageToInboundEvents(message, directory, HERMES, PERMALINK_BASE))
+  const events = Effect.runSync(
+    messageToInboundEvents(message, directory, HERMES, PERMALINK_BASE, rendering(RIQ)),
+  )
   const mention = events.find((e) => e.kind === 'mention-received')
 
   expect(mention).toBeUndefined()
@@ -223,7 +247,7 @@ test('mapMessageEvent skips DM-shaped events instead of failing the parser', () 
   const directory = directoryFor(HERMES, MAINTAINER)
   const dm = dmRawEvent(MAINTAINER, [HERMES, MAINTAINER])
 
-  const result = Effect.runSync(mapMessageEvent(dm, directory, HERMES, PERMALINK_BASE))
+  const result = Effect.runSync(mapMessageEvent(dm, directory, HERMES, PERMALINK_BASE, NO_RENDER))
   expect(result).toEqual([])
 })
 
@@ -232,7 +256,13 @@ test('mapMessageEvent skips events whose message field is not a channel-shaped o
 
   expect(
     Effect.runSync(
-      mapMessageEvent({ id: 1, type: 'message', message: null }, directory, HERMES, PERMALINK_BASE),
+      mapMessageEvent(
+        { id: 1, type: 'message', message: null },
+        directory,
+        HERMES,
+        PERMALINK_BASE,
+        NO_RENDER,
+      ),
     ),
   ).toEqual([])
   expect(
@@ -242,11 +272,14 @@ test('mapMessageEvent skips events whose message field is not a channel-shaped o
         directory,
         HERMES,
         PERMALINK_BASE,
+        NO_RENDER,
       ),
     ),
   ).toEqual([])
   expect(
-    Effect.runSync(mapMessageEvent({ id: 3, type: 'message' }, directory, HERMES, PERMALINK_BASE)),
+    Effect.runSync(
+      mapMessageEvent({ id: 3, type: 'message' }, directory, HERMES, PERMALINK_BASE, NO_RENDER),
+    ),
   ).toEqual([])
 })
 
@@ -257,7 +290,9 @@ test('mapMessageEvent parses channel-shaped events through messageToInboundEvent
   const directory = directoryFor(HERMES, MAINTAINER)
   const raw = channelRawEvent(messageMentioning(HERMES, MAINTAINER))
 
-  const result = Effect.runSync(mapMessageEvent(raw, directory, HERMES, PERMALINK_BASE))
+  const result = Effect.runSync(
+    mapMessageEvent(raw, directory, HERMES, PERMALINK_BASE, rendering(HERMES)),
+  )
   expect(result.some((e) => e.kind === 'message-posted')).toBe(true)
   expect(result.some((e) => e.kind === 'mention-received')).toBe(true)
 })
