@@ -49,7 +49,7 @@ import { raceReleaseAgainstTimeout } from './release-shutdown.ts'
 import { ResumeOutcomeLive, ResumeOutcome as ResumeOutcomeTag } from './resume-outcome.ts'
 import { SessionIdLive, SessionId as SessionIdTag } from './session-id.ts'
 import type { SubscribeIntent, SubscribeTokenError } from './subscribe-parser.ts'
-import { intentToTarget } from './subscribe-parser.ts'
+import { intentToTarget, intentToToken } from './subscribe-parser.ts'
 import {
   persistSubscriptions,
   restoreSubscriptions,
@@ -680,6 +680,28 @@ export const makeProgram = (
       const runsIdleSweep = parsed.botName === undefined
 
       const subscribedIntents = yield* subscribeFromEnv(adapter.inbox, narrowSet, parsed)
+
+      // Leave a positive trace of what the boot-time subscribe set actually
+      // resolved to. This is the diagnostic whose absence let a clobbered
+      // COMMY_SUBSCRIBE cost months: an operator who configures subscriptions
+      // and then finds no line here — or a line that does not name the tokens
+      // they set — has the fault in front of them, which is more than the empty
+      // case could ever have given them.
+      //
+      // Deliberately silent when the set is empty, rather than warning. The
+      // process cannot distinguish a seat that wanted no subscriptions from one
+      // whose value was destroyed upstream — the operator's intent is gone by
+      // the time the value arrives here — so an empty-set warning would fire on
+      // the majority of perfectly healthy interactive boots while telling the
+      // one broken seat nothing it could act on. A line that is almost always
+      // noise trains the reader to skip it, which is how the next silent fault
+      // gets to hide. The invariant that stops the clobber recurring is pinned
+      // in the launcher manifest test, not here.
+      if (subscribedIntents.length > 0) {
+        yield* Effect.logInfo(
+          `commy plugin: applied ${subscribedIntents.length} boot-time subscribe target(s): ${subscribedIntents.map(intentToToken).join(', ')}`,
+        ).pipe(Effect.provide(loggerLayer))
+      }
 
       // Ephemeral resume: start journaling runtime subscribe/unsubscribe deltas
       // now — after the COMMY_SUBSCRIBE base is seeded but before any tool call

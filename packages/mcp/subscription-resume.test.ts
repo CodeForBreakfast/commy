@@ -15,7 +15,7 @@ import {
 import { memoryAdapter } from '@commy/memory/adapter'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { Deferred, Effect, Fiber, Option, type Scope } from 'effect'
+import { Deferred, Effect, Fiber, Option, Predicate, type Scope } from 'effect'
 import type { SessionId } from './bootstrap.ts'
 import { createEphemeralIdentityCache } from './identity-cache.ts'
 import { buildMcpServer } from './mcp-server.ts'
@@ -283,6 +283,9 @@ interface PersistRig {
 const buildPersistRig = (): Effect.Effect<PersistRig, never, Scope.Scope> =>
   Effect.gen(function* () {
     const adapter = yield* memoryAdapter()
+    // The sticky-engagement tests below post into this channel; the subscribe
+    // tests never touch it.
+    yield* adapter.seedChannel(DECISIONS_CHANNEL).pipe(Effect.orDie)
     const identityCache = yield* createEphemeralIdentityCache({
       acquire: adapter.identity.acquire,
       release: adapter.identity.release,
@@ -366,6 +369,127 @@ test('subscribe carrying no session_id with an unfed deferred returns promptly a
 
         // Handler returned rather than hanging on the unfed deferred.
         expect(Option.isSome(outcome)).toBe(true)
+      }),
+    ),
+  ))
+
+// Sticky engagement — participating in a thread by posting or reacting — adds a
+// thread intent to the narrow set and wires it on the substrate. It used to stop
+// there. Restore honours the persisted set verbatim, so an intent acquired by
+// PARTICIPATING never reached disk and a resumed seat came back silently deaf to
+// threads it believed it was in: correctly engaged, silently deaf, and the store
+// reading clean to anyone who inspected it afterwards, because the store was
+// never wrong about what it held — it simply never held them.
+
+// The MCP client types `callTool`'s result as a union without a structured
+// payload, so narrow rather than cast.
+const postedMessageId = (result: unknown): string => {
+  const structured = Predicate.hasProperty(result, 'structuredContent')
+    ? result.structuredContent
+    : undefined
+  const id =
+    Predicate.hasProperty(structured, 'message_id') && Predicate.isString(structured.message_id)
+      ? structured.message_id
+      : undefined
+  expect(id).toBeString()
+  return id ?? ''
+}
+
+const stickyThreadIntent = (channel: string, thread: string): SubscribeIntent => ({
+  kind: 'thread',
+  channelName: decodeChannelNameSync(channel),
+  threadName: decodeThreadNameSync(thread),
+})
+
+test('posting into a thread persists the sticky intent so a resume restores it', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* buildPersistRig()
+        yield* Deferred.succeed(rig.session, asSessionId(SID_RESUME))
+
+        yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: {
+              channel_name: DECISIONS_CHANNEL,
+              thread: DECISIONS_THREAD,
+              body: 'engagement acquired by speaking',
+              session_id: SID_RESUME,
+            },
+          }),
+        )
+
+        const persisted = yield* rig.store.read()
+        expect(persisted).toEqual(
+          Option.some([stickyThreadIntent(DECISIONS_CHANNEL, DECISIONS_THREAD)]),
+        )
+      }),
+    ),
+  ))
+
+test('reacting in a thread persists the sticky intent so a resume restores it', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* buildPersistRig()
+        yield* Deferred.succeed(rig.session, asSessionId(SID_RESUME))
+
+        const posted = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: {
+              channel_name: DECISIONS_CHANNEL,
+              thread: DECISIONS_THREAD,
+              body: 'a message to react to',
+              session_id: SID_RESUME,
+            },
+          }),
+        )
+
+        yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'react',
+            arguments: {
+              message_id: postedMessageId(posted),
+              emoji: 'wave',
+              session_id: SID_RESUME,
+            },
+          }),
+        )
+
+        // React reaches sticky engagement on its own path (a cache-hit ref
+        // carries the observed thread), so the intent survives either way.
+        const persisted = yield* rig.store.read()
+        expect(persisted).toEqual(
+          Option.some([stickyThreadIntent(DECISIONS_CHANNEL, DECISIONS_THREAD)]),
+        )
+      }),
+    ),
+  ))
+
+// Top-level posts get no sticky thread behaviour, so there is nothing to
+// persist — and persisting an empty snapshot would overwrite a restored set
+// with nothing.
+test('a top-level post acquires no sticky intent and writes no snapshot', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* buildPersistRig()
+        yield* Deferred.succeed(rig.session, asSessionId(SID_RESUME))
+
+        yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: {
+              channel_name: DECISIONS_CHANNEL,
+              body: 'terse status ping',
+              session_id: SID_RESUME,
+            },
+          }),
+        )
+
+        expect(yield* rig.store.read()).toEqual(Option.none())
       }),
     ),
   ))

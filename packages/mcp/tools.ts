@@ -533,6 +533,16 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
   // narrow-set add is set-backed and inbox.subscribe mirrors the explicit
   // subscribe tool. No-op for refs without a thread (top-level channel
   // messages don't get sticky thread behaviour).
+  //
+  // Persists on the same three sinks as the explicit subscribe tool. An intent
+  // acquired by participating is worth exactly as much as one acquired by
+  // asking, and restore honours the persisted set verbatim — so leaving this
+  // one in memory made a resumed seat silently deaf to threads it believed it
+  // was in, while the store read correct to anyone inspecting it afterwards. It
+  // was never wrong about what it held; it simply never held them. Persist is
+  // id-blind and best-effort (see the subscribe handler): the post and react
+  // handlers both reach here via ensure-bound, so the session-id deferred is
+  // already fed and the store already seeded or restored by this point.
   const stickyThreadEngagement = async (
     channel: ChannelRef,
     threadName: Option.Option<ThreadName>,
@@ -544,7 +554,11 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
       threadName: threadName.value,
     }
     narrowSet.add(intent)
-    await runEdge(adapter.inbox.subscribe(intentToTarget(intent)))
+    await runEdge(
+      adapter.inbox
+        .subscribe(intentToTarget(intent))
+        .pipe(Effect.zipRight(deps.persistSessionSubscriptions ?? Effect.void)),
+    )
   }
   const coreTools: ReadonlyArray<ToolDef> = [
     {

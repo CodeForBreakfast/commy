@@ -28,7 +28,7 @@ no-op-ish values when unset):
 |---|---|---|
 | `COMMY_BOT_NAME` | no | Persistent mode: a stable identity acquired eagerly at boot (for concierges / scheduled agents). Omit for ephemeral, per-session identities. |
 | `COMMY_PROJECT` | no | Project slug used for channel naming and a persistent agent's project subscriptions. When unset it is derived per-session from the calling cwd (git remote / git root). |
-| `COMMY_SUBSCRIBE` | no | Comma-separated auto-subscribe tokens applied at boot: `<channel>` for a whole channel, `<channel>/<thread>` for one topic in it, `new-topics:<channel>` for the first message of each new topic. Blank means no auto-subscription — the bot still receives its own mentions, which are implicit and need no token. The retired `channel:` / `thread:` prefixes and the retired `mentions` token are rejected as config errors. |
+| `COMMY_SUBSCRIBE` | no | Comma-separated auto-subscribe tokens applied at boot: `<channel>` for a whole channel, `<channel>/<thread>` for one topic in it, `new-topics:<channel>` for the first message of each new topic. Blank means no auto-subscription — the bot still receives its own mentions, which are implicit and need no token. The retired `channel:` / `thread:` prefixes and the retired `mentions` token are rejected as config errors. Under the Claude Code plugin this may also arrive as `COMMY_SUBSCRIBE_USER_CONFIG`, which takes precedence; see [Two supply paths for the optional `COMMY_*` values](#two-supply-paths-for-the-optional-commy-values). |
 | `COMMY_CATCHUP_WINDOW_SECONDS` | no | How far back to fetch recent messages across the boot-time subscribe set on a persistent restart. Default `14400` (4 hours); `0` disables. |
 | `COMMY_QUEUE_IDLE_TIMEOUT_SECS` | no | How many seconds an ephemeral session's events queue survives without a poll before Zulip garbage-collects it, sent as `idle_queue_timeout` on `/register`. Default `86400` (24 hours); clamped to Zulip's 7-day `MAX_QUEUE_TIMEOUT_SECS` ceiling (`604800`). A non-positive or non-integer value fails boot with a config error. |
 | `COMMY_DOWNLOAD_DIR` | no | Base directory for `download_file` attachments. When set, each download's fresh temp subdirectory is created under it so files land somewhere an allowlisted agent can `Read`; when unset, downloads go to `$TMPDIR`. Must be an existing directory — a non-directory value fails boot with a config error. |
@@ -44,6 +44,39 @@ The live-test suite additionally needs a channel to exercise against:
 A template for the live-test env ships in the repo root — copy it and supply
 your own realm's values (it references a secret manager for the actual values;
 copy the variable shape, supply your own).
+
+### Two supply paths for the optional `COMMY_*` values
+
+`COMMY_SUBSCRIBE` and `COMMY_CATCHUP_WINDOW_SECONDS` can each be supplied two
+ways, and the two compose rather than collide:
+
+1. **The Claude Code plugin's user config**, which the plugin manifest writes to
+   a suffixed key — `COMMY_SUBSCRIBE_USER_CONFIG`,
+   `COMMY_CATCHUP_WINDOW_SECONDS_USER_CONFIG`.
+2. **The ordinary inherited environment**, under the bare name.
+
+The suffixed key wins when it carries a value; an empty one falls through to the
+bare name. Everything downstream reads a single resolved value, so which path
+supplied it changes nothing about behaviour.
+
+The suffix exists because `.mcp.json` is static JSON with no way to omit a key
+conditionally: every `${user_config.KEY}` it declares is substituted and written
+into the MCP child's environment whether or not you supplied that key, and an
+unsupplied optional field lands as an empty string. Written to the bare name,
+that empty string **overrode** whatever you had set by other means — a systemd
+unit, a pane env, a nix module — and the plugin then read "no subscriptions" and
+booted a seat that was silently deaf to every channel it was meant to watch.
+Giving the manifest its own key space makes that impossible: the plugin can only
+ever clobber a name it alone owns.
+
+If you configure subscriptions and want to confirm they arrived, boot logs a
+line naming the applied tokens in the same vocabulary you wrote them:
+
+```
+commy plugin: applied 2 boot-time subscribe target(s): myproject, general/standup
+```
+
+No such line means no boot-time subscriptions were applied.
 
 ## Realm settings that shape commy behaviour
 
