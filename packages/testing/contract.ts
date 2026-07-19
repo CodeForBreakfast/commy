@@ -144,7 +144,8 @@ const EVENT_DELIVERY_DEADLINE = Duration.seconds(30)
  * `Effect.timeoutOption` so an event that never arrives bounds the wait
  * instead of blocking forever. Lets the mention-floor tests assert on the
  * `mention-received` event without coupling to whether a `message-posted`
- * precedes it (it does on Memory, may not on a mentions-only live narrow).
+ * precedes it (it does on Memory, may not live when the only thing
+ * matching is the unconditional mention rule).
  */
 const takeUntil = (
   queue: Queue.Queue<InboundEvent>,

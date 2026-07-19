@@ -74,8 +74,8 @@ export interface IdentityCache {
    * consumers.
    *
    * Consumers:
-   *   - `event-pump`/`narrow-set` use this for the mentions narrow
-   *     and the rendered `mentioned` meta flag.
+   *   - `event-pump`/`narrow-set` use this for unconditional mention
+   *     matching and the rendered `mentioned` meta flag.
    */
   boundIdentityIds(): ReadonlySet<IdentityId>
   /**

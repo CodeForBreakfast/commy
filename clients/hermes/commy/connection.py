@@ -3,8 +3,8 @@
 On-demand connections decoupled from process lifecycle. Given a
 ``(channel, topic)``, the manager brings up a fresh commy server
 subprocess in **persistent mode** — ``COMMY_BOT_NAME`` set to a
-deterministic per-topic name, subscribed ``thread:<channel>/<topic>`` +
-a bare ``<channel>/<topic>`` path — holds the MCP connection that streams inbound frames into the
+deterministic per-topic name, subscribed to the bare ``<channel>/<topic>``
+path (mentions need no token) — holds the MCP connection that streams inbound frames into the
 adapter, reaps the subprocess after an idle window, and respawns on the next
 frame reusing the **same identity name** (so the substrate minter, idempotent by
 name, returns the same Zulip user_id and the persistent-mode catch-up replays

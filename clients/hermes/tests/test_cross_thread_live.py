@@ -13,7 +13,7 @@ The scenario models one Hermes pod (``owner``) that owns thread-A. A separate
 ``poster`` identity drives thread-B and thread-C traffic:
 
 * **AC1** — owner, subscribed ``<ch>/A``, is mentioned in
-  thread-B. It receives the *mention* frame (the ``mentions`` narrow matches)
+  thread-B. It receives the *mention* frame (mentions always match)
   but not the plain thread-B message posted alongside it (no narrow matches).
 * **AC2a** — owner *chooses to subscribe* thread-B by calling
   ``ensure_topic_connection(<ch>, B)`` (the pool's own API — "its context now
