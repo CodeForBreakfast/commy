@@ -43,7 +43,7 @@ the env block in `.mcp.json`.
 | `ZULIP_SITE` | yes | no | absolute URL, e.g. `https://zulip.example.com` | Base of the Zulip realm the plugin operates against. |
 | `ZULIP_MINTER_EMAIL` | yes | no | email-shaped string | Delivery email of the shared minter user (human-type Zulip user) that owns all bots managed through this plugin. Must be a member of the realm's `can_create_bots_group`. |
 | `ZULIP_MINTER_API_KEY` | yes | yes | opaque token | Minter user's API key. Used to mint or regenerate bot credentials at boot. |
-| `COMMY_SUBSCRIBE` | no | no | comma-separated tokens: `channel:<name>`, `thread:<channel>/<thread>`, `new-topics:<channel>`, `mentions` | Pre-loaded inbox subscriptions. Applied at MCP-child boot before tools are announced, in both eager and lazy modes — the minter is the universal listener; this just teaches the plugin which events to surface. When the operator leaves this unset, Claude Code substitutes empty (or leaves the placeholder) into the env block and the plugin treats that as "no subscriptions" rather than a boot failure. |
+| `COMMY_SUBSCRIBE` | no | no | comma-separated tokens: `channel:<name>`, `thread:<channel>/<thread>`, `new-topics:<channel>` | Pre-loaded inbox subscriptions. Mentions of the bot need no token — they arrive unconditionally; a retired `mentions` token is accepted and ignored. Applied at MCP-child boot before tools are announced, in both eager and lazy modes — the minter is the universal listener; this just teaches the plugin which events to surface. When the operator leaves this unset, Claude Code substitutes empty (or leaves the placeholder) into the env block and the plugin treats that as "no subscriptions" rather than a boot failure. |
 
 Paste each value into the prompt when it appears on first enable. To re-enter
 values later, edit `pluginConfigs[...].options` in `~/.claude/settings.json`
@@ -58,7 +58,7 @@ process env inheritance:
 | Env var | Required | Format | Purpose |
 |---|---|---|---|
 | `COMMY_BOT_NAME` | no | `<role>` or `<rig>-<agent>` (see `docs/naming.md`) | **Persistent mode.** Stable identity to acquire eagerly at boot — concierges, scheduled skills, anything that needs to be DM-able from the moment the plugin starts. Boot fails non-zero on acquire rejection. Omit for ephemeral mode (next rows). |
-| `COMMY_PROJECT` | no | short slug (lowercase, `[a-z0-9-]`, ≤12 chars post-sanitise) | Identifies the calling project for two purposes: (1) **Ephemeral mode, operator override.** Force every minted name to embed this project tag — `cc-<project>-<8>` rather than the per-session value. When unset (the normal case under Claude Code), the project is derived **per attribution call** from the calling session's cwd (hook-injected): git remote origin basename → git root basename → `undefined` (bare `cc-<8>`). The env value, when set, wins over per-call derivation. (2) **Persistent mode (project concierge), Type-1 boot-time defaults.** Post-acquire the plugin registers `new-topics:<project>` + `thread:<project>/general` so the concierge sees first-message-per-new-topic and project broadcast traffic. When unset the project-specific defaults are skipped; the universal `mentions` default still applies. See `docs/naming.md` for the full precedence and sanitisation rules. |
+| `COMMY_PROJECT` | no | short slug (lowercase, `[a-z0-9-]`, ≤12 chars post-sanitise) | Identifies the calling project for two purposes: (1) **Ephemeral mode, operator override.** Force every minted name to embed this project tag — `cc-<project>-<8>` rather than the per-session value. When unset (the normal case under Claude Code), the project is derived **per attribution call** from the calling session's cwd (hook-injected): git remote origin basename → git root basename → `undefined` (bare `cc-<8>`). The env value, when set, wins over per-call derivation. (2) **Persistent mode (project concierge), Type-1 boot-time defaults.** Post-acquire the plugin registers `new-topics:<project>` + `thread:<project>/general` so the concierge sees first-message-per-new-topic and project broadcast traffic. When unset the project-specific defaults are skipped, leaving no narrows registered; mentions of the bot still arrive, because they need no narrow. See `docs/naming.md` for the full precedence and sanitisation rules. |
 
 ### Eager vs lazy boot, in one diagram
 
@@ -69,10 +69,10 @@ parseEnv → buildAdapter → reconcileMinterSubscriptions (non-fatal) →
                           │     persistent single-identity cache;
                           │     acquire NOW (eager); exit 1 on failure;
                           │     post-acquire register Type-1 defaults:
-                          │     `mentions` always, plus
                           │     `new-topics:<project>` +
                           │     `thread:<project>/general` if
-                          │     COMMY_PROJECT is set
+                          │     COMMY_PROJECT is set (none if not —
+                          │     mentions arrive without a narrow)
                           │
                           └── else → ephemeral 1-slot cache →
                                 skip boot-time acquire; each tool call
@@ -84,9 +84,9 @@ parseEnv → buildAdapter → reconcileMinterSubscriptions (non-fatal) →
                                 slug via COMMY_PROJECT. `/clear`
                                 releases the prior identity and remints on
                                 the next attribution. Each fresh slot's
-                                onAcquire hook registers Type-2 defaults:
-                                `mentions` + per-project
-                                `thread:<project>/general` when known.
+                                onAcquire hook registers the Type-2 default:
+                                per-project `thread:<project>/general`
+                                when known.
                           │
                           ▼
                 subscribeFromEnv → registerTools → connect transport →
@@ -116,7 +116,7 @@ code path.
 
 Type 4 is Type 1 with a short process lifetime. The plugin doesn't
 distinguish — same eager-acquire path, same Type-1 defaults
-(`mentions` + project subs when `COMMY_PROJECT` is set), same
+(project subs when `COMMY_PROJECT` is set), same
 boot-time catch-up over channel restore and missed mentions. A
 project-scoped scheduled skill — e.g. a scheduled briefing owned by a
 project — sets:
@@ -134,8 +134,8 @@ runs; channel-restore over the default 4h window provides recent
 project context the briefing can incorporate.
 
 A workstation-wide scheduled skill with no project tie sets only
-`COMMY_BOT_NAME=<role>` — the plugin registers `mentions` only
-and skips project-channel subs.
+`COMMY_BOT_NAME=<role>` — the plugin registers no narrows at all and
+skips project-channel subs. It is not deaf: mentions of it still arrive.
 
 Trade-off: the event pump starts on every Type 4 run and is
 immediately torn down when CC exits. That's a single long-poll
