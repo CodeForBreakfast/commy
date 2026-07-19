@@ -2013,9 +2013,9 @@ test('ephemeral subscribe persists the live narrow set (defaults + new sub) unde
 })
 
 test('ephemeral resume restores the persisted narrow set and does NOT re-apply Type-2 defaults', async () => {
-  // A prior session persisted a single channel and had dropped the mentions
-  // default. Resume must honour that exactly — restore channel:home, and never
-  // re-add mentions (a dropped default stays dropped).
+  // A prior session persisted a single channel and had dropped the other
+  // defaults. Resume must honour that exactly — restore the `home` channel,
+  // and never re-add a dropped default.
   const persisted: ReadonlyArray<SubscribeIntent> = [
     { kind: 'channel', channelName: decodeChannelNameSync('home') },
   ]
@@ -2033,7 +2033,7 @@ test('ephemeral resume restores the persisted narrow set and does NOT re-apply T
   })
   try {
     // First acquiring call → onAcquire → restore. Even with a project set
-    // (whose fresh path would seed mentions + thread:myproject/general), the
+    // (whose fresh path would seed new-topics:myproject + myproject/general), the
     // resume path restores the persisted set verbatim and skips the defaults.
     await callTool(h.client, 'post', {
       channel_name: 'home',
@@ -2165,9 +2165,9 @@ test('persistent boot Type-1 intents feed the channels catch-up (new-topics + th
   })
   try {
     await new Promise((r) => setTimeout(r, 50))
-    // new-topics:myproject → readChannel('myproject'); thread:myproject/general → readThread.
-    // The `mentions` Type-1 default is intentionally skipped by the channels
-    // catch-up (the cursor-bounded mentions catch-up owns that path).
+    // new-topics:myproject → readChannel('myproject'); myproject/general → readThread.
+    // Mentions are not a default intent at all — they arrive unconditionally,
+    // and the cursor-bounded mentions catch-up owns their boot-time path.
     expect(readChannelCalls).toEqual([{ channel: 'myproject' }])
     expect(readThreadCalls).toEqual([{ channel: 'myproject', thread: 'general' }])
   } finally {
@@ -2265,7 +2265,7 @@ test('Type-4 cron-shape (no project): acquire-post-shutdown-release fires once w
 test('Type-4 cron-shape (project-scoped): Type-1 default subs registered post-acquire, clean shutdown', async () => {
   // Project-scoped variant of the cron-shape boot. Also asserts the
   // Type-1 default sub set
-  // (mentions + new-topics:<project> + thread:<project>/general) is
+  // (new-topics:<project> + <project>/general) is
   // registered after the eager acquire. Catch-up window disabled so
   // the boot doesn't block on history reads — Type-4 runs are
   // short-lived and don't need the 4h skim.

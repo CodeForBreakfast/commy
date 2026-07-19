@@ -8,7 +8,7 @@ import type { SubscribeIntent } from './subscribe-parser.ts'
 
 /**
  * Boot-time window-bounded catch-up of channel + thread narrows.
- * Companion to `catchUpMentions` which handles the mentions narrow
+ * Companion to `catchUpMentions`, which catches up missed mentions
  * with cursor-bounded semantics.
  *
  * Mental model: what would a human do when they returned to the app?
@@ -30,11 +30,13 @@ import type { SubscribeIntent } from './subscribe-parser.ts'
  * was rejected because it would push policy ("which channels to skim,
  * how far back, in what order") into every bot's prompt.
  *
- * `mentions` intents are intentionally skipped here — the mentions
- * helper's cursor-bounded fetch handles them with the correct semantics
- * (since-last-seen, not last-N-hours). When both catch-ups run on
- * the same boot, mentions are deduped by route: this helper doesn't
- * fetch them, the mentions helper does.
+ * Mentions are not a subscribe intent — they arrive unconditionally,
+ * so there is no mentions arm for `fetchForIntent` to skip. They are
+ * caught up solely by the mentions helper, whose cursor-bounded fetch
+ * has the semantics they need (since-last-seen, not last-N-hours).
+ * When both catch-ups run on the same boot that split is what dedupes
+ * them by route: this helper doesn't fetch mentions, the mentions
+ * helper does.
  *
  * Messages from every requested narrow are merged and sorted by ts
  * before dispatch so the bot reads them in wall-clock order even

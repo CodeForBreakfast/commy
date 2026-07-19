@@ -48,7 +48,7 @@ export interface EventPumpDeps {
    * mode before first attribution call). The pump uses this for two
    * things: (1) computing the rendered `mentioned` meta flag (true when
    * the bound bot is in a message's mention list); (2) feeding `match`
-   * so `mentions` narrows can compare against the bot's id once it
+   * so mention matching can compare against the bot's id once it
    * exists. Persistent mode supplies a getter that always returns the
    * acquired id.
    */
