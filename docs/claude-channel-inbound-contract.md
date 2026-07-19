@@ -121,6 +121,15 @@ carrier omits it while the machine carrier keeps it for session keying.
 | `mentioned` | `"true"` when the receiving identity is itself in the mention list — the self-address flag; **omitted** otherwise. A channel or topic wildcard sets it for everyone who receives the message, because it reached them. A group mention does not: membership is not on the message and commy does not resolve it, so a match would be a guess |
 | `replayed` | `"true"` when this frame is a gap-replay backfill (substrate queue-expiry recovery), not a live post; **omitted** for live events |
 
+`mentions` and `mentioned` report the substrate's own delivery decision, not
+commy's reading of the message text. On Zulip that means the mention spans in
+the rendered message: if Zulip rendered no mention, no human was notified and
+the field reports none either. So "did this wake a subscribed agent" and "did
+this notify a human" have the same answer, which is what makes the field safe
+to cite for either audience. An at-name written inside a code span, naming a
+deactivated account, or written silently (`@_**Name**`) notifies nobody and
+appears here as nobody.
+
 **Reaction events** (`reaction-added`, `reaction-removed`) — `formatReaction`:
 
 | key | meaning |

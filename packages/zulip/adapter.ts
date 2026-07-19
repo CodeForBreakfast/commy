@@ -94,7 +94,6 @@ import type {
 } from './http.ts'
 import { ApiKey, BotEmail, makeZulipHttp, ZulipApiError } from './http.ts'
 import {
-  extractMentions,
   type MentionDirectory,
   MentionToken,
   mentionTokens,
@@ -103,6 +102,8 @@ import {
 import type { ReconcileReport } from './minter-reconciler.ts'
 import { reconcileMinterSubscriptions } from './minter-reconciler.ts'
 import { buildMessageRef, permalinkBase, withChannelPermalink } from './permalink.ts'
+import { type RenderedContentLookup, renderedContentForBatch } from './rendered-content.ts'
+import { mentionsOfMessage } from './rendered-mentions.ts'
 import { applyResolvedPrefix, splitTopic } from './resolved-topic.ts'
 import { senderNarrow, userPresencePath, ZulipUserRef } from './user-ref.ts'
 
@@ -684,7 +685,8 @@ export const zulipAdapter = (
     const mapHistoricalMessage = (
       m: HistoricalMessage,
       directory: DirectoryLookup,
-    ): Effect.Effect<Message, ParseResult.ParseError> =>
+      renderedFor: RenderedContentLookup,
+    ): Effect.Effect<Message, ZulipApiError | ParseResult.ParseError> =>
       Effect.gen(function* () {
         const channel = decorateChannel({ id: m.channelId, name: m.channelName })
         const cached = directory.byId.get(m.senderId)
@@ -701,7 +703,11 @@ export const zulipAdapter = (
           sender,
           body,
           ts: m.ts,
-          mentions: yield* extractMentions(m.content, mentionDirectory(directory)),
+          mentions: yield* mentionsOfMessage(
+            renderedFor,
+            { id: Number(m.id), content: m.content },
+            mentionDirectory(directory),
+          ),
           reactions,
         }
       })
@@ -710,28 +716,31 @@ export const zulipAdapter = (
       range: Range,
       narrow: ReadonlyArray<NarrowFilter>,
     ): Effect.Effect<ReadonlyArray<Message>, ZulipApiError | ParseResult.ParseError> =>
-      Effect.all(
-        [
-          buildDirectoryLookup(),
-          minterHttp.get('/messages', messagesResponseSchema, {
-            anchor: 'newest',
-            num_before: range.limit ?? HISTORY_DEFAULT_LIMIT,
-            num_after: 0,
-            narrow: JSON.stringify(narrow),
-            apply_markdown: false,
-          }),
-        ],
-        { concurrency: 2 },
-      ).pipe(
-        Effect.flatMap(([directory, res]) =>
-          Effect.forEach(res.messages, toHistoricalMessage).pipe(
-            Effect.map((historical) => historical.filter(inRange(range))),
-            Effect.flatMap((inRangeMessages) =>
-              Effect.forEach(inRangeMessages, (m) => mapHistoricalMessage(m, directory)),
-            ),
-          ),
-        ),
-      )
+      Effect.gen(function* () {
+        const historyQuery = {
+          anchor: 'newest',
+          num_before: range.limit ?? HISTORY_DEFAULT_LIMIT,
+          num_after: 0,
+          narrow: JSON.stringify(narrow),
+        } as const
+        const [directory, res] = yield* Effect.all(
+          [
+            buildDirectoryLookup(),
+            minterHttp.get('/messages', messagesResponseSchema, {
+              ...historyQuery,
+              apply_markdown: false,
+            }),
+          ],
+          { concurrency: 2 },
+        )
+        // One rendered read for the whole batch, or none at all — never one
+        // per mention-bearing message. See renderedContentForBatch.
+        const renderedFor = yield* renderedContentForBatch(minterHttp, historyQuery, res.messages)
+        const historical = yield* Effect.forEach(res.messages, toHistoricalMessage)
+        return yield* Effect.forEach(historical.filter(inRange(range)), (m) =>
+          mapHistoricalMessage(m, directory, renderedFor),
+        )
+      })
 
     // Zulip constructs bot delivery emails as `<short_name>-bot@<bot_domain>`
     // (see zerver/lib/users.py:validate_short_name_and_construct_bot_email),
@@ -1818,49 +1827,51 @@ export const zulipAdapter = (
         // subject) never sees PM-shaped rows — any DM in the minter's
         // recent history would otherwise crash the schema decode.
         const replayNarrow = JSON.stringify([{ negated: true, operator: 'is', operand: 'dm' }])
-        return Effect.all(
-          [
-            buildDirectoryLookup(),
-            minterHttp.get('/messages', replayResponseSchema, {
-              anchor: 'newest',
-              num_before: REPLAY_NUM_BEFORE,
-              num_after: 0,
-              narrow: replayNarrow,
-              apply_markdown: false,
-            }),
-            SynchronizedRef.get(boundRef),
-          ],
-          { concurrency: 2 },
-        ).pipe(
-          Effect.flatMap(([directory, res, current]) =>
-            Effect.forEach(
-              res.messages.filter((raw) => raw.timestamp >= since),
-              (raw) => {
-                const { flags: _flags, ...message } = raw
-                return messageToInboundEvents(
-                  message,
-                  directory,
-                  Option.getOrUndefined(current)?.identity,
-                  base,
-                )
-              },
-            ).pipe(
-              Effect.map((perMessage) => {
-                const out: InboundEvent[] = []
-                for (const mapped of perMessage) {
-                  for (const ev of mapped) {
-                    if (ev.kind === 'message-posted') {
-                      messageRefCache.set(ev.message.ref.id, ev.message.ref)
-                    }
-                  }
-                  out.push(...mapped)
-                }
-                return out
+        const replayQuery = {
+          anchor: 'newest',
+          num_before: REPLAY_NUM_BEFORE,
+          num_after: 0,
+          narrow: replayNarrow,
+        } as const
+        return Effect.gen(function* () {
+          const [directory, res, current] = yield* Effect.all(
+            [
+              buildDirectoryLookup(),
+              minterHttp.get('/messages', replayResponseSchema, {
+                ...replayQuery,
+                apply_markdown: false,
               }),
-            ),
-          ),
-          Effect.mapError((cause) => new InboxError({ operation: 'replay', cause })),
-        )
+              SynchronizedRef.get(boundRef),
+            ],
+            { concurrency: 2 },
+          )
+          // Catch-up is the burst case — a fleet bounce replaying a
+          // mention-heavy window. One rendered read covers the whole window.
+          const renderedFor = yield* renderedContentForBatch(minterHttp, replayQuery, res.messages)
+          const perMessage = yield* Effect.forEach(
+            res.messages.filter((raw) => raw.timestamp >= since),
+            (raw) => {
+              const { flags: _flags, ...message } = raw
+              return messageToInboundEvents(
+                message,
+                directory,
+                Option.getOrUndefined(current)?.identity,
+                base,
+                renderedFor,
+              )
+            },
+          )
+          const out: InboundEvent[] = []
+          for (const mapped of perMessage) {
+            for (const ev of mapped) {
+              if (ev.kind === 'message-posted') {
+                messageRefCache.set(ev.message.ref.id, ev.message.ref)
+              }
+            }
+            out.push(...mapped)
+          }
+          return out
+        }).pipe(Effect.mapError((cause) => new InboxError({ operation: 'replay', cause })))
       },
     }
 

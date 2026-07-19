@@ -1,5 +1,5 @@
-import { decodeGroupName, type Identity, Mention } from '@commy/core/ports'
-import { Array as Arr, Data, Effect, Equal, Match, Option, type ParseResult } from 'effect'
+import type { Identity } from '@commy/core/ports'
+import { Array as Arr, Data, Match, Option } from 'effect'
 
 /**
  * The directory surface mention resolution needs: a name-keyed map for the
@@ -35,19 +35,17 @@ const MENTION_PATTERN = /@\*\*([^*]+)\*\*|@\*([^*]+)\*/g
 
 /**
  * Markdown constructs Zulip does not render a mention inside: fenced code
- * blocks and inline code spans. A token there notifies nobody, so it is not a
- * mention and must not count — the demonstrated failure (phantom mentions from
- * `@**Name**` written inside backticks as discussion examples).
+ * blocks and inline code spans. A token there notifies nobody.
  *
- * This is deliberately NOT a reproduction of Zulip's renderer (python-markdown
- * plus custom extensions, not CommonMark). It removes the two demonstrated
- * carve-outs; a token buried in a blockquote, spoiler, math span, or link text
- * can still drift from what Zulip actually delivers. That residual is the
- * price of reading raw markdown — `body` must stay raw for edit round-tripping,
- * so the rendered signal is not on this payload — and is tracked as follow-up
- * (read Zulip's own delivery signal rather than inferring it, comms-l1i8).
- * Best-effort and strictly better than a markdown-blind regex, not
- * authoritative.
+ * The two paths need this for different reasons. On the write path it is
+ * correctness: a dead form quoted as an example must not fail the post, since
+ * Zulip would never try to deliver it. On the read path it is only cost — the
+ * rendered content decides who was mentioned, so a code-spanned token that
+ * slipped through here would buy a wasted request and still resolve to no
+ * mention. That is why this does not need to reproduce Zulip's renderer
+ * (python-markdown plus custom extensions, not CommonMark), and why its known
+ * drift at blockquotes, spoilers, math and link text no longer costs
+ * fidelity.
  */
 const CODE_REGIONS = /```[\s\S]*?```|~~~[\s\S]*?~~~|(`+)[\s\S]*?\1/g
 const withoutCode = (content: string): string => content.replace(CODE_REGIONS, ' ')
@@ -104,46 +102,6 @@ const resolveUser = (token: string, directory: MentionDirectory): Option.Option<
   }
   return Option.fromNullable(directory.byName.get(token))
 }
-
-// What makes two mentions the same mention: an identity by its id, a group by
-// its name, and each wildcard audience by itself — a body that says @**all**
-// twice mentions one audience, not two.
-const identityOf = Mention.$match({
-  UserMention: (m) => Data.struct({ kind: 'user' as const, id: m.identity.id }),
-  GroupMention: (m) => Data.struct({ kind: 'group' as const, name: m.name }),
-  ChannelWildcardMention: () => Data.struct({ kind: 'channel-wildcard' as const }),
-  TopicWildcardMention: () => Data.struct({ kind: 'topic-wildcard' as const }),
-})
-
-const toMention = (
-  directory: MentionDirectory,
-): ((token: MentionToken) => Effect.Effect<Option.Option<Mention>, ParseResult.ParseError>) =>
-  MentionToken.$match({
-    ChannelWildcardToken: () => Effect.succeedSome(Mention.ChannelWildcardMention()),
-    TopicWildcardToken: () => Effect.succeedSome(Mention.TopicWildcardMention()),
-    GroupToken: ({ name }) =>
-      decodeGroupName(name).pipe(Effect.map((n) => Option.some(Mention.GroupMention({ name: n })))),
-    UserToken: ({ token }) =>
-      Effect.succeed(
-        Option.map(resolveUser(token, directory), (identity) => Mention.UserMention({ identity })),
-      ),
-  })
-
-/**
- * Who a body actually mentions: markdown-aware tokens resolved against the
- * directory, deduped, order-preserving. Unresolvable user tokens (a dead
- * `@**Name**`, an unknown `|id`) are dropped — Zulip renders no mention for
- * them either. Wildcards and groups need no directory: Zulip delivers them
- * whether or not commy can name the recipients.
- */
-export const extractMentions = (
-  content: string,
-  directory: MentionDirectory,
-): Effect.Effect<ReadonlyArray<Mention>, ParseResult.ParseError> =>
-  Effect.forEach(mentionTokens(content), toMention(directory)).pipe(
-    Effect.map(Arr.getSomes),
-    Effect.map(Arr.dedupeWith((a, b) => Equal.equals(identityOf(a), identityOf(b)))),
-  )
 
 /**
  * The mention tokens in an outbound body that resolve to no known identity —
