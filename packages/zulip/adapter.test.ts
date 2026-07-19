@@ -1259,6 +1259,35 @@ effectTest(
     }),
 )
 
+effectTest(
+  'publisher.edit surfaces MessageEditRefused editing-disabled when the realm has editing off',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* stub.respond('PATCH', '/api/v1/messages/42', {
+        body: {
+          result: 'error',
+          msg: 'Your organization has turned off message editing',
+          code: 'BAD_REQUEST',
+        },
+        status: 400,
+      })
+      const adapter = yield* buildAdapter(stub)
+      const target: MessageRef = {
+        id: decodeMessageIdSync('42'),
+        channel: generalChannel,
+        thread: Option.none(),
+        permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
+      }
+      const err = yield* Effect.flip(adapter.publisher.edit(target, decodeMessageBodySync('nope')))
+      expect(err).toBeInstanceOf(MessageEditRefused)
+      if (err instanceof MessageEditRefused) {
+        expect(err.reason).toBe('editing-disabled')
+        expect(err.cause).toBeInstanceOf(ZulipApiError)
+      }
+    }),
+)
+
 effectTest('publisher.react POSTs /messages/{id}/reactions with emoji_name', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient

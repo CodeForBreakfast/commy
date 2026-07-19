@@ -132,6 +132,24 @@ effectTest('GET sends HTTP Basic auth with email:apiKey base64-encoded', () =>
   }),
 )
 
+// Zulip translates its error strings per the request locale, and for a bot
+// request (no session, no cookie) Accept-Language decides it — verified against
+// a live realm. The adapter classifies edit refusals by matching English
+// substrings, so every request pins the locale to keep that match deterministic
+// whatever the realm's or the bot's default language is.
+effectTest('every request pins Accept-Language to en so error strings stay English', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* stub.respond('GET', '/api/v1/users/me', {
+      body: { result: 'success', user_id: 1, full_name: 'b' },
+    })
+    const http = yield* makeHttp(stub)
+    yield* http.get('/users/me', userMeSchema)
+    const req = yield* firstRequest(stub)
+    expect(req.headers.get('accept-language')).toBe('en')
+  }),
+)
+
 effectTest('the Basic auth header base64-decodes back to email:apiKey (Encoding round-trip)', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient

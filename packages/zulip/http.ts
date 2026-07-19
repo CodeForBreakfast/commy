@@ -322,6 +322,13 @@ export interface ZulipHttp {
  * channel and is provided once at the application edge — no per-call platform
  * layer, no injected client field. The realm base URL and Basic-
  * auth header are derived once and captured in the returned closure.
+ *
+ * Every request pins `Accept-Language: en`. Zulip translates its error strings
+ * per request locale, and for a bot request — no session, no cookie — that
+ * header is what decides it (verified against a live realm). The adapter
+ * discriminates Zulip's edit refusals by matching English substrings, because
+ * Zulip gives those walls no distinguishing error code; pinning the locale here
+ * is what keeps that match deterministic on a non-English realm.
  */
 export const makeZulipHttp = (
   config: ZulipHttpConfig,
@@ -336,6 +343,7 @@ export const makeZulipHttp = (
       HttpClient.mapRequest(
         HttpClientRequest.setHeaders({
           authorization: authHeader,
+          'accept-language': 'en',
           ...(hostHeader === undefined ? {} : { host: hostHeader }),
         }),
       ),

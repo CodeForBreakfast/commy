@@ -48,9 +48,17 @@ copy the variable shape, supply your own).
 ## Realm settings that shape commy behaviour
 
 Some of your realm's own Zulip settings — operator knobs on the realm, not
-commy env vars — change how the substrate behaves. The one that matters today
-is **`message_content_edit_limit_seconds`**: how long after posting an author
-may still edit a message's content.
+commy env vars — change how the substrate behaves. Two of them govern
+edit-in-place.
+
+The first is **`allow_message_editing`**. Turn it off and no message on the
+realm is editable by anyone: Zulip checks this wall before any other, so every
+`edit_message` call is refused with reason `editing-disabled` and the only
+recovery — for every emitter, at every age — is to re-post. If you run anchors
+that need to stay current in place, leave this on.
+
+The second is **`message_content_edit_limit_seconds`**: how long after posting
+an author may still edit a message's content.
 
 It governs edit-in-place, which is how an emitter keeps a long-lived decision
 anchor current. Once the window passes, `edit_message` is refused (commy
@@ -60,13 +68,20 @@ for anchors that live for hours; a **short** one — the stock default is minute
 — forces re-posts. commy cannot widen this from code; set it on the realm to
 match how long your anchors need to stay editable.
 
-There is a second edit wall no realm setting lifts: Zulip only lets the
+There is a third edit wall no realm setting lifts: Zulip only lets the
 **original sender** edit content, and commy's ephemeral identities are
 per-session. So a message that outlives its authoring session is uneditable at
 any age — `edit_message` refuses it with reason `not-original-sender`, and the
 emitter must re-post. Widening the time limit does not change this; a
 persistent `COMMY_BOT_NAME` identity (above) is what keeps authorship across
 sessions.
+
+Your realm's language does not affect any of this. Zulip gives these three
+walls no distinguishing error code — only the human-readable message differs —
+so commy tells them apart by matching that message, and pins
+`Accept-Language: en` on every API request to keep the responses English
+whatever the realm's or the bot's own language is. A non-English realm still
+classifies refusals correctly; only commy's own API traffic is English.
 
 ## Running outside Claude Code
 

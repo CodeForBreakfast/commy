@@ -19,6 +19,9 @@
  * - **unresolve onto an occupied bare name merges the two halves** — the
  *   rename is a server-side move, so only the realm can say what it does when
  *   the destination topic already exists. It merges, in message-id order.
+ * - **the realm honours Accept-Language on a bot request** — the assumption the
+ *   edit-refusal classifier rests on. Only a real realm can say whether the
+ *   header decides the locale, and no stub can notice if an upgrade stops it.
  *
  * **Local-only** — env-gated, never runs in CI. With env vars unset the
  * suite skips silently so default `bun test` stays green.
@@ -42,11 +45,11 @@ import {
   decodeMessageBodySync,
   decodeThreadNameSync,
 } from '@commy/core/ports'
-import { FetchHttpClient, HttpClient } from '@effect/platform'
-import { Duration, Effect, Option, Redacted, Schema } from 'effect'
+import { FetchHttpClient, HttpClient, HttpClientRequest } from '@effect/platform'
+import { Duration, Effect, Encoding, Option, Redacted, Schema } from 'effect'
 import type { ZulipAdapter } from './adapter.ts'
 import { zulipAdapter } from './adapter.ts'
-import { ApiKey, BotEmail, makeZulipHttp, RealmUrl, type ZulipHttp } from './http.ts'
+import { ApiKey, BotEmail, makeZulipHttp, RealmUrl, ZulipApiError, type ZulipHttp } from './http.ts'
 import { applyResolvedPrefix } from './resolved-topic.ts'
 
 interface LiveEnv {
@@ -210,6 +213,78 @@ describeLive('zulip live identity — Zulip-only addendum — zulip.example.com'
             (acquired) => Effect.sync(() => expect(acquired.identity.name).toEqual(name)),
             () => pacedRelease(adapter),
           )
+        }),
+      ),
+    30_000,
+  )
+})
+
+/**
+ * Ask the realm for a message that cannot exist. Zulip answers 400 with an
+ * i18n'd "Invalid message(s)" — a cheap, side-effect-free way to read back an
+ * error string in whatever language the request negotiated.
+ */
+const MISSING_MESSAGE_PATH = '/api/v1/messages/999999999'
+
+const missingMessageSchema = Schema.Struct({ result: Schema.Literal('success') })
+
+const rawErrorMessageInLanguage = (e: LiveEnv, language: string): Effect.Effect<string> =>
+  HttpClient.HttpClient.pipe(
+    Effect.flatMap((client) =>
+      client.execute(
+        HttpClientRequest.get(`${e.site.replace(/\/+$/, '')}${MISSING_MESSAGE_PATH}`).pipe(
+          HttpClientRequest.setHeaders({
+            authorization: `Basic ${Encoding.encodeBase64(`${e.minterEmail}:${e.minterApiKey}`)}`,
+            'accept-language': language,
+          }),
+        ),
+      ),
+    ),
+    Effect.flatMap((response) => response.json),
+    Effect.map((body) => JSON.stringify(body)),
+    Effect.provideService(HttpClient.HttpClient, httpClient),
+    Effect.orDie,
+  )
+
+// The edit-refusal classifier tells Zulip's three permanent walls apart by
+// matching English substrings, because Zulip gives them no distinguishing error
+// code. That only works because `makeZulipHttp` pins `Accept-Language: en` —
+// and that pin only works if the realm honours the header for a bot request
+// (no session, no cookie, so Django's stock chain should let the header decide).
+// This test holds that assumption to the realm: it is the thing that would
+// silently rot on a Zulip upgrade, degrading both permanent walls back to
+// retryable and re-opening the bug the classifier exists to fix.
+describeLive('zulip live locale negotiation — Zulip-only addendum — zulip.example.com', () => {
+  test(
+    'the realm translates error strings per Accept-Language on a bot request',
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const e = liveEnv()
+          const english = yield* rawErrorMessageInLanguage(e, 'en')
+          const german = yield* rawErrorMessageInLanguage(e, 'de')
+          expect(english).toContain('Invalid message')
+          // If this stops differing, the header is no longer being honoured and
+          // pinning `en` has quietly become a no-op.
+          expect(german).not.toEqual(english)
+        }),
+      ),
+    30_000,
+  )
+
+  test(
+    'our pinned client reads English back regardless of the realm default',
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const http = yield* minterHttp(liveEnv())
+          const err = yield* Effect.flip(
+            http.get(MISSING_MESSAGE_PATH.replace('/api/v1', ''), missingMessageSchema),
+          )
+          expect(err).toBeInstanceOf(ZulipApiError)
+          if (err instanceof ZulipApiError) {
+            expect(err.message).toContain('Invalid message')
+          }
         }),
       ),
     30_000,
