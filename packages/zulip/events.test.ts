@@ -1943,10 +1943,7 @@ test(
         // two adjacent observations — the producer knows it happened and should
         // say so.
         const lines: string[] = []
-        let registration = {
-          queue: { queueId: 'q-mentions', lastEventId: 0 },
-          mode: 'mentions' as 'all' | 'mentions',
-        }
+        let registration: QueueState = { queueId: 'q-producer', lastEventId: 0 }
         let getCalls = 0
         const config: EventsConfig = {
           permalinkBase: PERMALINK_BASE,
@@ -1954,10 +1951,11 @@ test(
             onPost: () => ({ result: 'success', queue_id: 'q-unused', last_event_id: 0 }),
             onGet: () => {
               getCalls += 1
-              // The flip lands between the first and second poll, so the second
-              // step reads a registration that differs from the observed one.
+              // The inbox registers between the first and second poll, so the
+              // second step reads a registration that differs from the observed
+              // one.
               if (getCalls === 1) {
-                registration = { queue: { queueId: 'q-all', lastEventId: 0 }, mode: 'all' }
+                registration = { queueId: 'q-inbox', lastEventId: 0 }
               }
               return {
                 result: 'success',
@@ -1972,8 +1970,7 @@ test(
             },
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'mentions',
-          initialQueue: { queueId: 'q-mentions', lastEventId: 0 },
+          initialQueue: { queueId: 'q-producer', lastEventId: 0 },
           currentRegistration: Effect.sync(() => Option.some(registration)),
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
@@ -1982,9 +1979,8 @@ test(
 
         const adopted = lines.find((line) => line.includes('adopted queue_id='))
         expect(adopted).toBeDefined()
-        expect(adopted).toContain('queue_id=q-all')
-        expect(adopted).toContain('replaced=q-mentions')
-        expect(adopted).toContain('mode=all')
+        expect(adopted).toContain('queue_id=q-inbox')
+        expect(adopted).toContain('replaced=q-producer')
       }),
     ),
   ITERATOR_TEST_TIMEOUT_MS,
