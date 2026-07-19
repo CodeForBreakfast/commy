@@ -1105,6 +1105,155 @@ test(
   ITERATOR_TEST_TIMEOUT_MS,
 )
 
+// A message posted while the pump is recovering from BAD_EVENT_QUEUE_ID must
+// land in one of the two sets that recovery collects: the replay snapshot
+// (everything up to the instant that HTTP call was served) or the fresh
+// queue's stream (everything after `POST /register` fixed its baseline). It
+// falls between them if replay is fetched first, because the snapshot's upper
+// bound is open and nothing carries the boundary across to the register.
+//
+// The fake below is deliberately order-agnostic: the window message is posted
+// by whichever recovery call runs first, so the test models the realm rather
+// than the implementation. Registering first makes the window over-inclusive
+// — the message can appear both replayed and live — which is the same trade
+// the lower edge already makes (`timestamp >= since`), and the pump's dedup
+// absorbs it.
+test(
+  'iterator does not lose a message posted between the replay snapshot and the new queue baseline',
+  () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        let registerCalls = 0
+        let getCalls = 0
+        let windowMessageExists = false
+        // Fires at the end of both recovery calls; only the first to run wins,
+        // so the message always lands strictly inside the recovery window.
+        const postWindowMessageOnce = (): void => {
+          windowMessageExists = true
+        }
+        const channel = {
+          id: decodeChannelIdSync('1'),
+          name: decodeChannelNameSync('general'),
+          permalink: ChannelPermalinkSchema.make(
+            'https://zulip.example.com/#narrow/channel/1-general',
+          ),
+        }
+        const thread = Option.some({
+          name: decodeThreadNameSync('topic'),
+          resolved: false,
+          permalink: ThreadPermalinkSchema.make(
+            'https://zulip.example.com/#narrow/channel/1-general/topic/topic',
+          ),
+        })
+        const historicalEvent = (id: number, ts: number, body: string): InboundEvent => ({
+          kind: 'message-posted',
+          message: {
+            ref: {
+              id: decodeMessageIdSync(String(id)),
+              channel,
+              thread,
+              permalink: MessagePermalinkSchema.make(
+                `https://zulip.example.com/#narrow/channel/1-general/topic/topic/near/${id}`,
+              ),
+            },
+            sender: MAINTAINER,
+            body: decodeMessageBodySync(body),
+            ts: decodeTimestampSync(ts),
+            mentions: [],
+            reactions: [],
+          },
+        })
+        // Queue event id 5 is the window message; 6 is the message that proves
+        // the new queue is streaming normally afterwards.
+        const WINDOW_MESSAGE_QUEUE_EVENT_ID = 5
+        const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
+          http: fakeHttp({
+            onPost: () => {
+              registerCalls += 1
+              // The realm's baseline at the instant /register is served: if the
+              // window message already exists it is behind the baseline and the
+              // new queue will never replay it.
+              const lastEventId = windowMessageExists ? WINDOW_MESSAGE_QUEUE_EVENT_ID : 4
+              if (registerCalls > 1) postWindowMessageOnce()
+              return {
+                result: 'success',
+                queue_id: `q${registerCalls}`,
+                last_event_id: lastEventId,
+              }
+            },
+            onGet: (_path, params) => {
+              getCalls += 1
+              if (getCalls === 1) {
+                return {
+                  result: 'success',
+                  events: [
+                    {
+                      id: 1,
+                      type: 'message',
+                      message: aChannelMessage({ id: 100, timestamp: 1000 }),
+                    },
+                  ],
+                }
+              }
+              if (getCalls === 2) {
+                throw new ZulipApiError({
+                  message: 'queue expired',
+                  status: 400,
+                  code: 'BAD_EVENT_QUEUE_ID',
+                  retryAfter: undefined,
+                })
+              }
+              // The new queue serves only what is past the baseline it was
+              // registered with.
+              const baseline = Number(params?.['last_event_id'] ?? 0)
+              const live = [
+                {
+                  id: WINDOW_MESSAGE_QUEUE_EVENT_ID,
+                  type: 'message',
+                  message: aChannelMessage({ id: 175, timestamp: 1750 }),
+                },
+                {
+                  id: 6,
+                  type: 'message',
+                  message: aChannelMessage({ id: 200, timestamp: 2000 }),
+                },
+              ].filter((evt) => evt.id > baseline)
+              return { result: 'success', events: live }
+            },
+          }),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
+          mode: 'all',
+          boundIdentity: HERMES,
+          messageRefCache: createMessageRefCache(),
+          replay: (since) =>
+            Effect.sync(() => {
+              // Snapshot semantics: what the realm holds at the instant the
+              // call is served, with an open upper bound.
+              const history = [
+                historicalEvent(150, 1500, 'posted while the queue was dead'),
+                ...(windowMessageExists
+                  ? [historicalEvent(175, 1750, 'posted during queue recovery')]
+                  : []),
+              ]
+              postWindowMessageOnce()
+              return history.filter((evt) =>
+                evt.kind === 'message-posted' ? Number(evt.message.ts) >= since : true,
+              )
+            }),
+        }
+        const collected = yield* drainN(config, 3)
+        const ids = collected.flatMap((evt) =>
+          evt.kind === 'message-posted' ? [String(evt.message.ref.id)] : [],
+        )
+        expect(ids).toContain('175')
+        // Two registers: initial + post-BAD_EVENT_QUEUE_ID.
+        expect(registerCalls).toBe(2)
+      }),
+    ),
+  ITERATOR_TEST_TIMEOUT_MS,
+)
+
 test(
   'iterator skips replay() when no replay callback configured (back-compat)',
   () =>

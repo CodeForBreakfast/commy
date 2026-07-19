@@ -736,32 +736,48 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
         ),
       )
 
-      const handleBadQueue: Effect.Effect<StepResult> = Effect.gen(function* () {
-        yield* reportResume(false)
-        const since = yield* watermark.get()
-        if (config.replay === undefined || Option.isNone(since)) {
-          return [[], undefined] as const
-        }
-        const gapEither = yield* Effect.either(config.replay(since.value))
-        if (Either.isLeft(gapEither)) {
-          const err = gapEither.left
-          yield* Effect.logInfo(
-            `commy zulip events: gap-replay failed after BAD_EVENT_QUEUE_ID (${err._tag}): ${err.message}`,
-          )
-          return [[], undefined] as const
-        }
-        return [markReplayed(gapEither.right), undefined] as const
-      })
+      const registerFreshQueue: Effect.Effect<QueueState, ZulipApiError | ParseResult.ParseError> =
+        registerQueue(config.http, config.mode, config.queueIdleTimeoutSecs).pipe(
+          Effect.tap((q) => config.onQueueRegister?.(q) ?? Effect.void),
+        )
+
+      /**
+       * Recovery from an expired queue spans two collections: the replay
+       * snapshot covers everything up to the instant its HTTP call was served,
+       * and the fresh queue covers everything after `POST /register` fixed its
+       * baseline. Register FIRST so those two overlap. Replaying first leaves a
+       * window between them — the snapshot's upper bound is open and nothing
+       * carries the boundary into the register — and a message posted in that
+       * window is in neither set, with no error and no watermark trace.
+       *
+       * Overlapping instead can deliver a message both replayed and live. That
+       * is the trade the snapshot's lower bound already makes (`timestamp >=
+       * since`, inclusive), and the pump's dedup absorbs the duplicate.
+       */
+      const handleBadQueue: Effect.Effect<StepResult, ZulipApiError | ParseResult.ParseError> =
+        Effect.gen(function* () {
+          yield* reportResume(false)
+          const since = yield* watermark.get()
+          const freshQueue = yield* registerFreshQueue
+          if (config.replay === undefined || Option.isNone(since)) {
+            return [[], freshQueue] as const
+          }
+          const gapEither = yield* Effect.either(config.replay(since.value))
+          if (Either.isLeft(gapEither)) {
+            const err = gapEither.left
+            yield* Effect.logInfo(
+              `commy zulip events: gap-replay failed after BAD_EVENT_QUEUE_ID (${err._tag}): ${err.message}`,
+            )
+            return [[], freshQueue] as const
+          }
+          return [markReplayed(gapEither.right), freshQueue] as const
+        })
 
       const step = (
         queue: QueueState | undefined,
       ): Effect.Effect<StepResult, ZulipApiError | ParseResult.ParseError> =>
         Effect.gen(function* () {
-          const currentQueue: QueueState =
-            queue ??
-            (yield* registerQueue(config.http, config.mode, config.queueIdleTimeoutSecs).pipe(
-              Effect.tap((q) => config.onQueueRegister?.(q) ?? Effect.void),
-            ))
+          const currentQueue: QueueState = queue ?? (yield* registerFreshQueue)
           const res = yield* config.http.get('/events', eventsResponseSchema, {
             queue_id: currentQueue.queueId,
             last_event_id: currentQueue.lastEventId,
