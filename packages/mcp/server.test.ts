@@ -184,6 +184,7 @@ const buildFakeAdapter = (
     unreact: () => Effect.void,
     resolveThread: () => Effect.void,
     unresolveThread: () => Effect.void,
+    setChannelDescription: () => Effect.void,
   }
   const inbox: MessageInbox = {
     subscribe: (target: SubscriptionTarget) =>
@@ -205,6 +206,7 @@ const buildFakeAdapter = (
     listAgents: () => Effect.succeed([]),
     listHumans: () => Effect.succeed([]),
     listChannels: () => Effect.succeed([]),
+    channelDescription: () => Effect.succeed(Option.none()),
     presence: (_id: Identity): Effect.Effect<Presence> => Effect.succeed('offline'),
   }
   const defaultReconcileReport = {

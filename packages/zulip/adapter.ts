@@ -2,6 +2,7 @@ import type {
   AcquiredIdentity,
   AgentComms,
   BotName,
+  ChannelDescription,
   ChannelId,
   ChannelName,
   ChannelRef,
@@ -27,7 +28,9 @@ import type {
   Timestamp as TimestampType,
 } from '@commy/core/ports'
 import {
+  ChannelDescriptionRejected,
   DirectoryError,
+  decodeChannelDescription,
   decodeChannelId,
   decodeChannelName,
   decodeDisplayName,
@@ -49,6 +52,7 @@ import {
   Data,
   Duration,
   Effect,
+  Equivalence,
   HashMap,
   HashSet,
   Option,
@@ -63,6 +67,7 @@ import {
 } from 'effect'
 import type { BotHttp, RecipientDirectory } from './bot-dm-guard.ts'
 import { wrapBotHttp } from './bot-dm-guard.ts'
+import { fromWireDescription, rejectionFor, toWireDescription } from './channel-description.ts'
 import type { QueueState } from './events.ts'
 import {
   createMessageRefCache,
@@ -963,6 +968,15 @@ export const zulipAdapter = (
         listKnownChannels().pipe(
           Effect.mapError((cause) => new DirectoryError({ operation: 'listChannels', cause })),
         ),
+      channelDescription: (channel) =>
+        resolvePublishChannel(channel).pipe(
+          Effect.flatMap(fetchChannelDescription),
+          Effect.mapError((cause) =>
+            cause instanceof UnknownChannel
+              ? cause
+              : new DirectoryError({ operation: 'channelDescription', cause }),
+          ),
+        ),
       // Zulip presence is human-only by design — POST /users/me/presence is
       // @human_users_only, so a bot has no presence record and a read would
       // 400 into a misleading 'offline'. An agent's presence is genuinely
@@ -1032,6 +1046,14 @@ export const zulipAdapter = (
     const streamsListResponseSchema = Schema.Struct({
       result: Schema.Literal('success'),
       streams: Schema.Array(Schema.Struct({ name: Schema.NonEmptyString, stream_id: Schema.Int })),
+    })
+
+    // GET /streams/{id}. Read per-channel rather than off the streams list so a
+    // description reflects the realm now, not whenever the name→id cache was
+    // last filled.
+    const streamResponseSchema = Schema.Struct({
+      result: Schema.Literal('success'),
+      stream: Schema.Struct({ description: Schema.String }),
     })
 
     const REPLAY_NUM_BEFORE = 1000
@@ -1123,6 +1145,77 @@ export const zulipAdapter = (
               Effect.fail(new UnknownChannel({ channel: requested, substrate: 'zulip' })),
             onSome: Effect.succeed,
           }),
+        ),
+      )
+
+    // A channel's stored description, read fresh from the realm. The name→id
+    // cache only supplies the id; the description itself is never cached,
+    // because a caller reading one wants the realm's current answer.
+    const fetchChannelDescription = (
+      channel: ChannelRef,
+    ): Effect.Effect<Option.Option<ChannelDescription>, ZulipApiError | ParseResult.ParseError> =>
+      minterHttp.get(`/streams/${encodeURIComponent(channel.id)}`, streamResponseSchema).pipe(
+        Effect.flatMap((res) =>
+          Option.match(fromWireDescription(res.stream.description), {
+            onNone: () => Effect.succeed(Option.none<ChannelDescription>()),
+            onSome: (raw) => decodeChannelDescription(raw).pipe(Effect.map(Option.some)),
+          }),
+        ),
+      )
+
+    // Zulip expresses "set the description" as a stream update, and has no
+    // separate clear — an empty `description` is how a stream becomes
+    // undescribed, which `toWireDescription` maps `Option.none()` onto.
+    //
+    // Runs as the bound identity, not the minter: editing a channel is a
+    // permission the acting bot either has or lacks, and a realm that refuses
+    // it must surface that refusal to the caller rather than be worked around
+    // with a more privileged credential. Zulip answers a non-administrator
+    // with a 400, which becomes a PublisherError carrying its message.
+    //
+    // Idempotent by pre-read: a description already equal to the requested one
+    // short-circuits before any write, so re-running a charter update is free
+    // and leaves no stream-update event behind.
+    const setChannelDescription = (
+      channel: ChannelName,
+      description: Option.Option<ChannelDescription>,
+    ): Effect.Effect<void, PublisherError | UnknownChannel | ChannelDescriptionRejected> =>
+      resolvePublishChannel(channel).pipe(
+        Effect.flatMap(
+          (
+            channelRef,
+          ): Effect.Effect<
+            void,
+            ChannelDescriptionRejected | ZulipApiError | ParseResult.ParseError
+          > =>
+            Option.match(
+              Option.flatMap(description, (text) => rejectionFor(channelRef.name, text)),
+              {
+                onSome: (rejection) => Effect.fail(rejection),
+                onNone: () =>
+                  fetchChannelDescription(channelRef).pipe(
+                    Effect.flatMap((current) =>
+                      Option.getEquivalence(Equivalence.string)(current, description)
+                        ? Effect.void
+                        : boundHttp().pipe(
+                            Effect.flatMap((http) =>
+                              http.patch(
+                                `/streams/${encodeURIComponent(channelRef.id)}`,
+                                successSchema,
+                                { description: toWireDescription(description) },
+                              ),
+                            ),
+                            Effect.asVoid,
+                          ),
+                    ),
+                  ),
+              },
+            ),
+        ),
+        Effect.mapError((cause) =>
+          cause instanceof UnknownChannel || cause instanceof ChannelDescriptionRejected
+            ? cause
+            : new PublisherError({ operation: 'setChannelDescription', cause }),
         ),
       )
 
@@ -1365,6 +1458,7 @@ export const zulipAdapter = (
         ),
       resolveThread: (channel, thread) => setThreadResolved(channel, thread, true),
       unresolveThread: (channel, thread) => setThreadResolved(channel, thread, false),
+      setChannelDescription,
     }
 
     // The inbox subscription spine — mentions flag, the channel/new-topic

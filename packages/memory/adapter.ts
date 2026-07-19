@@ -24,6 +24,7 @@
 import type {
   AcquiredIdentity,
   AgentComms,
+  ChannelDescription,
   ChannelId,
   ChannelName,
   ChannelPermalink,
@@ -54,6 +55,7 @@ import type {
 } from '@commy/core/ports'
 import {
   type BotName,
+  ChannelDescriptionRejected,
   ChannelPermalinkSchema,
   decodeChannelId,
   decodeChannelName,
@@ -136,7 +138,21 @@ export interface MemoryAdapterConfig {
    * to model a human-facing client.
    */
   readonly selfKind?: IdentityKind
+  /**
+   * Longest channel description this substrate will store, in characters.
+   * Anything longer is refused with `ChannelDescriptionRejected` rather than
+   * stored truncated — the same refusal a real substrate makes, so the
+   * contract suite exercises that path here too.
+   *
+   * The default is deliberately *not* Zulip's 1024. Memory is a peer
+   * substrate with its own limit, not a Zulip emulator, and a contract suite
+   * that reads the limit from the environment it is given rather than
+   * assuming a number is the thing worth proving.
+   */
+  readonly channelDescriptionLimit?: number
 }
+
+const DEFAULT_CHANNEL_DESCRIPTION_LIMIT = 512
 
 export type MemoryAdapter = AgentComms & {
   /**
@@ -202,6 +218,11 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     // thread at read time so a later resolve/unresolve is reflected without
     // rewriting stored messages.
     const resolvedThreadsByChannel = new Map<string, Set<string>>()
+    // A channel's standing description, per channel id. Absent from the map is
+    // the undescribed state — the port models that as Option.none, so there is
+    // no blank-string entry to tell apart from a missing one.
+    const descriptionsByChannel = new Map<string, ChannelDescription>()
+    const descriptionLimit = config.channelDescriptionLimit ?? DEFAULT_CHANNEL_DESCRIPTION_LIMIT
     const isThreadResolved = (channelId: string, threadName: string): boolean =>
       resolvedThreadsByChannel.get(channelId)?.has(threadName) ?? false
     const withThreadResolution = (stored: StoredMessage): StoredMessage =>
@@ -462,6 +483,53 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       )
     }
 
+    // A real peer implementation, not a stub: the description round-trips
+    // verbatim through `directory.channelDescription`, and the two ways a
+    // substrate can fail to store one are both reproduced so the contract has
+    // something to assert on either side. `'length'` is this substrate's own
+    // cap (see MemoryAdapterConfig.channelDescriptionLimit); `'format'` mirrors
+    // the fact that a substrate may be unable to hold a multi-line description
+    // — Zulip rewrites newlines to spaces, so refusing them keeps "what you
+    // read back is what you wrote" true on both substrates instead of only
+    // this one. Idempotent: writing the text already stored changes nothing.
+    const setChannelDescription = (
+      channel: ChannelName,
+      description: Option.Option<ChannelDescription>,
+    ): Effect.Effect<void, UnknownChannel | ChannelDescriptionRejected> =>
+      requireBound().pipe(
+        Effect.flatMap(() => resolveChannel(channel)),
+        Effect.flatMap((channelRef) =>
+          Option.match(description, {
+            onNone: () =>
+              Effect.sync(() => {
+                descriptionsByChannel.delete(channelRef.id)
+              }),
+            onSome: (text) =>
+              text.length > descriptionLimit
+                ? Effect.fail(
+                    new ChannelDescriptionRejected({
+                      channel: channelRef.name,
+                      substrate: 'memory',
+                      constraint: 'length',
+                      detail: `description is too long (limit: ${descriptionLimit} characters, got ${text.length})`,
+                    }),
+                  )
+                : text.includes('\n')
+                  ? Effect.fail(
+                      new ChannelDescriptionRejected({
+                        channel: channelRef.name,
+                        substrate: 'memory',
+                        constraint: 'format',
+                        detail: 'description must be a single line — newlines are not stored',
+                      }),
+                    )
+                  : Effect.sync(() => {
+                      descriptionsByChannel.set(channelRef.id, text)
+                    }),
+          }),
+        ),
+      )
+
     const publisher: MessagePublisher = {
       // Posting before acquire is an invariant violation (a defect via
       // requireBound's die); an unknown channel is the one typed failure.
@@ -537,6 +605,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         ),
       resolveThread: (channel, thread) => setThreadResolved(channel, thread, true),
       unresolveThread: (channel, thread) => setThreadResolved(channel, thread, false),
+      setChannelDescription,
     }
 
     // Channels are addressed by name, so subscription keys use `ChannelName` —
@@ -804,6 +873,10 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       listHumans: () =>
         Effect.succeed([...identitiesById.values()].filter((i) => i.kind === 'human')),
       listChannels: () => Effect.succeed([...channelsById.values()]),
+      channelDescription: (channel) =>
+        resolveChannel(channel).pipe(
+          Effect.map((channelRef) => Option.fromNullable(descriptionsByChannel.get(channelRef.id))),
+        ),
       presence: (target) => Effect.succeed(presenceByIdentity.get(target.id) ?? 'offline'),
     }
 

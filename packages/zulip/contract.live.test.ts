@@ -259,6 +259,8 @@ if (env === undefined) {
           Effect.asVoid,
           Effect.orDie,
         ),
+      // Stream.MAX_DESCRIPTION_LENGTH — the realm's own cap.
+      channelDescriptionLimit: 1024,
       dispose: () =>
         Effect.sleep(MINTER_PACE).pipe(
           Effect.zipRight(adapter.identity.release({ persistent: true })),

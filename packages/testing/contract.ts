@@ -27,7 +27,9 @@ import type {
   PostOpts,
 } from '@commy/core/ports'
 import {
+  ChannelDescriptionRejected,
   decodeBotNameSync,
+  decodeChannelDescriptionSync,
   decodeChannelNameSync,
   decodeDisplayNameSync,
   decodeEmojiSync,
@@ -105,6 +107,14 @@ export interface ContractEnv {
     body: MessageBody,
     opts?: PostOpts,
   ) => Effect.Effect<void>
+  /**
+   * Longest channel description this substrate stores, in characters. The
+   * description tests build their over-length input from it rather than
+   * assuming any substrate's number — the contract asserts that a substrate
+   * *refuses* what it cannot hold, not what the cap happens to be. Each
+   * substrate reports its own (Zulip 1024, memory its configured limit).
+   */
+  readonly channelDescriptionLimit: number
   /** Tear down whatever the factory stood up. Called once per test. */
   readonly dispose: () => Effect.Effect<void>
 }
@@ -381,6 +391,143 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             env.comms.publisher.resolveThread(channel.name, decodeThreadNameSync('ghost')),
           )
           expect(error).toBeInstanceOf(PublisherError)
+        }),
+      ))
+
+    // A channel's description is standing state, not a message: it is written
+    // through the publisher and read back through the directory, and what goes
+    // in comes out verbatim. Absence is Option.none on both substrates —
+    // there is no blank-description state to tell apart from an unset one.
+    test('directory.channelDescription is None for a channel nobody has described', () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const channel = yield* env.seedChannel('lobby')
+          const description = yield* env.comms.directory.channelDescription(channel.name)
+          expect(description).toEqual(Option.none())
+        }),
+      ))
+
+    test('publisher.setChannelDescription round-trips verbatim through directory.channelDescription', () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const channel = yield* env.seedChannel('lobby')
+          const charter = decodeChannelDescriptionSync('Where the lobby crowd coordinates.')
+          yield* env.comms.publisher.setChannelDescription(channel.name, Option.some(charter))
+          const description = yield* env.comms.directory.channelDescription(channel.name)
+          expect(description).toEqual(Option.some(charter))
+        }),
+      ))
+
+    test('publisher.setChannelDescription replaces an existing description', () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const channel = yield* env.seedChannel('lobby')
+          yield* env.comms.publisher.setChannelDescription(
+            channel.name,
+            Option.some(decodeChannelDescriptionSync('first charter')),
+          )
+          const replacement = decodeChannelDescriptionSync('second charter')
+          yield* env.comms.publisher.setChannelDescription(channel.name, Option.some(replacement))
+          const description = yield* env.comms.directory.channelDescription(channel.name)
+          expect(description).toEqual(Option.some(replacement))
+        }),
+      ))
+
+    test('publisher.setChannelDescription with None clears the description back to absent', () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const channel = yield* env.seedChannel('lobby')
+          yield* env.comms.publisher.setChannelDescription(
+            channel.name,
+            Option.some(decodeChannelDescriptionSync('to be cleared')),
+          )
+          yield* env.comms.publisher.setChannelDescription(channel.name, Option.none())
+          const description = yield* env.comms.directory.channelDescription(channel.name)
+          expect(description).toEqual(Option.none())
+        }),
+      ))
+
+    test('publisher.setChannelDescription is idempotent when the description is unchanged', () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const channel = yield* env.seedChannel('lobby')
+          const charter = decodeChannelDescriptionSync('stable charter')
+          yield* env.comms.publisher.setChannelDescription(channel.name, Option.some(charter))
+          // Re-writing the same text is a no-op, not an error.
+          yield* env.comms.publisher.setChannelDescription(channel.name, Option.some(charter))
+          const description = yield* env.comms.directory.channelDescription(channel.name)
+          expect(description).toEqual(Option.some(charter))
+        }),
+      ))
+
+    test('publisher.setChannelDescription with None is idempotent on an undescribed channel', () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const channel = yield* env.seedChannel('lobby')
+          yield* env.comms.publisher.setChannelDescription(channel.name, Option.none())
+          const description = yield* env.comms.directory.channelDescription(channel.name)
+          expect(description).toEqual(Option.none())
+        }),
+      ))
+
+    // The failure mode that matters: a substrate refuses what it cannot store
+    // rather than storing a truncated copy. The limit is the substrate's own
+    // (read off the env), so this asserts the refusal, never a number.
+    test('publisher.setChannelDescription refuses a description longer than the substrate stores', () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const channel = yield* env.seedChannel('lobby')
+          const tooLong = decodeChannelDescriptionSync('x'.repeat(env.channelDescriptionLimit + 1))
+          const error = yield* Effect.flip(
+            env.comms.publisher.setChannelDescription(channel.name, Option.some(tooLong)),
+          )
+          expect(error).toBeInstanceOf(ChannelDescriptionRejected)
+          expect((error as ChannelDescriptionRejected).constraint).toBe('length')
+          // Refused outright — nothing truncated was left behind.
+          const description = yield* env.comms.directory.channelDescription(channel.name)
+          expect(description).toEqual(Option.none())
+        }),
+      ))
+
+    test('publisher.setChannelDescription accepts a description exactly at the substrate limit', () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const channel = yield* env.seedChannel('lobby')
+          const atLimit = decodeChannelDescriptionSync('x'.repeat(env.channelDescriptionLimit))
+          yield* env.comms.publisher.setChannelDescription(channel.name, Option.some(atLimit))
+          const description = yield* env.comms.directory.channelDescription(channel.name)
+          expect(description).toEqual(Option.some(atLimit))
+        }),
+      ))
+
+    test('publisher.setChannelDescription refuses a multi-line description rather than reshaping it', () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const channel = yield* env.seedChannel('lobby')
+          const multiLine = decodeChannelDescriptionSync('first line\nsecond line')
+          const error = yield* Effect.flip(
+            env.comms.publisher.setChannelDescription(channel.name, Option.some(multiLine)),
+          )
+          expect(error).toBeInstanceOf(ChannelDescriptionRejected)
+          expect((error as ChannelDescriptionRejected).constraint).toBe('format')
+          const description = yield* env.comms.directory.channelDescription(channel.name)
+          expect(description).toEqual(Option.none())
+        }),
+      ))
+
+    test('channel-description reads and writes on an unknown channel fail with UnknownChannel', () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const absent = decodeChannelNameSync('no-such-channel-for-descriptions')
+          const readError = yield* Effect.flip(env.comms.directory.channelDescription(absent))
+          expect(readError).toBeInstanceOf(UnknownChannel)
+          const writeError = yield* Effect.flip(
+            env.comms.publisher.setChannelDescription(
+              absent,
+              Option.some(decodeChannelDescriptionSync('never lands')),
+            ),
+          )
+          expect(writeError).toBeInstanceOf(UnknownChannel)
         }),
       ))
 

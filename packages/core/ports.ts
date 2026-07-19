@@ -68,6 +68,29 @@ export type MessageBody = typeof MessageBodySchema.Type
 export const decodeMessageBody = Schema.decodeUnknown(MessageBodySchema)
 
 /**
+ * A channel's standing self-description — the text a stranger reads to learn
+ * what the channel is for, distinct from any message posted in it.
+ *
+ * Non-empty, because "has no description" is modelled as an absent `Option`
+ * and needs no second spelling. A channel nobody has described and a channel
+ * described as `""` are not two states a substrate can tell apart (Zulip
+ * stores an undescribed stream as `description = ""`), so admitting
+ * `Some("")` alongside `None` would be a distinction the port could express
+ * but never read back. Clearing a description is `None`; the empty string is
+ * simply not a description.
+ *
+ * Deliberately carries no length or format constraint. Substrates cap and
+ * shape descriptions differently; a substrate that rejects a value it cannot
+ * store says so through `ChannelDescriptionRejected`, so the limit stays the
+ * adapter's fact rather than a constant baked into core.
+ */
+export const ChannelDescriptionSchema = Schema.NonEmptyString.pipe(
+  Schema.brand('ChannelDescription'),
+)
+export type ChannelDescription = typeof ChannelDescriptionSchema.Type
+export const decodeChannelDescription = Schema.decodeUnknown(ChannelDescriptionSchema)
+
+/**
  * User-surface display name for an identity (bot or human). Non-empty.
  * Adapters mint at the parse boundary (e.g. from Zulip's `full_name`).
  */
@@ -123,6 +146,7 @@ export const decodeMessageIdSync = Schema.decodeSync(MessageIdSchema)
 export const decodeThreadNameSync = Schema.decodeSync(ThreadNameSchema)
 export const decodeTimestampSync = Schema.decodeSync(TimestampSchema)
 export const decodeMessageBodySync = Schema.decodeSync(MessageBodySchema)
+export const decodeChannelDescriptionSync = Schema.decodeSync(ChannelDescriptionSchema)
 export const decodeDisplayNameSync = Schema.decodeSync(DisplayNameSchema)
 export const decodeBotNameSync = Schema.decodeSync(BotNameSchema)
 export const decodeEmojiSync = Schema.decodeSync(EmojiSchema)
@@ -446,6 +470,27 @@ export interface MessagePublisher {
    */
   resolveThread(channel: ChannelName, thread: ThreadName): Effect.Effect<void, PublisherError>
   unresolveThread(channel: ChannelName, thread: ThreadName): Effect.Effect<void, PublisherError>
+  /**
+   * Set a channel's standing description, or clear it with `Option.none()`.
+   * Addressed by `ChannelName` like every other write. Idempotent: writing the
+   * description a channel already carries is a no-op with no substrate write,
+   * and clearing an already-absent description is likewise.
+   *
+   * Like `edit`, this mutates substrate state and emits no InboundEvent — a
+   * consumer observes the new text via `Directory.channelDescription`. Reading
+   * back what was written is the contract; a substrate that cannot store the
+   * value verbatim must reject it rather than silently store a mangled form.
+   *
+   * `ChannelDescriptionRejected` is that refusal — the substrate's own limits
+   * (a length cap, a format restriction) applied at the adapter, carrying
+   * enough detail to tell a caller what to change. A caller whose identity
+   * lacks permission to edit the channel gets a `PublisherError`, not a
+   * defect, so an under-privileged session degrades rather than crashes.
+   */
+  setChannelDescription(
+    channel: ChannelName,
+    description: Option.Option<ChannelDescription>,
+  ): Effect.Effect<void, PublisherError | UnknownChannel | ChannelDescriptionRejected>
 }
 
 export interface MessageInbox {
@@ -524,7 +569,12 @@ export interface HistoryReader {
  * `operation` names the port method that failed.
  */
 export class DirectoryError extends Data.TaggedError('DirectoryError')<{
-  readonly operation: 'presence' | 'listAgents' | 'listHumans' | 'listChannels'
+  readonly operation:
+    | 'presence'
+    | 'listAgents'
+    | 'listHumans'
+    | 'listChannels'
+    | 'channelDescription'
   readonly cause: unknown
 }> {
   override get message(): string {
@@ -536,6 +586,20 @@ export interface Directory {
   listAgents(): Effect.Effect<ReadonlyArray<Identity>, DirectoryError>
   listHumans(): Effect.Effect<ReadonlyArray<Identity>, DirectoryError>
   listChannels(): Effect.Effect<ReadonlyArray<ChannelRef>, DirectoryError>
+  /**
+   * A channel's standing description, or `None` when nobody has set one (and
+   * on a substrate with no notion of a channel description at all). Read
+   * fresh, addressed by name, and deliberately kept off `ChannelRef`: a
+   * `ChannelRef` is an observation facet carried by every `MessageRef`, so
+   * folding mutable channel metadata into it would stamp each observed message
+   * with a point-in-time copy of state that has nothing to do with that
+   * message. A channel the substrate has no record of fails with
+   * `UnknownChannel` rather than collapsing into `None`, keeping "no such
+   * channel" distinct from "channel with nothing said about it".
+   */
+  channelDescription(
+    channel: ChannelName,
+  ): Effect.Effect<Option.Option<ChannelDescription>, DirectoryError | UnknownChannel>
   /**
    * The presence read recovers the "user has no presence record → offline"
    * case declaratively at the adapter and surfaces any other substrate
@@ -613,6 +677,32 @@ export class UnknownChannel extends Data.TaggedError('UnknownChannel')<{
 }
 
 /**
+ * Refusal of `MessagePublisher.setChannelDescription` when the substrate
+ * cannot store the given text as written. Adapters surface this instead of
+ * storing a mangled form, so a caller never has to read back what it wrote to
+ * discover the substrate quietly changed it.
+ *
+ * `constraint` classifies the refusal without core learning any substrate's
+ * numbers or syntax: `'length'` for a text longer than the substrate stores,
+ * `'format'` for characters it cannot represent (Zulip rewrites newlines in a
+ * stream description, so the adapter refuses them rather than let the write
+ * round-trip differently than it went in). `detail` carries the adapter's own
+ * explanation, including the actual limit, for a caller to show a human.
+ * Tagged so the MCP edge can report a fixable input apart from a substrate
+ * outage or a permission failure, both of which stay `PublisherError`.
+ */
+export class ChannelDescriptionRejected extends Data.TaggedError('ChannelDescriptionRejected')<{
+  readonly channel: ChannelName
+  readonly substrate: string
+  readonly constraint: 'length' | 'format'
+  readonly detail: string
+}> {
+  override get message(): string {
+    return `setChannelDescription(${this.channel}) failed — ${this.substrate} rejected the description: ${this.detail}`
+  }
+}
+
+/**
  * Failure surface for the Effect-returning `MessagePublisher` writes. The
  * adapter mints this when the backing substrate call fails, carrying the
  * underlying error as `cause`; the in-memory adapter never produces it (its
@@ -620,7 +710,14 @@ export class UnknownChannel extends Data.TaggedError('UnknownChannel')<{
  * that failed. Mirrors `DirectoryError` so core stays substrate-agnostic.
  */
 export class PublisherError extends Data.TaggedError('PublisherError')<{
-  readonly operation: 'post' | 'edit' | 'react' | 'unreact' | 'resolveThread' | 'unresolveThread'
+  readonly operation:
+    | 'post'
+    | 'edit'
+    | 'react'
+    | 'unreact'
+    | 'resolveThread'
+    | 'unresolveThread'
+    | 'setChannelDescription'
   readonly cause: unknown
 }> {
   override get message(): string {

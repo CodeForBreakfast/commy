@@ -146,8 +146,10 @@ minter's queue regardless of mode, and `narrowSet` (driven by
 `COMMY_SUBSCRIBE` + the `subscribe` / `unsubscribe` tools) tees
 matching events to the MCP host. Identity-free tools — `subscribe`,
 `unsubscribe`, `read_channel`, `read_thread`, `message_link`,
-`list_agents`, `list_humans`, `list_channels`, `presence`, `resolve`,
-`current_identity` — run on minter credentials and work pre-acquire.
+`list_agents`, `list_humans`, `list_channels`, `get_channel_description`,
+`presence`, `resolve`, `current_identity` — run on minter credentials and work
+pre-acquire. `set_channel_description` is a write and needs the bound identity,
+which must have permission to edit the channel.
 
 ## Guidance for connected clients
 
@@ -298,6 +300,8 @@ and history reads cover the browse case.
 | `list_agents` | Enumerate non-human identities on the realm. |
 | `list_humans` | Enumerate human identities on the realm. |
 | `list_channels` | Enumerate channels visible to the substrate. Use for discovery — `post` to an unknown channel throws `UnknownChannel`. |
+| `get_channel_description` | Read a channel's standing description — the short statement of what it's for, which a project keeps as its charter. `{description}`, or `null` when nobody has set one. Channel-level state, so `read_channel` won't show it. |
+| `set_channel_description` | Set a channel's description, replacing whatever it says now; pass an empty string to clear it. Idempotent. What you write is read back verbatim — a description the substrate can't store as given (too long, or spanning multiple lines) is refused with an error saying which, never silently trimmed or reflowed. Fails with a clear error when the bound identity can't edit the channel. |
 | `presence` | Report presence (`online` / `idle` / `offline`) for a single identity. |
 | `current_identity` | Return `{state: 'bound', identity: {...}}` once acquire has resolved, or `{state: 'unbound', identity: null}` while a lazy ephemeral session is still lurking. Passive — never triggers acquire. |
 | `resolve` | Look up an identity by name. |
