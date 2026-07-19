@@ -926,22 +926,37 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
       ): Effect.Effect<StepResult, ZulipApiError | ParseResult.ParseError> =>
         Effect.gen(function* () {
           const registration = yield* readRegistration
-          const registrationQueueId = Option.map(registration, (r) => r.queue.queueId)
           // Adopt only what the inbox has re-registered *since we last looked*.
           // Testing "differs from the queue I'm polling" instead would abandon a
           // resumed persisted queue on the very first poll, because
           // `initialQueue` deliberately prefers the persisted queue over the
           // register-time one — they differ by design, and that difference is
           // not a flip. Do not simplify this back to a difference test.
-          const observed: ProducerState = Option.match(registration, {
+          const adoption: Option.Option<QueueRegistration> = Option.filter(
+            registration,
+            (r) => !Equal.equals(Option.some(r.queue.queueId), state.observedRegistrationQueueId),
+          )
+          const observed: ProducerState = Option.match(adoption, {
             onNone: () => state,
+            onSome: (r) => ({
+              queue: r.queue,
+              observedRegistrationQueueId: Option.some(r.queue.queueId),
+            }),
+          })
+          // An adoption displaces the polled queue without passing through
+          // `registerFreshQueue`, where the register record lives — leaving the
+          // one queue change with no line behind it. The adopted id does reach
+          // the next batch line, so a swap is deducible from an id that differs
+          // between two adjacent observations; but deducing a transition from
+          // adjacent observations is the thing this record exists to end. The
+          // shape follows the register line, since the two describe the same
+          // kind of event from opposite ends.
+          yield* Option.match(adoption, {
+            onNone: () => Effect.void,
             onSome: (r) =>
-              Equal.equals(registrationQueueId, state.observedRegistrationQueueId)
-                ? state
-                : {
-                    queue: r.queue,
-                    observedRegistrationQueueId: registrationQueueId,
-                  },
+              Effect.logInfo(
+                `commy zulip events: adopted queue_id=${r.queue.queueId} last_event_id=${r.queue.lastEventId} replaced=${Option.getOrElse(Option.fromNullable(state.queue?.queueId), () => 'none')} mode=${r.mode}`,
+              ),
           })
           const currentQueue: QueueState =
             observed.queue ?? (yield* registerFreshQueue(yield* currentNarrowMode))
