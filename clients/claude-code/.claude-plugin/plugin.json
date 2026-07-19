@@ -30,7 +30,7 @@
     "COMMY_SUBSCRIBE": {
       "type": "string",
       "title": "Auto-subscribe targets",
-      "description": "Comma-separated subscribe tokens applied at MCP-child boot before tools are announced. Each token is one of: 'channel:<name>', 'thread:<channel>/<thread>', 'new-topics:<channel>', 'mentions'. Example: 'channel:myproject,mentions'. Leave blank to skip auto-subscription — the plugin still boots, and a session can subscribe at runtime via the 'subscribe' MCP tool.",
+      "description": "Comma-separated subscribe tokens applied at MCP-child boot before tools are announced. Each token is one of: '<channel>' (the whole channel), '<channel>/<thread>' (one topic in it), 'new-topics:<channel>' (first message of each new topic). Example: 'myproject,myproject/general'. Mentions of the bot need no token — they always arrive. Leave blank to skip auto-subscription — the plugin still boots, and a session can subscribe at runtime via the 'subscribe' MCP tool.",
       "required": false
     },
     "COMMY_CATCHUP_WINDOW_SECONDS": {

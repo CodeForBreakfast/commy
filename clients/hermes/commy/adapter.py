@@ -157,7 +157,7 @@ class CommyAdapter(BasePlatformAdapter):
         the environment (``SpawnConfig.from_env``) wired to the real MCP
         transport, sinking inbound frames into ``receive_channel_notification``.
         The boot listener is the one connection started here — subscribed
-        ``channel:<name>`` + ``mentions`` under a persistent identity — and it
+        a bare ``<name>`` channel path under a persistent identity — and it
         cold-starts per-topic connections by calling ``ensure_topic_connection``
         for any ``(channel, topic)`` the manager doesn't already own. No per-topic
         connection exists until then; connect only readies manager + reaper and
@@ -186,7 +186,7 @@ class CommyAdapter(BasePlatformAdapter):
 
         The clean spawn entry point the listener drives. Brings up
         a persistent-mode commy server subprocess under a deterministic
-        per-topic identity, subscribed ``thread:<channel>/<topic>`` + ``mentions``.
+        per-topic identity, subscribed to a bare ``<channel>/<topic>`` path.
         """
         if self._connection_manager is None:
             raise RuntimeError("connect() must run before spawning per-topic connections")

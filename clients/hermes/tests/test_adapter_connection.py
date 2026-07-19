@@ -117,7 +117,7 @@ def test_ensure_topic_connection_spawns_via_manager():
     assert len(factory.created) == 1
     assert factory.created[0].started == 1
     assert spec.bot_name == deterministic_bot_name("myproject", "standup")
-    assert spec.env["COMMY_SUBSCRIBE"] == "thread:myproject/standup,mentions"
+    assert spec.env["COMMY_SUBSCRIBE"] == "myproject/standup"
 
 
 def test_inbound_frame_routes_through_receive_path_to_handle_message():

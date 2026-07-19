@@ -61,7 +61,7 @@ const fullEnv = {
   ZULIP_MINTER_EMAIL: 'minter-bot@zulip.example.com',
   ZULIP_MINTER_API_KEY: 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk1',
   COMMY_BOT_NAME: 'myproject-concierge',
-  COMMY_SUBSCRIBE: 'channel:home,channel:llm-feed',
+  COMMY_SUBSCRIBE: 'home,llm-feed',
 } as const
 
 test('parseEnv fails with EnvConfigError when all required vars are missing', () =>
@@ -201,8 +201,8 @@ test('parseEnv rejects a set-but-invalid COMMY_BOT_NAME with a substrate-safe me
 test('parseEnv reads subscribe from canonical COMMY_SUBSCRIBE', () =>
   Effect.runPromise(
     Effect.gen(function* () {
-      const parsed = yield* parse({ ...requiredOnlyEnv, COMMY_SUBSCRIBE: 'channel:home' })
-      expect(parsed.subscribe).toBe('channel:home')
+      const parsed = yield* parse({ ...requiredOnlyEnv, COMMY_SUBSCRIBE: 'home' })
+      expect(parsed.subscribe).toBe('home')
     }),
   ))
 
@@ -828,7 +828,7 @@ test('subscribeFromEnv subscribes to each comma-separated token in order', () =>
       const baseRequiredEnv = yield* baseRequiredEnvEffect
       const parsed: ParsedEnv = {
         ...baseRequiredEnv,
-        subscribe: 'channel:home,thread:home/payments,mentions',
+        subscribe: 'home,home/payments',
       }
       yield* subscribeFromEnv(fake.inbox, narrowSet, parsed)
       expect(fake.calls.subscribed).toEqual([
@@ -850,7 +850,7 @@ test('subscribeFromEnv trims whitespace around each token', () =>
       const baseRequiredEnv = yield* baseRequiredEnvEffect
       const parsed: ParsedEnv = {
         ...baseRequiredEnv,
-        subscribe: ' channel:home , channel:llm-feed ',
+        subscribe: ' home , llm-feed ',
       }
       yield* subscribeFromEnv(fake.inbox, narrowSet, parsed)
       expect(fake.calls.subscribed).toEqual([
@@ -869,12 +869,33 @@ test('subscribeFromEnv aborts on a malformed token (and stops before later token
       const baseRequiredEnv = yield* baseRequiredEnvEffect
       const parsed: ParsedEnv = {
         ...baseRequiredEnv,
-        subscribe: 'channel:home,bogus:thing,channel:llm-feed',
+        subscribe: 'home,home/,llm-feed',
       }
       const err = yield* Effect.flip(subscribeFromEnv(fake.inbox, narrowSet, parsed))
       expect(err).toBeInstanceOf(SubscribeTokenError)
       expect(fake.calls.subscribed).toEqual([decodeChannelNameSync('home')])
       expect(narrowSet.size()).toBe(1)
+    }),
+  ))
+
+// A config carrying a retired token form must stop the boot rather than reach
+// the substrate: `channel:home` would otherwise be a channel *named*
+// `channel:home`, and the operator's first symptom would be a silent seat.
+test.each([
+  'channel:home',
+  'thread:home/payments',
+  'mentions',
+])('subscribeFromEnv aborts on the retired token form %p', (retired) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fake = buildFakeInbox()
+      const narrowSet = createNarrowSet()
+      const baseRequiredEnv = yield* baseRequiredEnvEffect
+      const parsed: ParsedEnv = { ...baseRequiredEnv, subscribe: retired }
+      const err = yield* Effect.flip(subscribeFromEnv(fake.inbox, narrowSet, parsed))
+      expect(err).toBeInstanceOf(SubscribeTokenError)
+      expect(fake.calls.subscribed).toEqual([])
+      expect(narrowSet.size()).toBe(0)
     }),
   ))
 
@@ -886,7 +907,7 @@ test('subscribeFromEnv propagates inbox.subscribe rejections and stops calling',
       const baseRequiredEnv = yield* baseRequiredEnvEffect
       const parsed: ParsedEnv = {
         ...baseRequiredEnv,
-        subscribe: 'channel:home,channel:llm-feed,channel:third',
+        subscribe: 'home,llm-feed,third',
       }
       const err = yield* Effect.flip(subscribeFromEnv(fake.inbox, narrowSet, parsed))
       expect(err.message).toContain('fake-inbox rejected call #2')
@@ -906,7 +927,7 @@ test('subscribeFromEnv ignores empty list yielded by a trailing comma', () =>
       const baseRequiredEnv = yield* baseRequiredEnvEffect
       const parsed: ParsedEnv = {
         ...baseRequiredEnv,
-        subscribe: 'channel:home,',
+        subscribe: 'home,',
       }
       const err = yield* Effect.flip(subscribeFromEnv(fake.inbox, narrowSet, parsed))
       expect(err).toBeInstanceOf(SubscribeTokenError)
@@ -923,7 +944,7 @@ test('subscribeFromEnv returns parsed intents in token order (for downstream cat
       const baseRequiredEnv = yield* baseRequiredEnvEffect
       const parsed: ParsedEnv = {
         ...baseRequiredEnv,
-        subscribe: 'channel:home,thread:home/payments,mentions',
+        subscribe: 'home,home/payments',
       }
       const intents = yield* subscribeFromEnv(fake.inbox, narrowSet, parsed)
       expect(intents).toEqual([

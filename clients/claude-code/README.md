@@ -43,7 +43,7 @@ the env block in `.mcp.json`.
 | `ZULIP_SITE` | yes | no | absolute URL, e.g. `https://zulip.example.com` | Base of the Zulip realm the plugin operates against. |
 | `ZULIP_MINTER_EMAIL` | yes | no | email-shaped string | Delivery email of the shared minter user (human-type Zulip user) that owns all bots managed through this plugin. Must be a member of the realm's `can_create_bots_group`. |
 | `ZULIP_MINTER_API_KEY` | yes | yes | opaque token | Minter user's API key. Used to mint or regenerate bot credentials at boot. |
-| `COMMY_SUBSCRIBE` | no | no | comma-separated tokens: `channel:<name>`, `thread:<channel>/<thread>`, `new-topics:<channel>` | Pre-loaded inbox subscriptions. Mentions of the bot need no token — they arrive unconditionally; a retired `mentions` token is accepted and ignored. Applied at MCP-child boot before tools are announced, in both eager and lazy modes — the minter is the universal listener; this just teaches the plugin which events to surface. When the operator leaves this unset, Claude Code substitutes empty (or leaves the placeholder) into the env block and the plugin treats that as "no subscriptions" rather than a boot failure. |
+| `COMMY_SUBSCRIBE` | no | no | comma-separated tokens: `<channel>`, `<channel>/<thread>`, `new-topics:<channel>` | Pre-loaded inbox subscriptions. A bare path is scope, a prefix is a delivery rule — `new-topics:` is the only prefix left. Mentions of the bot need no token — they arrive unconditionally; the retired `channel:` / `thread:` prefixes and the retired `mentions` token are rejected as config errors. Applied at MCP-child boot before tools are announced, in both eager and lazy modes — the minter is the universal listener; this just teaches the plugin which events to surface. When the operator leaves this unset, Claude Code substitutes empty (or leaves the placeholder) into the env block and the plugin treats that as "no subscriptions" rather than a boot failure. |
 
 Paste each value into the prompt when it appears on first enable. To re-enter
 values later, edit `pluginConfigs[...].options` in `~/.claude/settings.json`
@@ -58,7 +58,7 @@ process env inheritance:
 | Env var | Required | Format | Purpose |
 |---|---|---|---|
 | `COMMY_BOT_NAME` | no | `<role>` or `<rig>-<agent>` (see `docs/naming.md`) | **Persistent mode.** Stable identity to acquire eagerly at boot — concierges, scheduled skills, anything that needs to be DM-able from the moment the plugin starts. Boot fails non-zero on acquire rejection. Omit for ephemeral mode (next rows). |
-| `COMMY_PROJECT` | no | short slug (lowercase, `[a-z0-9-]`, ≤12 chars post-sanitise) | Identifies the calling project for two purposes: (1) **Ephemeral mode, operator override.** Force every minted name to embed this project tag — `cc-<project>-<8>` rather than the per-session value. When unset (the normal case under Claude Code), the project is derived **per attribution call** from the calling session's cwd (hook-injected): git remote origin basename → git root basename → `undefined` (bare `cc-<8>`). The env value, when set, wins over per-call derivation. (2) **Persistent mode (project concierge), Type-1 boot-time defaults.** Post-acquire the plugin registers `new-topics:<project>` + `thread:<project>/general` so the concierge sees first-message-per-new-topic and project broadcast traffic. When unset the project-specific defaults are skipped, leaving no narrows registered; mentions of the bot still arrive, because they need no narrow. See `docs/naming.md` for the full precedence and sanitisation rules. |
+| `COMMY_PROJECT` | no | short slug (lowercase, `[a-z0-9-]`, ≤12 chars post-sanitise) | Identifies the calling project for two purposes: (1) **Ephemeral mode, operator override.** Force every minted name to embed this project tag — `cc-<project>-<8>` rather than the per-session value. When unset (the normal case under Claude Code), the project is derived **per attribution call** from the calling session's cwd (hook-injected): git remote origin basename → git root basename → `undefined` (bare `cc-<8>`). The env value, when set, wins over per-call derivation. (2) **Persistent mode (project concierge), Type-1 boot-time defaults.** Post-acquire the plugin registers `new-topics:<project>` + `<project>/general` so the concierge sees first-message-per-new-topic and project broadcast traffic. When unset the project-specific defaults are skipped, leaving no narrows registered; mentions of the bot still arrive, because they need no narrow. See `docs/naming.md` for the full precedence and sanitisation rules. |
 
 ### Eager vs lazy boot, in one diagram
 
@@ -70,7 +70,7 @@ parseEnv → buildAdapter → reconcileMinterSubscriptions (non-fatal) →
                           │     acquire NOW (eager); exit 1 on failure;
                           │     post-acquire register Type-1 defaults:
                           │     `new-topics:<project>` +
-                          │     `thread:<project>/general` if
+                          │     `<project>/general` if
                           │     COMMY_PROJECT is set (none if not —
                           │     mentions arrive without a narrow)
                           │
@@ -85,7 +85,7 @@ parseEnv → buildAdapter → reconcileMinterSubscriptions (non-fatal) →
                                 releases the prior identity and remints on
                                 the next attribution. Each fresh slot's
                                 onAcquire hook registers the Type-2 default:
-                                per-project `thread:<project>/general`
+                                per-project `<project>/general`
                                 when known.
                           │
                           ▼
@@ -293,7 +293,7 @@ and history reads cover the browse case.
 | `edit_message` | Replace the body of a prior message sent by the bound identity. |
 | `react` | Add an emoji reaction to a message. |
 | `unreact` | Remove an emoji reaction previously placed by the current identity. |
-| `subscribe` | Add a target (channel, thread, or `mentions`) to the live inbox stream. |
+| `subscribe` | Add a target (`<channel>`, `<channel>/<thread>`, or `new-topics:<channel>`) to the live inbox stream. |
 | `unsubscribe` | Drop a previously-subscribed target. |
 | `read_channel` | Read messages from a channel within a time / count range. |
 | `read_thread` | Read messages from a specific thread within a range. |

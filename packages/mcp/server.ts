@@ -158,7 +158,7 @@ export const forkIdleSweep = (
  * Type-2 default sub set for interactive CC sessions. Fires
  * once per ephemeral slot, right after the substrate-side acquire
  * resolves: registers the project broadcast topic
- * `thread:#<project>/general` (skipped when no project slug could be
+ * `<project>/general` (skipped when no project slug could be
  * derived). Mentions need no narrow — they arrive unconditionally.
  *
  * Failures are swallowed with a log line — the bot is already minted at
@@ -201,7 +201,7 @@ const createType2DefaultsOnAcquire = (
  *   1. `new-topics:<project>` — first message of every new topic in the
  *      project channel. Concierge-specific delivery rule so a fresh
  *      enquiry surfaces while replies in unrelated topics stay quiet.
- *   2. `thread:<project>/general` — project broadcast topic.
+ *   2. `<project>/general` — project broadcast topic.
  *
  * Both are skipped when no project slug resolves from `COMMY_PROJECT`,
  * leaving the set empty — mentions still arrive, because they are
