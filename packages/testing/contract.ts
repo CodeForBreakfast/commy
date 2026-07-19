@@ -972,12 +972,8 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
     // realm.live.test.ts proves, and one a single-identity self-mention cannot,
     // since live Zulip's `is:mentioned` narrow is keyed to the queue owner.
     //
-    // Self subscribes the channel (queue mode 'all') so the mention surfaces on
-    // live Zulip: a bound bot's events queue is minter-owned, so its own
-    // mentions surface only in mode 'all' — which a channel subscription sets,
-    // not the acquire-time / subscribe('mentions') narrow. The bare floor (a
-    // mention without a channel subscribe) holds on Memory but not yet on
-    // Zulip.
+    // Self subscribes the channel here only to keep this case adjacent to the
+    // no-subscription floor below, which is the stricter of the two.
     test('a peer mention surfaces as mention-received when self is subscribed to the channel', () =>
       Effect.runPromise(
         Effect.scoped(
@@ -1004,10 +1000,12 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         ),
       ))
 
-    // Subscribing the 'mentions' narrow alongside the channel must not suppress
-    // the delivery. The channel subscribe is again what surfaces the bound
-    // bot's mention on live Zulip (mode 'all').
-    test('inbox.subscribe("mentions") alongside a channel subscription yields a peer mention-received', () =>
+    // The mention floor with NOTHING subscribed — the cell comms-n1my exists to
+    // fix. A session outside a git repo resolves no project slug, so neither
+    // default narrow set gives it anything to subscribe to; mentions are its
+    // only inbox. It must still hear its own name, with no subscribe of any
+    // kind, or the seat is silently deaf to the one thing addressed to it.
+    test('a peer mention surfaces as mention-received with no subscription at all', () =>
       Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
@@ -1016,15 +1014,13 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             const channel = yield* env.seedChannel('lobby')
             const me = yield* env.comms.identity.currentIdentity()
             const peer = yield* env.seedAgent('alice')
-            yield* env.comms.inbox.subscribe(channel.name)
-            yield* env.comms.inbox.subscribe('mentions')
             const queue = yield* eventQueue(env.comms)
             yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** wake up`), {
               mentions: [me],
             })
             const event = yield* awaitEvent(
               queue,
-              'a peer mention of self after subscribe("mentions")',
+              'a peer mention of self with nothing subscribed',
               (e) => e.kind === 'mention-received',
             )
             if (event.kind !== 'mention-received')
@@ -1034,13 +1030,15 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         ),
       ))
 
-    test('inbox.subscribe("mentions") suppresses posts that do not mention current identity', () =>
+    // The other half of the floor: implicit mentions widen delivery for the
+    // bound identity ONLY. Someone else's mention in an unsubscribed channel
+    // stays silent.
+    test('an unsubscribed channel stays silent for a post mentioning someone else', () =>
       Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
             const channel = yield* env.seedChannel('lobby')
             const alice = yield* env.seedAgent('alice')
-            yield* env.comms.inbox.subscribe('mentions')
             const queue = yield* eventQueue(env.comms)
             yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('hello alice'), {
               mentions: [alice],

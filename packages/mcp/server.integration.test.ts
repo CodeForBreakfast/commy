@@ -1061,7 +1061,7 @@ test('unknown arguments are rejected with a clear error', async () => {
 
 // ─── Per-tool: subscribe ────────────────────────────────────────────────────
 
-test('subscribe (happy): accepts channel/thread/mentions tokens', async () => {
+test('subscribe (happy): accepts channel/thread tokens and the retired mentions token', async () => {
   const h = await buildHarness({ seedChannels: ['home'] })
   try {
     const a = expectStructured(await callTool(h.client, 'subscribe', { target: 'channel:home' }))
@@ -1840,7 +1840,6 @@ const captureSubscribes = (): {
 } => {
   const tokens: string[] = []
   const renderTarget = (target: SubscriptionTarget): string => {
-    if (target === 'mentions') return 'mentions'
     if (typeof target === 'string') return `channel:${target}`
     if ('kind' in target) return `new-topics:${target.channel}`
     return `thread:${target.channel}/${target.thread}`
@@ -1874,13 +1873,13 @@ test('ephemeral mode + project: first post registers mentions and thread:#<proje
     // Order isn't load-bearing — only membership. The captured subscribes
     // here are exactly the onAcquire-time defaults; sticky-engagement
     // doesn't fire because the post has no thread.
-    expect(new Set(cap.tokens)).toEqual(new Set(['mentions', 'thread:myproject/general']))
+    expect(new Set(cap.tokens)).toEqual(new Set(['thread:myproject/general']))
   } finally {
     await h.cleanup()
   }
 })
 
-test('ephemeral mode without project: first post registers only the universal mentions narrow', async () => {
+test('ephemeral mode without project: first post registers no narrows at all', async () => {
   const cap = captureSubscribes()
   // No COMMY_PROJECT, no BOT_NAME. The post handler passes
   // session_id but no cwd, so the project resolver returns undefined
@@ -1896,7 +1895,7 @@ test('ephemeral mode without project: first post registers only the universal me
       body: 'project-less attribution',
       session_id: 'b7a4ab07-0000-4000-8000-000000000005',
     })
-    expect(cap.tokens).toEqual(['mentions'])
+    expect(cap.tokens).toEqual([])
   } finally {
     await h.cleanup()
   }
@@ -1941,7 +1940,7 @@ test('ephemeral mode + project: repeat posts on same session_id register default
       acc[t] = (acc[t] ?? 0) + 1
       return acc
     }, {})
-    expect(counts).toEqual({ mentions: 1, 'thread:myproject/general': 1 })
+    expect(counts).toEqual({ 'thread:myproject/general': 1 })
   } finally {
     await h.cleanup()
   }
@@ -1966,14 +1965,14 @@ test('ephemeral mode + project: distinct session_ids each register their own def
       body: 'session B',
       session_id: 'f077e077-0000-4000-8000-000000000009',
     })
-    // Two slots → onAcquire fires twice → universal mentions + project
-    // broadcast topic added twice each (idempotent at the narrowSet
-    // level, but the substrate-side call is repeated).
+    // Two slots → onAcquire fires twice → the project broadcast topic is
+    // added twice (idempotent at the narrowSet level, but the substrate-side
+    // call is repeated).
     const counts = cap.tokens.reduce<Record<string, number>>((acc, t) => {
       acc[t] = (acc[t] ?? 0) + 1
       return acc
     }, {})
-    expect(counts).toEqual({ mentions: 2, 'thread:myproject/general': 2 })
+    expect(counts).toEqual({ 'thread:myproject/general': 2 })
   } finally {
     await h.cleanup()
   }
@@ -2008,14 +2007,11 @@ test('ephemeral subscribe persists the live narrow set (defaults + new sub) unde
     await waitFor(() => writes.length > 0, 200)
     const last = writes.at(-1)
     expect(last?.sid).toBe(sid)
-    // The snapshot is the full live set: the fresh-path Type-2 default
-    // (mentions, no project) seeded before the write, plus the channel just
-    // subscribed. So a later resume restores both.
+    // The snapshot is the full live set. With no project there is no Type-2
+    // default to seed, so it is exactly the channel just subscribed — and a
+    // later resume restores that.
     expect(new Set((last?.intents ?? []).map((i) => JSON.stringify(i)))).toEqual(
-      new Set([
-        JSON.stringify({ kind: 'mentions' }),
-        JSON.stringify({ kind: 'channel', channelName: decodeChannelNameSync('home') }),
-      ]),
+      new Set([JSON.stringify({ kind: 'channel', channelName: decodeChannelNameSync('home') })]),
     )
   } finally {
     await h.cleanup()
@@ -2148,7 +2144,7 @@ test('persistent boot with COMMY_PROJECT registers Type-1 defaults at the substr
     // Order isn't load-bearing — only membership. Persistent mode has no
     // additional onAcquire defaults beyond Type-1 itself.
     expect(new Set(cap.tokens)).toEqual(
-      new Set(['mentions', 'new-topics:myproject', 'thread:myproject/general']),
+      new Set(['new-topics:myproject', 'thread:myproject/general']),
     )
   } finally {
     await h.cleanup()
@@ -2239,7 +2235,7 @@ test('Type-4 cron-shape (no project): acquire-post-shutdown-release fires once w
     // resolved. Type-1 defaults registered post-acquire; without a
     // project slug, only the universal `mentions` narrow lands.
     expect(h.identityCalls.acquires).toEqual(['myproject-concierge'])
-    expect(cap.tokens).toEqual(['mentions'])
+    expect(cap.tokens).toEqual([])
 
     const posted = expectStructured(
       await callTool(h.client, 'post', { channel_name: 'home', body: 'cron tick' }),
@@ -2266,7 +2262,7 @@ test('Type-4 cron-shape (no project): acquire-post-shutdown-release fires once w
     // No leaked subscriptions: only the Type-1 universal mentions
     // narrow registered, and shutdown deliberately doesn't call
     // inbox.unsubscribe (release-shutdown.ts negative requirement).
-    expect(cap.tokens).toEqual(['mentions'])
+    expect(cap.tokens).toEqual([])
     // No error log lines from boot, post, or shutdown.
     expect(logs).toEqual([])
   } finally {
@@ -2298,7 +2294,7 @@ test('Type-4 cron-shape (project-scoped): Type-1 default subs registered post-ac
     // Type-1 defaults landed at boot — order isn't load-bearing,
     // membership is.
     expect(new Set(cap.tokens)).toEqual(
-      new Set(['mentions', 'new-topics:myproject', 'thread:myproject/general']),
+      new Set(['new-topics:myproject', 'thread:myproject/general']),
     )
 
     const posted = expectStructured(
@@ -2315,7 +2311,7 @@ test('Type-4 cron-shape (project-scoped): Type-1 default subs registered post-ac
     // post above had no thread, so no extra subscribes beyond the
     // Type-1 default set.
     expect(new Set(cap.tokens)).toEqual(
-      new Set(['mentions', 'new-topics:myproject', 'thread:myproject/general']),
+      new Set(['new-topics:myproject', 'thread:myproject/general']),
     )
     expect(logs).toEqual([])
   } finally {

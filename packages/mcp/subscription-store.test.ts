@@ -36,7 +36,6 @@ const boundStore = (dir: string, id: SessionId): SubscriptionStore =>
     }),
   )
 
-const mentions: SubscribeIntent = { kind: 'mentions' }
 const channel = (name: string): SubscribeIntent => ({
   kind: 'channel',
   channelName: decodeChannelNameSync(name),
@@ -76,7 +75,7 @@ describe('createFileSubscriptionStore', () => {
     try {
       const store = boundStore(tmp.path, sid(SID_A))
       const intents = [
-        mentions,
+        newTopics('general'),
         channel('commy'),
         thread('commy', 'sub-restore-topic'),
         newTopics('general'),
@@ -94,9 +93,12 @@ describe('createFileSubscriptionStore', () => {
     try {
       const nested = join(tmp.path, 'nested', 'subscriptions')
       const store = boundStore(nested, sid(SID_A))
-      await Effect.runPromise(store.write([mentions, channel('commy')]))
+      await Effect.runPromise(store.write([newTopics('general'), channel('commy')]))
       const written = JSON.parse(readFileSync(join(nested, `${SID_A}.json`), 'utf8'))
-      expect(written).toEqual([{ kind: 'mentions' }, { kind: 'channel', channelName: 'commy' }])
+      expect(written).toEqual([
+        { kind: 'new-topics-in-channel', channelName: 'general' },
+        { kind: 'channel', channelName: 'commy' },
+      ])
     } finally {
       tmp.cleanup()
     }
@@ -106,10 +108,10 @@ describe('createFileSubscriptionStore', () => {
     const tmp = buildTmpDir()
     try {
       const store = boundStore(tmp.path, sid(SID_A))
-      await Effect.runPromise(store.write([mentions, channel('commy')]))
-      await Effect.runPromise(store.write([mentions]))
+      await Effect.runPromise(store.write([newTopics('general'), channel('commy')]))
+      await Effect.runPromise(store.write([newTopics('general')]))
       const result = await Effect.runPromise(store.read())
-      expect(result).toEqual(Option.some([mentions]))
+      expect(result).toEqual(Option.some([newTopics('general')]))
     } finally {
       tmp.cleanup()
     }
@@ -145,7 +147,7 @@ describe('createFileSubscriptionStore', () => {
     const tmp = buildTmpDir()
     try {
       const store = boundStore(tmp.path, sid(SID_A))
-      await Effect.runPromise(store.write([mentions]))
+      await Effect.runPromise(store.write([newTopics('general')]))
       const entries = readdirSync(tmp.path)
       expect(entries).toEqual([`${SID_A}.json`])
     } finally {
@@ -159,7 +161,7 @@ describe('createFileSubscriptionStore', () => {
       // The method takes no id: the only source for the path key is the
       // captured deferred, so a write lands under exactly that id's file.
       const store = boundStore(tmp.path, sid(SID_A))
-      await Effect.runPromise(store.write([mentions]))
+      await Effect.runPromise(store.write([newTopics('general')]))
       expect(readdirSync(tmp.path)).toEqual([`${SID_A}.json`])
     } finally {
       tmp.cleanup()
@@ -178,10 +180,13 @@ describe('createFileSubscriptionStore', () => {
         fs,
         session,
       })
-      writeFileSync(join(tmp.path, `${SID_A}.json`), JSON.stringify([{ kind: 'mentions' }]))
+      writeFileSync(
+        join(tmp.path, `${SID_A}.json`),
+        JSON.stringify([{ kind: 'new-topics-in-channel', channelName: 'general' }]),
+      )
       const pending = Effect.runPromise(store.read())
       Effect.runSync(Deferred.succeed(session, sid(SID_A)))
-      expect(await pending).toEqual(Option.some([mentions]))
+      expect(await pending).toEqual(Option.some([newTopics('general')]))
     } finally {
       tmp.cleanup()
     }
@@ -211,14 +216,34 @@ describe('createFileSubscriptionStore', () => {
     }
   })
 
+  // comms-n1my. A set persisted before mentions became implicit still holds a
+  // `mentions` entry. Rejecting it would fail the whole restore over one dead
+  // intent and leave a resuming seat with none of its real narrows — so it
+  // decodes and is dropped, matching the retired token's treatment in
+  // COMMY_SUBSCRIBE.
+  test('read drops a persisted retired mentions intent and keeps the rest', async () => {
+    const tmp = buildTmpDir()
+    try {
+      const store = boundStore(tmp.path, sid(SID_A))
+      writeFileSync(
+        join(tmp.path, `${SID_A}.json`),
+        JSON.stringify([{ kind: 'mentions' }, { kind: 'channel', channelName: 'commy' }]),
+      )
+      const result = await Effect.runPromise(store.read())
+      expect(result).toEqual(Option.some([channel('commy')]))
+    } finally {
+      tmp.cleanup()
+    }
+  })
+
   test('write overwrites a corrupt prior file', async () => {
     const tmp = buildTmpDir()
     try {
       const store = boundStore(tmp.path, sid(SID_A))
       writeFileSync(join(tmp.path, `${SID_A}.json`), 'not json at all')
-      await Effect.runPromise(store.write([mentions]))
+      await Effect.runPromise(store.write([newTopics('general')]))
       const result = await Effect.runPromise(store.read())
-      expect(result).toEqual(Option.some([mentions]))
+      expect(result).toEqual(Option.some([newTopics('general')]))
     } finally {
       tmp.cleanup()
     }

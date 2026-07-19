@@ -828,14 +828,14 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     {
       name: 'subscribe',
       description:
-        'Subscribe the bot to a substrate target. Token syntax: "channel:<name>", "thread:<channel>/<thread>", "new-topics:<channel>", or "mentions".',
+        'Subscribe the bot to a substrate target. Token syntax: "channel:<name>", "thread:<channel>/<thread>", or "new-topics:<channel>". Mentions of the bot always arrive and need no subscription.',
       inputSchema: {
         type: 'object',
         properties: {
           target: {
             type: 'string',
             description:
-              'Subscribe-target token: "channel:<name>", "thread:<channel>/<thread>", "new-topics:<channel>", or "mentions"',
+              'Subscribe-target token: "channel:<name>", "thread:<channel>/<thread>", or "new-topics:<channel>"',
           },
           session_id: sessionIdField,
           cwd: cwdField,
@@ -865,8 +865,16 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             // narrow tells the event pump to tee matching events through;
             // the substrate-side call subscribes the minter to streams the
             // boot-time reconciler didn't have a chance to cover.
-            narrowSet.add(intent)
-            yield* adapter.inbox.subscribe(intentToTarget(intent))
+            // `None` is the retired `mentions` token: valid, but it names no
+            // narrow, so there is nothing to register on either sink. Mentions
+            // arrive regardless.
+            yield* Option.match(intent, {
+              onNone: () => Effect.void,
+              onSome: (i) =>
+                Effect.sync(() => narrowSet.add(i)).pipe(
+                  Effect.andThen(adapter.inbox.subscribe(intentToTarget(i))),
+                ),
+            })
             // Persist is id-blind (this call carries no session_id): it polls
             // the shared deferred internally and writes only when the id is
             // already known, so it fires here without an id argument.
@@ -887,7 +895,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           target: {
             type: 'string',
             description:
-              'Subscribe-target token: "channel:<name>", "thread:<channel>/<thread>", "new-topics:<channel>", or "mentions"',
+              'Subscribe-target token: "channel:<name>", "thread:<channel>/<thread>", or "new-topics:<channel>"',
           },
           session_id: sessionIdField,
           cwd: cwdField,
@@ -907,8 +915,15 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             if (sessionId !== undefined && deps.ensureSessionSubscriptions !== undefined) {
               yield* deps.ensureSessionSubscriptions(sessionId, yield* projectForArgs(args))
             }
-            narrowSet.remove(intent)
-            yield* adapter.inbox.unsubscribe(intentToTarget(intent))
+            // `None` is the retired `mentions` token — and a bot cannot stop
+            // receiving its own mentions in any case.
+            yield* Option.match(intent, {
+              onNone: () => Effect.void,
+              onSome: (i) =>
+                Effect.sync(() => narrowSet.remove(i)).pipe(
+                  Effect.andThen(adapter.inbox.unsubscribe(intentToTarget(i))),
+                ),
+            })
             // Persist is id-blind (see subscribe): it polls the shared deferred
             // internally and writes only when the id is already known.
             if (deps.persistSessionSubscriptions !== undefined) {

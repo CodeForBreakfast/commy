@@ -837,9 +837,8 @@ test('subscribeFromEnv subscribes to each comma-separated token in order', () =>
           channel: decodeChannelNameSync('home'),
           thread: decodeThreadNameSync('payments'),
         },
-        'mentions',
       ])
-      expect(narrowSet.size()).toBe(3)
+      expect(narrowSet.size()).toBe(2)
     }),
   ))
 
@@ -934,7 +933,6 @@ test('subscribeFromEnv returns parsed intents in token order (for downstream cat
           channelName: decodeChannelNameSync('home'),
           threadName: decodeThreadNameSync('payments'),
         },
-        { kind: 'mentions' },
       ])
     }),
   ))

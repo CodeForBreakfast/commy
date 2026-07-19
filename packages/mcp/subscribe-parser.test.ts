@@ -1,23 +1,32 @@
 import { expect, test } from 'bun:test'
 import { decodeChannelNameSync, decodeThreadNameSync } from '@commy/core/ports'
-import { Effect } from 'effect'
+import { Effect, Option } from 'effect'
+import type { SubscribeIntent } from './subscribe-parser.ts'
 import { intentToTarget, parseSubscribeTarget, SubscribeTokenError } from './subscribe-parser.ts'
 
 const rejection = (token: string): SubscribeTokenError =>
   Effect.runSync(Effect.flip(parseSubscribeTarget(token)))
 
+// Every token below names a narrow, so `None` here is a test failure rather
+// than an expected outcome — the one token that yields `None` has its own test.
+const intentOf = (token: string): SubscribeIntent =>
+  Option.getOrThrowWith(
+    Effect.runSync(parseSubscribeTarget(token)),
+    () => new Error(`expected ${token} to name a narrow`),
+  )
+
 test('parseSubscribeTarget accepts channel:<name>', () => {
-  const intent = Effect.runSync(parseSubscribeTarget('channel:home'))
+  const intent = intentOf('channel:home')
   expect(intent).toEqual({ kind: 'channel', channelName: decodeChannelNameSync('home') })
 })
 
 test('parseSubscribeTarget accepts channel:<name> with hyphens', () => {
-  const intent = Effect.runSync(parseSubscribeTarget('channel:llm-feed'))
+  const intent = intentOf('channel:llm-feed')
   expect(intent).toEqual({ kind: 'channel', channelName: decodeChannelNameSync('llm-feed') })
 })
 
 test('parseSubscribeTarget accepts thread:<channel>/<thread>', () => {
-  const intent = Effect.runSync(parseSubscribeTarget('thread:home/payments'))
+  const intent = intentOf('thread:home/payments')
   expect(intent).toEqual({
     kind: 'thread',
     channelName: decodeChannelNameSync('home'),
@@ -25,9 +34,12 @@ test('parseSubscribeTarget accepts thread:<channel>/<thread>', () => {
   })
 })
 
-test('parseSubscribeTarget accepts mentions', () => {
-  const intent = Effect.runSync(parseSubscribeTarget('mentions'))
-  expect(intent).toEqual({ kind: 'mentions' })
+// Accepted-and-ignored, not rejected: the keyword is retired, but a config
+// written before it was retired must still boot. `None` means "valid, and it
+// names no narrow" — mentions arrive unconditionally, so there is nothing to
+// register on either sink.
+test('parseSubscribeTarget accepts the retired mentions token and yields no intent', () => {
+  expect(Effect.runSync(parseSubscribeTarget('mentions'))).toEqual(Option.none())
 })
 
 test('parseSubscribeTarget rejects empty token', () => {
@@ -73,7 +85,7 @@ test('SubscribeTokenError includes the offending token in its message', () => {
 })
 
 test('parseSubscribeTarget accepts new-topics:<channel>', () => {
-  const intent = Effect.runSync(parseSubscribeTarget('new-topics:home'))
+  const intent = intentOf('new-topics:home')
   expect(intent).toEqual({
     kind: 'new-topics-in-channel',
     channelName: decodeChannelNameSync('home'),
@@ -81,7 +93,7 @@ test('parseSubscribeTarget accepts new-topics:<channel>', () => {
 })
 
 test('parseSubscribeTarget accepts new-topics:<channel> with hyphens', () => {
-  const intent = Effect.runSync(parseSubscribeTarget('new-topics:llm-feed'))
+  const intent = intentOf('new-topics:llm-feed')
   expect(intent).toEqual({
     kind: 'new-topics-in-channel',
     channelName: decodeChannelNameSync('llm-feed'),
@@ -93,7 +105,7 @@ test('parseSubscribeTarget rejects new-topics: with empty channel name', () => {
 })
 
 test('intentToTarget maps new-topics intent to port-shaped NewTopicsInChannelSubscription', () => {
-  const intent = Effect.runSync(parseSubscribeTarget('new-topics:home'))
+  const intent = intentOf('new-topics:home')
   const target = intentToTarget(intent)
   expect(target).toEqual({
     kind: 'new-topics-in-channel',

@@ -3,7 +3,17 @@ import { join } from 'node:path'
 import { ChannelNameSchema, ThreadNameSchema } from '@commy/core/ports'
 import { FileSystem } from '@effect/platform'
 import type { PlatformError } from '@effect/platform/Error'
-import { Config, Context, Deferred, Effect, Layer, Option, type ParseResult, Schema } from 'effect'
+import {
+  Array as Arr,
+  Config,
+  Context,
+  Deferred,
+  Effect,
+  Layer,
+  Option,
+  type ParseResult,
+  Schema,
+} from 'effect'
 import { SessionId, type SessionIdValue } from './session-id.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 
@@ -78,7 +88,6 @@ export interface FileSubscriptionStoreDeps {
  * the persisted strings straight back into the in-memory intent type.
  */
 const SubscribeIntentSchema = Schema.Union(
-  Schema.Struct({ kind: Schema.Literal('mentions') }),
   Schema.Struct({ kind: Schema.Literal('channel'), channelName: ChannelNameSchema }),
   Schema.Struct({
     kind: Schema.Literal('thread'),
@@ -88,8 +97,26 @@ const SubscribeIntentSchema = Schema.Union(
   Schema.Struct({ kind: Schema.Literal('new-topics-in-channel'), channelName: ChannelNameSchema }),
 )
 
-const SubscriptionsFileSchema = Schema.parseJson(Schema.Array(SubscribeIntentSchema))
-const decodeSubscriptionsFile = Schema.decodeUnknown(SubscriptionsFileSchema)
+/**
+ * The retired `mentions` intent, still decodable so a set persisted before
+ * mentions became implicit does not fail its whole restore on one dead entry.
+ * It carries no narrow, so {@link decodeSubscriptionsFile} drops it.
+ */
+const RetiredMentionsSchema = Schema.Struct({ kind: Schema.Literal('mentions') })
+
+const PersistedIntentSchema = Schema.Union(SubscribeIntentSchema, RetiredMentionsSchema)
+
+const isRetired = (
+  intent: Schema.Schema.Type<typeof PersistedIntentSchema>,
+): intent is Schema.Schema.Type<typeof RetiredMentionsSchema> => intent.kind === 'mentions'
+
+const SubscriptionsFileSchema = Schema.parseJson(Schema.Array(PersistedIntentSchema))
+const decodeSubscriptionsFile = (
+  raw: string,
+): Effect.Effect<ReadonlyArray<SubscribeIntent>, ParseResult.ParseError> =>
+  Schema.decodeUnknown(SubscriptionsFileSchema)(raw).pipe(
+    Effect.map(Arr.filter((intent) => !isRetired(intent))),
+  )
 
 const FILENAME_SAFE = /[^a-zA-Z0-9._-]/g
 

@@ -120,8 +120,6 @@ const threadIntent = (channel: string, thread: string): SubscribeIntent => ({
   threadName: decodeThreadNameSync(thread),
 })
 
-const mentionsIntent = (): SubscribeIntent => ({ kind: 'mentions' })
-
 const newTopicsIntent = (channel: string): SubscribeIntent => ({
   kind: 'new-topics-in-channel',
   channelName: decodeChannelNameSync(channel),
@@ -134,6 +132,22 @@ test('empty narrow set matches nothing', () => {
   expect(set.size()).toBe(0)
   expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(false)
   expect(set.matches(buildReactionAdded('home'), noBot)).toBe(false)
+})
+
+// comms-n1my. The one exception to "empty narrow → nothing delivered", and the
+// cell that had no coverage: a session outside a git repo resolves no project
+// slug, so neither default set gives it an intent and its narrow set stays
+// empty for its whole life. Mentions are its only inbox, so they cannot be
+// gated on set membership — a bot always receives its own.
+test('empty narrow set still matches a mention of the bound bot', () => {
+  const set = createNarrowSet()
+  const bot = buildIdentity('bot:me', 'me')
+  const other = buildIdentity('user:other', 'other')
+  expect(set.size()).toBe(0)
+  expect(set.matches(buildMessagePosted('home', undefined, [bot]), bot.id)).toBe(true)
+  expect(set.matches(buildMentionReceived('home', [bot]), bot.id)).toBe(true)
+  // Still nothing else: the widening is for the bound identity alone.
+  expect(set.matches(buildMessagePosted('home', undefined, [other]), bot.id)).toBe(false)
 })
 
 test('channel narrow matches message-posted on that channel', () => {
@@ -180,34 +194,30 @@ test('thread narrow matches reactions on a message in that thread', () => {
   expect(set.matches(buildReactionAdded('home', 'other'), noBot)).toBe(false)
 })
 
-test('mentions narrow matches message-posted only when bot is among mentions', () => {
+test('a mention matches message-posted only when the bot is among the mentions', () => {
   const set = createNarrowSet()
-  set.add(mentionsIntent())
   const bot = buildIdentity('bot:me', 'me')
   const other = buildIdentity('user:other', 'other')
   expect(set.matches(buildMessagePosted('home', undefined, [bot]), bot.id)).toBe(true)
   expect(set.matches(buildMessagePosted('home', undefined, [other]), bot.id)).toBe(false)
 })
 
-test('mentions narrow does not match pre-acquire (no bot identity)', () => {
+test('a mention does not match pre-acquire (no bot identity)', () => {
   const set = createNarrowSet()
-  set.add(mentionsIntent())
   const bot = buildIdentity('bot:me', 'me')
   expect(set.matches(buildMessagePosted('home', undefined, [bot]), noBot)).toBe(false)
 })
 
-test('mentions narrow matches mention-received events whenever bot is in mentions', () => {
+test('a mention matches mention-received events whenever the bot is in mentions', () => {
   const set = createNarrowSet()
-  set.add(mentionsIntent())
   const bot = buildIdentity('bot:me', 'me')
   expect(set.matches(buildMentionReceived('home', [bot]), bot.id)).toBe(true)
 })
 
-test('combined channel + thread + mentions narrows widen the match window', () => {
+test('combined channel + thread narrows widen the match window alongside mentions', () => {
   const set = createNarrowSet()
   set.add(channelIntent('home'))
   set.add(threadIntent('llm-feed', 'paper-2026'))
-  set.add(mentionsIntent())
   const bot = buildIdentity('bot:me', 'me')
   expect(set.matches(buildMessagePosted('home', undefined), bot.id)).toBe(true)
   expect(set.matches(buildMessagePosted('llm-feed', 'paper-2026'), bot.id)).toBe(true)
@@ -299,11 +309,16 @@ test('new-topics narrow does not match reactions on the channel', () => {
   expect(set.matches(buildReactionRemoved('home', 'fresh-topic'), noBot)).toBe(false)
 })
 
-test('new-topics narrow does not match mention-received on the channel', () => {
+// The new-topics narrow is first-message-per-topic and says nothing about
+// mention-received; a mention of someone else on that channel must not ride in
+// on it. (A mention of the BOUND bot does match — unconditionally, and not by
+// way of this narrow.)
+test('new-topics narrow does not match mention-received for another identity', () => {
   const set = createNarrowSet()
   set.add(newTopicsIntent('home'))
   const bot = buildIdentity('bot:me', 'me')
-  expect(set.matches(buildMentionReceived('home', [bot]), bot.id)).toBe(false)
+  const other = buildIdentity('user:other', 'other')
+  expect(set.matches(buildMentionReceived('home', [other]), bot.id)).toBe(false)
 })
 
 test('new-topics narrow coexists with channel narrow as a distinct entry', () => {
@@ -333,7 +348,6 @@ test('intents() on an empty set returns no intents', () => {
 test('intents() returns every added intent, reconstructing the new-topics-in-channel kind', () => {
   const set = createNarrowSet()
   const added = [
-    mentionsIntent(),
     channelIntent('home'),
     threadIntent('home', 'payments'),
     newTopicsIntent('general'),
@@ -345,9 +359,9 @@ test('intents() returns every added intent, reconstructing the new-topics-in-cha
 test('intents() excludes a removed intent', () => {
   const set = createNarrowSet()
   set.add(channelIntent('home'))
-  set.add(mentionsIntent())
+  set.add(newTopicsIntent('general'))
   set.remove(channelIntent('home'))
-  expect(set.intents()).toEqual([mentionsIntent()])
+  expect(set.intents()).toEqual([newTopicsIntent('general')])
 })
 
 test('intents() does not leak the seen-topics ledger after a new-topics match', () => {
@@ -359,8 +373,10 @@ test('intents() does not leak the seen-topics ledger after a new-topics match', 
 
 test('load(Some) sets the base on an empty set', () => {
   const set = createNarrowSet()
-  set.load(Option.some([channelIntent('home'), mentionsIntent()]))
-  expect(sortIntents(set.intents())).toEqual(sortIntents([channelIntent('home'), mentionsIntent()]))
+  set.load(Option.some([channelIntent('home'), newTopicsIntent('general')]))
+  expect(sortIntents(set.intents())).toEqual(
+    sortIntents([channelIntent('home'), newTopicsIntent('general')]),
+  )
   expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(true)
 })
 
@@ -376,7 +392,7 @@ test('load(Some) replaces the prior base — the old set no longer matches', () 
 test('load(Some([])) drops every narrow — matches nothing', () => {
   const set = createNarrowSet()
   set.add(channelIntent('home'))
-  set.add(mentionsIntent())
+  set.add(newTopicsIntent('general'))
   set.load(Option.some([]))
   expect(set.intents()).toEqual([])
   expect(set.size()).toBe(0)
@@ -407,8 +423,8 @@ test('a buffered unsubscribe of a base member is applied after the base loads', 
   set.beginBuffering()
   // The seat unsubscribes a sub the persisted set still holds, before restore ran.
   set.remove(channelIntent('home'))
-  set.load(Option.some([channelIntent('home'), mentionsIntent()]))
-  expect(set.intents()).toEqual([mentionsIntent()])
+  set.load(Option.some([channelIntent('home'), newTopicsIntent('general')]))
+  expect(set.intents()).toEqual([newTopicsIntent('general')])
   expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(false)
 })
 

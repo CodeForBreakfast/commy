@@ -529,7 +529,6 @@ effectTest(
       yield* seedSubscribeOk(stub)
       yield* seedRegister(stub)
       yield* adapter.inbox.subscribe(homeChannel.name)
-      yield* adapter.inbox.subscribe('mentions')
       yield* stub.respondSequence('GET', '/api/v1/events', [
         {
           body: {

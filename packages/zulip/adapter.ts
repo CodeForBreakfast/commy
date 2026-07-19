@@ -1072,8 +1072,7 @@ export const zulipAdapter = (
             ),
     }
 
-    const channelOf = (target: SubscriptionTarget): ChannelName | undefined => {
-      if (target === 'mentions') return undefined
+    const channelOf = (target: SubscriptionTarget): ChannelName => {
       if (Predicate.hasProperty(target, 'kind')) return target.channel
       if (Predicate.hasProperty(target, 'thread')) return target.channel
       return target
@@ -1663,13 +1662,7 @@ export const zulipAdapter = (
     const inbox: MessageInbox = {
       subscribe: (target) =>
         Effect.suspend(() => {
-          // Mentions are implicit: a bound bot always receives its own, so
-          // the target carries no state. It still registers the queue, so a
-          // seat whose only subscribe is `mentions` has an inbox by the time
-          // subscribe() resolves.
-          if (target === 'mentions') return ensureQueueRegistered()
           const channel = channelOf(target)
-          if (channel === undefined) return ensureQueueRegistered()
           // Record the narrow first, snapshotting whether the channel was
           // already listened to under any narrow — that decides whether the
           // remote /users/me/subscriptions call is needed.
@@ -1704,11 +1697,7 @@ export const zulipAdapter = (
         }).pipe(Effect.mapError((cause) => new InboxError({ operation: 'subscribe', cause }))),
       unsubscribe: (target) =>
         Effect.suspend(() => {
-          // A bot cannot stop receiving its own mentions — there is no state
-          // to clear and nothing to tell the realm.
-          if (target === 'mentions') return Effect.void
           const channel = channelOf(target)
-          if (channel === undefined) return Effect.void
           // Drop the narrow, snapshotting whether the channel is still
           // listened to afterward — if so, the minter stays subscribed.
           return SynchronizedRef.modify(inboxRef, (state) => {

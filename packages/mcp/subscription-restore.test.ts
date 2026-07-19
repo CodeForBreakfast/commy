@@ -7,7 +7,10 @@ import type { SubscribeIntent } from './subscribe-parser.ts'
 import { persistSubscriptions, seedDefaultsIfFresh } from './subscription-restore.ts'
 import type { SubscriptionStore } from './subscription-store.ts'
 
-const mentions: SubscribeIntent = { kind: 'mentions' }
+const newTopics = (name: string): SubscribeIntent => ({
+  kind: 'new-topics-in-channel',
+  channelName: decodeChannelNameSync(name),
+})
 const channel = (name: string): SubscribeIntent => ({
   kind: 'channel',
   channelName: decodeChannelNameSync(name),
@@ -50,7 +53,7 @@ describe('seedDefaultsIfFresh', () => {
       seedDefaultsIfFresh(
         {
           subscriptionStore: stubStore(() =>
-            Effect.succeed(Option.some([mentions, channel('commy')])),
+            Effect.succeed(Option.some([newTopics('general'), channel('commy')])),
           ),
           registerDefaults: () =>
             Effect.sync(() => {
@@ -84,7 +87,7 @@ describe('seedDefaultsIfFresh', () => {
 describe('persistSubscriptions', () => {
   test('writes the current narrow-set snapshot to the session-bound store', async () => {
     const narrowSet = createNarrowSet()
-    narrowSet.add(mentions)
+    narrowSet.add(newTopics('general'))
     narrowSet.add(channel('commy'))
     const written: ReadonlyArray<SubscribeIntent>[] = []
     const store: Pick<SubscriptionStore, 'write'> = {
@@ -92,6 +95,8 @@ describe('persistSubscriptions', () => {
     }
     await Effect.runPromise(persistSubscriptions(store, narrowSet))
     expect(written.length).toBe(1)
-    expect(sortIntents(written[0] ?? [])).toEqual(sortIntents([mentions, channel('commy')]))
+    expect(sortIntents(written[0] ?? [])).toEqual(
+      sortIntents([newTopics('general'), channel('commy')]),
+    )
   })
 })

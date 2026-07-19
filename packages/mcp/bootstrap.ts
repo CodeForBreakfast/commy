@@ -11,6 +11,7 @@ import type {
 import { apiKeySchema, botEmailSchema, realmUrlSchema } from '@commy/zulip/http'
 import { Command, type CommandExecutor, type HttpClient } from '@effect/platform'
 import {
+  Array as Arr,
   Config,
   ConfigError,
   Context,
@@ -683,10 +684,21 @@ export const subscribeFromEnv = (
   parsed: ParsedEnv,
 ): Effect.Effect<ReadonlyArray<SubscribeIntent>, SubscribeTokenError | InboxError> => {
   if (parsed.subscribe === undefined) return Effect.succeed([])
+  // A token that parses to `None` names no narrow — the retired `mentions`
+  // keyword, kept parseable so a config written before it was retired still
+  // boots. It registers on neither sink and contributes no intent.
   return Effect.forEach(parsed.subscribe.split(','), (raw) =>
     parseSubscribeTarget(raw.trim()).pipe(
-      Effect.tap((intent) => Effect.sync(() => narrowSet.add(intent))),
-      Effect.flatMap((intent) => inbox.subscribe(intentToTarget(intent)).pipe(Effect.as(intent))),
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.succeedNone,
+          onSome: (intent) =>
+            Effect.sync(() => narrowSet.add(intent)).pipe(
+              Effect.andThen(inbox.subscribe(intentToTarget(intent))),
+              Effect.as(Option.some(intent)),
+            ),
+        }),
+      ),
     ),
-  )
+  ).pipe(Effect.map(Arr.getSomes))
 }
