@@ -39,6 +39,7 @@ import {
   Duration,
   Effect,
   Either,
+  Equal,
   Option,
   type ParseResult,
   Ref,
@@ -147,8 +148,35 @@ export interface EventsConfig {
    * When `'mentions'`, the events queue is registered with a
    * narrow that only matches messages mentioning the bot. Otherwise
    * all messages visible to the bot's subscriptions are surfaced.
+   *
+   * The producer's own fallback, standing for the whole life of the
+   * stream. A consumer that owns a registration supplies
+   * `currentRegistration` instead and this is never consulted.
    */
   readonly mode: 'all' | 'mentions'
+  /**
+   * Live read of the owning inbox's queue registration, consulted at the
+   * top of every unfold step.
+   *
+   * A mode flip (`mentions` → `all`, when the first channel subscribe
+   * lands on a mentions-only inbox) registers a fresh queue against the
+   * wider narrow. Without this read the running producer never learns of
+   * it: it goes on polling the queue it started with, on the narrow it
+   * started with, for the rest of the process — so every message matching
+   * only the new narrow is invisible. Re-reading here lets the next poll
+   * adopt the new queue by itself.
+   *
+   * Adoption is on *change*, not on difference. The unfold carries the
+   * queue id it last observed here, and only a registration that differs
+   * from that one displaces the queue the producer is polling. A plain
+   * "differs from mine" test would clobber a resumed persisted queue with
+   * the register-time one on the very first poll, since `initialQueue`
+   * deliberately prefers the persisted queue over the registration.
+   *
+   * Omit for a standalone producer with no inbox behind it: `mode` and
+   * `initialQueue` then hold for the life of the stream, as before.
+   */
+  readonly currentRegistration?: Effect.Effect<Option.Option<QueueRegistration>>
   /**
    * Identity of the bot bound to this inbox. When provided,
    * `mention-received` is synthesised whenever the bound identity
@@ -482,6 +510,15 @@ export interface QueueState {
 }
 
 /**
+ * A registered events queue together with the narrow it was registered
+ * against — an inbox's record of which queue is currently the live one.
+ */
+export interface QueueRegistration {
+  readonly queue: QueueState
+  readonly mode: 'all' | 'mentions'
+}
+
+/**
  * Zulip's server-side ceiling on `idle_queue_timeout` (`MAX_QUEUE_TIMEOUT_SECS`
  * — 7 days). A requested timeout is clamped to this at the config edge, so the
  * value {@link registerQueue} sends is already in range.
@@ -685,7 +722,19 @@ const processSingleEvent = (
   return Effect.succeed([])
 }
 
-type StepResult = readonly [ReadonlyArray<InboundEvent>, QueueState | undefined]
+/**
+ * The unfold's carried state. `queue` is the queue this producer is
+ * actually polling; `observedRegistrationQueueId` is the id the owning
+ * inbox's registration held when it was last consulted, which is what
+ * turns "the registration changed" into a decidable question — see
+ * {@link EventsConfig.currentRegistration}.
+ */
+interface ProducerState {
+  readonly queue: QueueState | undefined
+  readonly observedRegistrationQueueId: Option.Option<string>
+}
+
+type StepResult = readonly [ReadonlyArray<InboundEvent>, ProducerState]
 
 /**
  * Stream-shaped Zulip events producer. Each step runs the
@@ -796,10 +845,27 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
         ),
       )
 
-      const registerFreshQueue: Effect.Effect<QueueState, ZulipApiError | ParseResult.ParseError> =
-        registerQueue(config.http, config.mode, config.queueIdleTimeoutSecs).pipe(
+      // The narrow a self-registered queue is cut against follows the inbox's
+      // current mode, not the mode this producer was constructed with — a
+      // BAD_EVENT_QUEUE_ID that lands after a flip must re-register wide.
+      const registerFreshQueue = (
+        mode: 'all' | 'mentions',
+      ): Effect.Effect<QueueState, ZulipApiError | ParseResult.ParseError> =>
+        registerQueue(config.http, mode, config.queueIdleTimeoutSecs).pipe(
           Effect.tap((q) => config.onQueueRegister?.(q) ?? Effect.void),
         )
+
+      const readRegistration: Effect.Effect<Option.Option<QueueRegistration>> =
+        config.currentRegistration ?? Effect.succeedNone
+
+      const currentNarrowMode: Effect.Effect<'all' | 'mentions'> = readRegistration.pipe(
+        Effect.map(
+          Option.match({
+            onNone: () => config.mode,
+            onSome: (r) => r.mode,
+          }),
+        ),
+      )
 
       /**
        * Recovery from an expired queue spans two collections: the replay
@@ -814,13 +880,20 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
        * is the trade the snapshot's lower bound already makes (`timestamp >=
        * since`, inclusive), and the pump's dedup absorbs the duplicate.
        */
-      const handleBadQueue: Effect.Effect<StepResult, ZulipApiError | ParseResult.ParseError> =
+      const handleBadQueue = (
+        state: ProducerState,
+      ): Effect.Effect<StepResult, ZulipApiError | ParseResult.ParseError> =>
         Effect.gen(function* () {
           yield* reportResume(false)
           const since = yield* watermark.get()
-          const freshQueue = yield* registerFreshQueue
+          // The registration the inbox holds still names the queue that just
+          // died, so this replaces the polled queue but leaves the observed
+          // registration id alone — a later genuine flip must still register
+          // as a change.
+          const freshQueue = yield* registerFreshQueue(yield* currentNarrowMode)
+          const next: ProducerState = { ...state, queue: freshQueue }
           if (config.replay === undefined || Option.isNone(since)) {
-            return [[], freshQueue] as const
+            return [[], next] as const
           }
           const gapEither = yield* Effect.either(config.replay(since.value))
           if (Either.isLeft(gapEither)) {
@@ -828,16 +901,35 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
             yield* Effect.logInfo(
               `commy zulip events: gap-replay failed after BAD_EVENT_QUEUE_ID (${err._tag}): ${err.message}`,
             )
-            return [[], freshQueue] as const
+            return [[], next] as const
           }
-          return [markReplayed(gapEither.right), freshQueue] as const
+          return [markReplayed(gapEither.right), next] as const
         })
 
       const step = (
-        queue: QueueState | undefined,
+        state: ProducerState,
       ): Effect.Effect<StepResult, ZulipApiError | ParseResult.ParseError> =>
         Effect.gen(function* () {
-          const currentQueue: QueueState = queue ?? (yield* registerFreshQueue)
+          const registration = yield* readRegistration
+          const registrationQueueId = Option.map(registration, (r) => r.queue.queueId)
+          // Adopt only what the inbox has re-registered *since we last looked*.
+          // Testing "differs from the queue I'm polling" instead would abandon a
+          // resumed persisted queue on the very first poll, because
+          // `initialQueue` deliberately prefers the persisted queue over the
+          // register-time one — they differ by design, and that difference is
+          // not a flip. Do not simplify this back to a difference test.
+          const observed: ProducerState = Option.match(registration, {
+            onNone: () => state,
+            onSome: (r) =>
+              Equal.equals(registrationQueueId, state.observedRegistrationQueueId)
+                ? state
+                : {
+                    queue: r.queue,
+                    observedRegistrationQueueId: registrationQueueId,
+                  },
+          })
+          const currentQueue: QueueState =
+            observed.queue ?? (yield* registerFreshQueue(yield* currentNarrowMode))
           const res = yield* config.http.get('/events', eventsResponseSchema, {
             queue_id: currentQueue.queueId,
             last_event_id: currentQueue.lastEventId,
@@ -878,7 +970,10 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
           if (config.onQueueAdvance !== undefined && maxId > currentQueue.lastEventId) {
             yield* config.onQueueAdvance(maxId)
           }
-          return [mapped, { queueId: currentQueue.queueId, lastEventId: maxId }] as const
+          return [
+            mapped,
+            { ...observed, queue: { queueId: currentQueue.queueId, lastEventId: maxId } },
+          ] as const
         }).pipe(
           // catchTag covers ALL ZulipApiError; the branches conditionally
           // re-fail with `Effect.fail(e)` so the surviving non-recoverable
@@ -888,14 +983,14 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
           // shape removes the whole class regardless of the runtime filter,
           // letting unhandled errors slip past the type system.
           Effect.catchTag('ZulipApiError', (e) => {
-            if (e.code === 'BAD_EVENT_QUEUE_ID') return handleBadQueue
+            if (e.code === 'BAD_EVENT_QUEUE_ID') return handleBadQueue(state)
             if (e.status === 429) {
               const retryAfter = e.retryAfter ?? 1
               return Effect.logWarning(
                 `commy zulip events: rate-limited on /events (429), backing off ${retryAfter}s`,
               ).pipe(
                 Effect.zipRight(Effect.sleep(Duration.seconds(retryAfter))),
-                Effect.as([[], queue] as StepResult),
+                Effect.as([[], state] as StepResult),
               )
             }
             return Effect.fail(e)
@@ -903,16 +998,14 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
         )
 
       const stepWithRetry = (
-        queue: QueueState | undefined,
-      ): Effect.Effect<
-        Option.Option<readonly [Chunk.Chunk<InboundEvent>, QueueState | undefined]>
-      > =>
-        step(queue).pipe(
+        state: ProducerState,
+      ): Effect.Effect<Option.Option<readonly [Chunk.Chunk<InboundEvent>, ProducerState]>> =>
+        step(state).pipe(
           Effect.tapError(recordTransientFailure),
           Effect.retry(defaultRetrySchedule),
           Effect.tap(([events]) => (events.length > 0 ? recordRecovery : Effect.void)),
-          Effect.map(([events, nextQueue]) =>
-            Option.some([Chunk.fromIterable(events), nextQueue] as const),
+          Effect.map(([events, nextState]) =>
+            Option.some([Chunk.fromIterable(events), nextState] as const),
           ),
           // defaultRetrySchedule never gives up — orDie narrows the type-level
           // E from "ZulipApiError | ParseError" to `never` so the Stream
@@ -921,6 +1014,17 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
           Effect.orDie,
         )
 
-      return Stream.unfoldChunkEffect(config.initialQueue, stepWithRetry)
+      // Seed the observed id from the registration as it stands *now*, so the
+      // registration that was already in place at construction is never
+      // mistaken for a flip — `initialQueue` may legitimately be a resumed
+      // persisted queue that the registration does not name.
+      const initialRegistration = yield* readRegistration
+      return Stream.unfoldChunkEffect(
+        {
+          queue: config.initialQueue,
+          observedRegistrationQueueId: Option.map(initialRegistration, (r) => r.queue.queueId),
+        } satisfies ProducerState,
+        stepWithRetry,
+      )
     }),
   )

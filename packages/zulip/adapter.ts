@@ -1795,6 +1795,13 @@ export const zulipAdapter = (
                     permalinkBase: base,
                     resolveDirectory: buildDirectoryLookup,
                     mode: currentMode(state),
+                    // Live registration read. `subscribe()` re-registers on a
+                    // mode flip; without this the already-running producer
+                    // would never learn of the new queue and would poll the
+                    // pre-flip narrow for the rest of the process.
+                    currentRegistration: SynchronizedRef.get(inboxRef).pipe(
+                      Effect.map((s) => s.registration),
+                    ),
                     messageRefCache,
                     watermarkStore,
                     // Queue-state write half: the timeout on the producer's own
