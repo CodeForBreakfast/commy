@@ -2341,7 +2341,11 @@ effectTest('concurrent inbox.subscribe(mentions) calls register the events queue
   }),
 )
 
-effectTest('inbox.subscribe flipping mentions -> all re-registers the events queue', () =>
+// The queue carries no narrow, so one registration serves every subscription
+// state and a later subscribe reuses it. Re-registering would abandon a live
+// queue (Zulip GCs it by TTL) and lose whatever arrived before the replacement
+// fixed its baseline — for no gain, since both queues would be identical.
+effectTest('inbox.subscribe adding a channel to a mentions inbox reuses the events queue', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedSubscribeOk(stub, 'general')
@@ -2351,7 +2355,7 @@ effectTest('inbox.subscribe flipping mentions -> all re-registers the events que
     const registers = (yield* stub.captured).filter(
       (r) => r.method === 'POST' && r.url.pathname === '/api/v1/register',
     )
-    expect(registers).toHaveLength(2)
+    expect(registers).toHaveLength(1)
   }),
 )
 
@@ -2524,26 +2528,29 @@ effectTest(
     }),
 )
 
-effectTest(
-  'inbox.events register includes narrow=[["is","mentioned"]] when subscribed mentions',
-  () =>
-    Effect.gen(function* () {
-      const stub = yield* makeStubHttpClient
-      // subscribe('mentions') eagerly registers the events queue (the
-      // readiness contract — events() must see anything posted after
-      // subscribe resolves). The narrow assertion lives here so the queue
-      // used by events() is exclusive to mentions.
-      const adapter = yield* buildAdapter(stub)
-      yield* seedUsers(stub, [HERMES])
-      yield* seedRegisterOk(stub, 'queue-1', 0)
-      yield* adapter.inbox.subscribe('mentions')
-      const reqs = yield* stub.captured
-      const reg = reqs.find((r) => r.method === 'POST' && r.url.pathname === '/api/v1/register')
-      if (reg === undefined) throw new Error('expected captured POST /api/v1/register')
-      const params = new URLSearchParams(reg.body)
-      const narrow = JSON.parse(params.get('narrow') ?? 'null') as unknown
-      expect(narrow).toEqual([['is', 'mentioned']])
-    }),
+// comms-n1my. Zulip evaluates a queue narrow against the queue's OWNER, and
+// this queue is owned by the minter — so `is:mentioned` matched the *minter's*
+// mentions and dropped the bound bot's at the server, before any adapter-side
+// check could see them. A mentions-only seat was therefore reading someone
+// else's inbox while looking like it had a working one. The queue goes out
+// wide; per-session narrowing happens above it.
+effectTest('inbox.events register carries no narrow when subscribed mentions', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    // subscribe('mentions') eagerly registers the events queue (the
+    // readiness contract — events() must see anything posted after
+    // subscribe resolves), so the register this asserts on is the one
+    // events() goes on to poll.
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES])
+    yield* seedRegisterOk(stub, 'queue-1', 0)
+    yield* adapter.inbox.subscribe('mentions')
+    const reqs = yield* stub.captured
+    const reg = reqs.find((r) => r.method === 'POST' && r.url.pathname === '/api/v1/register')
+    if (reg === undefined) throw new Error('expected captured POST /api/v1/register')
+    const params = new URLSearchParams(reg.body)
+    expect(params.get('narrow')).toBeNull()
+  }),
 )
 
 // ─── pre-acquire surfaces run on minter creds ────────────────────

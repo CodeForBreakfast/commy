@@ -496,26 +496,15 @@ interface BoundState {
 // seen-topics ledger key on `ChannelName` — the same address the subscription
 // target carries and that inbound messages expose as `ref.channel.name`.
 interface InboxState {
-  readonly mentionsSubscribed: boolean
   readonly subscribedChannels: HashSet.HashSet<ChannelName>
   readonly newTopicsChannels: HashSet.HashSet<ChannelName>
   readonly seenTopicsByChannel: HashMap.HashMap<ChannelName, HashSet.HashSet<ThreadName>>
-  readonly registration: Option.Option<{
-    readonly queue: QueueState
-    readonly mode: 'all' | 'mentions'
-  }>
+  readonly registration: Option.Option<QueueState>
 }
 
 const streamIsListening = (state: InboxState, channelName: ChannelName): boolean =>
   HashSet.has(state.subscribedChannels, channelName) ||
   HashSet.has(state.newTopicsChannels, channelName)
-
-const currentMode = (state: InboxState): 'all' | 'mentions' =>
-  state.mentionsSubscribed &&
-  HashSet.size(state.subscribedChannels) === 0 &&
-  HashSet.size(state.newTopicsChannels) === 0
-    ? 'mentions'
-    : 'all'
 
 // Record (channelName, threadName) in the per-channel seen set, returning
 // whether this is the first observation of the topic and the next state.
@@ -972,10 +961,6 @@ export const zulipAdapter = (
                       userId: minted.userId,
                       http,
                     }
-                    yield* SynchronizedRef.update(inboxRef, (state) => ({
-                      ...state,
-                      mentionsSubscribed: true,
-                    }))
                     return [{ identity: ident, credentials }, Option.some(next)] as const
                   }),
                 ),
@@ -1575,13 +1560,12 @@ export const zulipAdapter = (
       setChannelDescription,
     }
 
-    // The inbox subscription spine — mentions flag, the channel/new-topic
-    // narrow sets, the per-channel seen-topics dedupe, and the currently
-    // registered events-queue identity — as one immutable record behind a
-    // single Ref. subscribe/unsubscribe are Ref.update transitions; reads
-    // (currentMode, streamIsListening, shouldDeliver) snapshot the record.
+    // The inbox subscription spine — the channel/new-topic narrow sets, the
+    // per-channel seen-topics dedupe, and the currently registered
+    // events-queue identity — as one immutable record behind a single Ref.
+    // subscribe/unsubscribe are Ref.update transitions; reads
+    // (streamIsListening, shouldDeliver) snapshot the record.
     const inboxRef = yield* SynchronizedRef.make<InboxState>({
-      mentionsSubscribed: false,
       subscribedChannels: HashSet.empty<ChannelName>(),
       newTopicsChannels: HashSet.empty<ChannelName>(),
       seenTopicsByChannel: HashMap.empty<ChannelName, HashSet.HashSet<ThreadName>>(),
@@ -1606,13 +1590,17 @@ export const zulipAdapter = (
     const realmSettingsHub = yield* PubSub.dropping<RealmSettings>(16)
 
     // Per-event filter. The new-topics-in-channel narrow is the only
-    // narrow that requires adapter-side state (seen topics); every other
-    // narrow is enforced server-side — channel:X via the minter's
-    // /users/me/subscriptions list, `mentions` via the events queue's
-    // `is:mentioned` narrow. We therefore only intercept messages
-    // belonging to a channel that has the new-topics narrow active, and
-    // pass everything else through unchanged (preserves the plumbing
-    // contract: events queue → InboundEvent).
+    // narrow that requires adapter-side state (seen topics); channel:X is
+    // enforced server-side via the minter's /users/me/subscriptions list.
+    // We therefore only intercept messages belonging to a channel that has
+    // the new-topics narrow active, and pass everything else through
+    // unchanged (preserves the plumbing contract: events queue →
+    // InboundEvent).
+    //
+    // Mentions are implicit and unconditional — a bot always receives its
+    // own, and cannot subscribe to or unsubscribe from them. So a message
+    // mentioning the bound identity passes the new-topics narrow on that
+    // ground alone, with nothing to opt into.
     //
     // The seen-topics tick mutates inbox state, so the decision is one
     // atomic Ref.modify: it records the observed topic and computes the
@@ -1636,11 +1624,7 @@ export const zulipAdapter = (
               onSome: (t) => observeNewTopic(state, cname, t.name),
             })
             if (HashSet.has(state.subscribedChannels, cname)) return [true, ticked]
-            if (
-              state.mentionsSubscribed &&
-              me !== undefined &&
-              mentionsIdentity(message.mentions, me.id)
-            ) {
+            if (me !== undefined && mentionsIdentity(message.mentions, me.id)) {
               return [true, ticked]
             }
             return [isFirstOfTopic, ticked]
@@ -1653,9 +1637,9 @@ export const zulipAdapter = (
     // subscribe() resolves, events() observes matching posts from this
     // moment onward" — for Zulip that means the events queue must exist
     // before subscribe() returns, otherwise posts race ahead of the
-    // queue registration and are lost. A mode flip (mentions ↔ all
-    // narrow) abandons the old queue (Zulip GCs by TTL) and registers
-    // afresh so the narrow matches the current subscription state.
+    // queue registration and are lost. The queue carries no narrow, so one
+    // registration serves every subscription state and later subscribes
+    // reuse it.
     //
     // The queue is registered against the minter, not the per-session
     // bot — the inbox is a minter-side surface so lurking
@@ -1667,31 +1651,23 @@ export const zulipAdapter = (
       // current-under-lock, so the `{ ...state }` write-back cannot clobber a
       // concurrent inboxRef mutation — they block on the same lock.
       SynchronizedRef.modifyEffect(inboxRef, (state) => {
-        const mode = currentMode(state)
-        if (Option.exists(state.registration, (r) => r.mode === mode)) {
+        if (Option.isSome(state.registration)) {
           return Effect.succeed([undefined, state] as const)
         }
-        return registerQueue(minterHttp, mode, config.queueIdleTimeoutSecs).pipe(
+        return registerQueue(minterHttp, config.queueIdleTimeoutSecs).pipe(
           Effect.tap((q) => config.onQueueRegister?.(q) ?? Effect.void),
-          Effect.map(
-            (q) =>
-              [
-                undefined,
-                { ...state, registration: Option.some(Data.struct({ queue: q, mode })) },
-              ] as const,
-          ),
+          Effect.map((q) => [undefined, { ...state, registration: Option.some(q) }] as const),
         )
       })
 
     const inbox: MessageInbox = {
       subscribe: (target) =>
         Effect.suspend(() => {
-          if (target === 'mentions') {
-            return SynchronizedRef.update(inboxRef, (state) => ({
-              ...state,
-              mentionsSubscribed: true,
-            })).pipe(Effect.andThen(ensureQueueRegistered()))
-          }
+          // Mentions are implicit: a bound bot always receives its own, so
+          // the target carries no state. It still registers the queue, so a
+          // seat whose only subscribe is `mentions` has an inbox by the time
+          // subscribe() resolves.
+          if (target === 'mentions') return ensureQueueRegistered()
           const channel = channelOf(target)
           if (channel === undefined) return ensureQueueRegistered()
           // Record the narrow first, snapshotting whether the channel was
@@ -1728,12 +1704,9 @@ export const zulipAdapter = (
         }).pipe(Effect.mapError((cause) => new InboxError({ operation: 'subscribe', cause }))),
       unsubscribe: (target) =>
         Effect.suspend(() => {
-          if (target === 'mentions') {
-            return SynchronizedRef.update(inboxRef, (state) => ({
-              ...state,
-              mentionsSubscribed: false,
-            }))
-          }
+          // A bot cannot stop receiving its own mentions — there is no state
+          // to clear and nothing to tell the realm.
+          if (target === 'mentions') return Effect.void
           const channel = channelOf(target)
           if (channel === undefined) return Effect.void
           // Drop the narrow, snapshotting whether the channel is still
@@ -1777,9 +1750,7 @@ export const zulipAdapter = (
             config.resumeQueue?.() ?? Effect.succeedNone,
           ]).pipe(
             Effect.flatMap(([current, state, resumed]) => {
-              const initialQueue = Option.orElse(resumed, () =>
-                Option.map(state.registration, (r) => r.queue),
-              )
+              const initialQueue = Option.orElse(resumed, () => state.registration)
               // Resume-verdict wiring. No persisted resume-state → report
               // 'missed' now so the seat runs its normal boot catch-up; the
               // eager register-time queue below is a fresh register, not a
@@ -1794,11 +1765,13 @@ export const zulipAdapter = (
                     http: minterHttp,
                     permalinkBase: base,
                     resolveDirectory: buildDirectoryLookup,
-                    mode: currentMode(state),
-                    // Live registration read. `subscribe()` re-registers on a
-                    // mode flip; without this the already-running producer
-                    // would never learn of the new queue and would poll the
-                    // pre-flip narrow for the rest of the process.
+                    // Live registration read. A seat that had no queue when
+                    // the producer started registers one on its first
+                    // `subscribe()` — the lazy-acquire path, where the
+                    // acquire-time default narrows land mid-stream. Without
+                    // this the already-running producer would never learn of
+                    // that queue and would poll its own for the rest of the
+                    // process.
                     currentRegistration: SynchronizedRef.get(inboxRef).pipe(
                       Effect.map((s) => s.registration),
                     ),
