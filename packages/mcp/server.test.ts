@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { EventEmitter } from 'node:events'
 import { tmpdir } from 'node:os'
-import { captureLogger, stderrLoggerLayer } from '@commy/core/logging'
+import { captureLogger } from '@commy/core/logging'
 import type {
   AcquiredIdentity,
   Directory,
@@ -103,7 +103,11 @@ const runProgram = (
   adapter: ZulipAdapter,
   params: ProgramParams = {},
 ) => {
-  const loggerLayer = params.loggerLayer ?? stderrLoggerLayer
+  // Default to a discarding capture, not the stderr logger: boot emits real
+  // diagnostics (the applied subscribe set among them) and a test run's output
+  // has to stay pristine, so a test that cares about a log line passes its own
+  // `captureLogger` and asserts on it.
+  const loggerLayer = params.loggerLayer ?? captureLogger([])
   return Effect.runPromiseExit(
     makeProgram({ ...params, loggerLayer }).pipe(
       Effect.provide(
@@ -317,10 +321,16 @@ test('lazy mode still applies COMMY_SUBSCRIBE at boot (pre-acquire subscriptions
     CLAUDE_CODE_SESSION_ID: 'abcdef12-3456-4789-89ab-cdef01234567',
     COMMY_SUBSCRIBE: 'home',
   }
-  await runProgram(env, fake.adapter)
+  const logs: string[] = []
+  await runProgram(env, fake.adapter, { loggerLayer: captureLogger(logs) })
   expect(fake.calls.acquired).toEqual([])
   expect(fake.calls.subscribed).toEqual([decodeChannelNameSync('home')])
   expect(fake.calls.closes.count).toBe(1)
+  // Boot leaves a positive trace of what it applied. An operator who configured
+  // subscriptions and finds no such line — or one that omits their tokens — is
+  // looking straight at the fault, which is the diagnostic a clobbered
+  // COMMY_SUBSCRIBE spent months not having.
+  expect(logs).toEqual(['commy plugin: applied 1 boot-time subscribe target(s): home'])
 })
 
 test('main acquire failure stringifies non-Error rejections', async () => {

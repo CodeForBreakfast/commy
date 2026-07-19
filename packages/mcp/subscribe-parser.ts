@@ -145,3 +145,18 @@ export const intentToTarget = (intent: SubscribeIntent): SubscriptionTarget =>
       }),
     }),
   )
+
+/**
+ * Render an intent back into the `COMMY_SUBSCRIBE` token that produces it —
+ * the exact inverse of {@link parseSubscribeTarget}. Boot logs the applied set
+ * in this vocabulary so an operator can compare the line against what they
+ * configured, character for character, rather than against an internal shape.
+ */
+export const intentToToken = (intent: SubscribeIntent): string =>
+  Match.value(intent).pipe(
+    Match.discriminatorsExhaustive('kind')({
+      channel: ({ channelName }) => channelName as string,
+      'new-topics-in-channel': ({ channelName }) => `${NEW_TOPICS_PREFIX}${channelName}`,
+      thread: ({ channelName, threadName }) => `${channelName}/${threadName}`,
+    }),
+  )

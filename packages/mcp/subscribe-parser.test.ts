@@ -2,7 +2,12 @@ import { expect, test } from 'bun:test'
 import { decodeChannelNameSync, decodeThreadNameSync } from '@commy/core/ports'
 import { Effect } from 'effect'
 import type { SubscribeIntent } from './subscribe-parser.ts'
-import { intentToTarget, parseSubscribeTarget, SubscribeTokenError } from './subscribe-parser.ts'
+import {
+  intentToTarget,
+  intentToToken,
+  parseSubscribeTarget,
+  SubscribeTokenError,
+} from './subscribe-parser.ts'
 
 const rejection = (token: string): SubscribeTokenError =>
   Effect.runSync(Effect.flip(parseSubscribeTarget(token)))
@@ -134,3 +139,19 @@ test('intentToTarget maps a thread intent to the port-shaped thread record', () 
     thread: decodeThreadNameSync('payments'),
   })
 })
+
+// The boot log renders the applied set in the operator's own vocabulary, so the
+// rendering has to be the parser's exact inverse — a line an operator compares
+// against their COMMY_SUBSCRIBE by eye is worth nothing if the two spell the
+// same subscription differently.
+test.each([
+  'home',
+  'home/payments',
+  'home/a/b',
+  'new-topics:home',
+])('intentToToken round-trips %p back to the token that produced it', (token) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      expect(intentToToken(yield* parseSubscribeTarget(token))).toBe(token)
+    }),
+  ))

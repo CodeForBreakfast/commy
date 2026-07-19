@@ -246,9 +246,11 @@ const optionalNonEmpty = (key: string): Config.Config<Option.Option<string>> =>
  * hasn't set the field, the substituted value can arrive as either an empty
  * string or the literal `${user_config.KEY}` placeholder — the plugins
  * reference doesn't pin behaviour down for unset optional fields, so accept
- * both as "unset" (`None`) rather than failing loudly. Genuine misconfigs —
- * host-env placeholders like `${CLAUDE_CODE_SESSION_ID}` that the host doesn't
- * substitute — still reject.
+ * both as "unset" (`None`). Both readings are safe because the plugin manifest
+ * writes these to the {@link USER_CONFIG_SUFFIX} key, which nothing but the
+ * manifest ever sets: "empty here" can only mean the host substituted nothing.
+ * Genuine misconfigs — host-env placeholders like `${CLAUDE_CODE_SESSION_ID}`
+ * that the host doesn't substitute — still reject.
  */
 const userConfigString = (key: string): Config.Config<string> =>
   Config.string(key).pipe(
@@ -263,8 +265,50 @@ const userConfigString = (key: string): Config.Config<string> =>
     }),
   )
 
+/**
+ * Where `clients/claude-code/.mcp.json` writes a `${user_config.KEY}`
+ * substitution: `KEY_USER_CONFIG`, never the bare `KEY`.
+ *
+ * `.mcp.json` is static JSON with no way to omit a key conditionally, so every
+ * declared `user_config` field is substituted and written into the child env
+ * whether or not the operator supplied it. Written to the bare name, an
+ * unsupplied optional field therefore lands as an empty string that OVERRIDES
+ * whatever the operator set by other means — a systemd unit, a pane env, a nix
+ * module — rather than deferring to it. Giving the manifest its own key space
+ * makes that impossible by construction: the plugin can only ever clobber a
+ * name it alone owns.
+ */
+const USER_CONFIG_SUFFIX = '_USER_CONFIG'
+
+/**
+ * Optional operator-supplied value, read from the two paths that can carry one:
+ * the plugin manifest's `KEY_USER_CONFIG` first, then an inherited bare `KEY`.
+ *
+ * The precedence direction is safe because of how the two artefacts ship, not
+ * because of anything visible in this file. The MCP server goes out via
+ * `npx @codeforbreakfast/commy-mcp` with no version spec, so it floats to npm
+ * latest at every seat start; the plugin manifest ships via a pinned
+ * marketplace ref that moves only when an operator runs `/plugin`. The server
+ * therefore always moves first and the manifest lags arbitrarily. New server +
+ * old manifest is the skew that will happen: the manifest still writes the bare
+ * name, this read finds nothing under the suffixed one and falls through to the
+ * inherited value — which is the clobbered-empty string, i.e. no worse than
+ * before the fix. The inverse skew, which would ignore a working operator's
+ * plugin config, cannot occur because the manifest cannot outrun the server.
+ * Reverse the precedence and that reasoning no longer holds.
+ */
 const optionalUserConfig = (key: string): Config.Config<Option.Option<string>> =>
-  Config.option(userConfigString(key))
+  Config.option(
+    userConfigString(`${key}${USER_CONFIG_SUFFIX}`).pipe(
+      Config.orElseIf({
+        // Only "unset" falls through. A genuine misconfig under the suffixed
+        // key — an unsubstituted host-env placeholder — still fails loudly
+        // rather than being masked by whatever the bare name happens to hold.
+        if: ConfigError.isMissingDataOnly,
+        orElse: () => userConfigString(key),
+      }),
+    ),
+  )
 
 const QUEUE_IDLE_TIMEOUT_DEFAULT_SECS = 86400
 

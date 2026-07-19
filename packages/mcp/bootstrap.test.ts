@@ -206,6 +206,101 @@ test('parseEnv reads subscribe from canonical COMMY_SUBSCRIBE', () =>
     }),
   ))
 
+// --- two supply paths for one optional value ---
+// `.mcp.json` writes `${user_config.KEY}` to `KEY_USER_CONFIG`, never to the
+// bare `KEY`, so the plugin cannot clobber a variable the operator set by other
+// means. Both paths must resolve to the same value: they converge on the same
+// `ParsedEnv` field, which is the only thing delivery ever consults.
+
+test('parseEnv prefers COMMY_SUBSCRIBE_USER_CONFIG over an inherited COMMY_SUBSCRIBE', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const parsed = yield* parse({
+        ...requiredOnlyEnv,
+        COMMY_SUBSCRIBE_USER_CONFIG: 'channel:from-plugin-config',
+        COMMY_SUBSCRIBE: 'channel:inherited',
+      })
+      expect(parsed.subscribe).toBe('channel:from-plugin-config')
+    }),
+  ))
+
+// The regression test for the clobber. An operator with no `pluginConfigs`
+// entry gets an EMPTY STRING written to the user-config key — measured on two
+// independent hosts, and empty rather than the `${user_config.KEY}` literal —
+// so an empty user-config key must defer to the inherited value, not silence
+// it. Before the rename this env produced no subscriptions at all.
+test('parseEnv falls back to an inherited COMMY_SUBSCRIBE when the user config supplied nothing', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const parsed = yield* parse({
+        ...requiredOnlyEnv,
+        COMMY_SUBSCRIBE_USER_CONFIG: '',
+        COMMY_SUBSCRIBE: 'channel:inherited',
+      })
+      expect(parsed.subscribe).toBe('channel:inherited')
+    }),
+  ))
+
+// biome-ignore lint/suspicious/noTemplateCurlyInString: intentional — testing placeholder fallthrough
+test('parseEnv falls back to COMMY_SUBSCRIBE when the user config key is an unsubstituted ${user_config...}', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const parsed = yield* parse({
+        ...requiredOnlyEnv,
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional — testing placeholder fallthrough
+        COMMY_SUBSCRIBE_USER_CONFIG: '${user_config.COMMY_SUBSCRIBE}',
+        COMMY_SUBSCRIBE: 'channel:inherited',
+      })
+      expect(parsed.subscribe).toBe('channel:inherited')
+    }),
+  ))
+
+test('parseEnv leaves subscribe unset when neither supply path carries a value', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const parsed = yield* parse({
+        ...requiredOnlyEnv,
+        COMMY_SUBSCRIBE_USER_CONFIG: '',
+        COMMY_SUBSCRIBE: '',
+      })
+      expect('subscribe' in parsed).toBe(false)
+    }),
+  ))
+
+// Fallback is scoped to "unset". A host-env placeholder under the user-config
+// key is a real misconfig and must still fail loudly rather than be masked by
+// whatever the bare name happens to hold.
+test('parseEnv rejects a non-user_config placeholder in COMMY_SUBSCRIBE_USER_CONFIG rather than falling back', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const err = yield* expectParseEnvError({
+        ...requiredOnlyEnv,
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional — testing placeholder rejection
+        COMMY_SUBSCRIBE_USER_CONFIG: '${SUBSCRIBE_TARGETS}',
+        COMMY_SUBSCRIBE: 'channel:inherited',
+      })
+      expect(err.message).toContain('COMMY_SUBSCRIBE_USER_CONFIG')
+      expect(err.message.toLowerCase()).toMatch(/substitut|placeholder/)
+    }),
+  ))
+
+test('parseEnv reads the catch-up window from either supply path', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const viaUserConfig = yield* parse({
+        ...requiredOnlyEnv,
+        COMMY_CATCHUP_WINDOW_SECONDS_USER_CONFIG: '900',
+      })
+      expect(viaUserConfig.catchupWindowSeconds).toBe(900)
+      const viaInherited = yield* parse({
+        ...requiredOnlyEnv,
+        COMMY_CATCHUP_WINDOW_SECONDS_USER_CONFIG: '',
+        COMMY_CATCHUP_WINDOW_SECONDS: '900',
+      })
+      expect(viaInherited.catchupWindowSeconds).toBe(900)
+    }),
+  ))
+
 test('parseEnv reads project from canonical COMMY_PROJECT', () =>
   Effect.runPromise(
     Effect.gen(function* () {

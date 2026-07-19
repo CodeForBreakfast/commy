@@ -55,10 +55,63 @@ test('the realm credentials and subscription env are still threaded through', ()
     'ZULIP_SITE',
     'ZULIP_MINTER_EMAIL',
     'ZULIP_MINTER_API_KEY',
-    'COMMY_SUBSCRIBE',
-    'COMMY_CATCHUP_WINDOW_SECONDS',
+    'COMMY_SUBSCRIBE_USER_CONFIG',
+    'COMMY_CATCHUP_WINDOW_SECONDS_USER_CONFIG',
     'npm_config_min_release_age',
   ])
+})
+
+/**
+ * This file is static JSON, so every `${user_config.KEY}` it declares is
+ * substituted and written into the child environment whether or not the
+ * operator supplied that key — there is no way to omit a key conditionally.
+ * An unsupplied optional field therefore lands as an EMPTY STRING (measured on
+ * two independent hosts; empty, not the unsubstituted literal), and an empty
+ * string written to a name commy also reads from the ambient environment
+ * OVERRIDES whatever the operator set by other means — a systemd unit, a pane
+ * env, a nix module — rather than deferring to it. That silently disabled
+ * config-driven subscription for every operator who supplied COMMY_SUBSCRIBE
+ * any way but the plugin's own, and nothing failed: the seat came up deaf.
+ *
+ * The invariant that makes it impossible by construction is that the manifest
+ * writes substitutions into its own key space, never into a bare `COMMY_*`
+ * name that `bootstrap.ts` reads. `optionalUserConfig` reads the suffixed key
+ * first and falls back to the bare one, so the two supply paths compose rather
+ * than collide.
+ *
+ * Two deliberate exemptions, both safe for reasons that do not generalise. The
+ * required `ZULIP_*` keys, where an empty value fails the boot loudly rather
+ * than hiding — a wrong-but-visible outcome, not a silent one. And
+ * `npm_config_min_release_age`, which is npm's own name and so cannot be
+ * renamed; it is safe because `@npmcli/config` skips empty-valued
+ * `npm_config_*` vars before coercion, leaving an unsupplied override with the
+ * operator's own soak in force. That last one holds by grace of a dependency
+ * we don't control, which is why it is pinned by the test below rather than
+ * left to be rediscovered.
+ */
+const USER_CONFIG_SUBSTITUTION = /^\$\{user_config\.([A-Za-z0-9_]+)\}$/
+
+const suppliedKeyFor = (envValue: string): string | undefined =>
+  USER_CONFIG_SUBSTITUTION.exec(envValue)?.[1]
+
+test('no user_config substitution is written to a bare COMMY_* name the server also reads', () => {
+  for (const [envKey, envValue] of Object.entries(commyServer.env)) {
+    const suppliedKey = suppliedKeyFor(envValue)
+    if (suppliedKey === undefined || !envKey.startsWith('COMMY_')) continue
+    expect(envKey).toBe(`${suppliedKey}_USER_CONFIG`)
+  }
+})
+
+test('every optional user_config field the plugin declares is threaded through the launcher', () => {
+  const substituted = Object.values(commyServer.env)
+    .map(suppliedKeyFor)
+    .filter((key): key is string => key !== undefined)
+  const optionalFields = Object.entries(pluginManifest.userConfig)
+    .filter(([, field]) => (field as { readonly required?: boolean }).required !== true)
+    .map(([key]) => key)
+  for (const key of optionalFields) {
+    expect(substituted).toContain(key)
+  }
 })
 
 /**

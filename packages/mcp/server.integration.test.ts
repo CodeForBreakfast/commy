@@ -10,7 +10,7 @@ import {
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { captureLogger, stderrLoggerLayer } from '@commy/core/logging'
+import { captureLogger } from '@commy/core/logging'
 import type {
   Directory,
   HistoryReader,
@@ -342,8 +342,10 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
   // `runPromiseExit` drives it; `killSwitch` interrupts the pump's events
   // stream so the scope unwinds (pump-cancel → release → close) just as a
   // SIGTERM does under `runMain`.
-  const loggerLayer =
-    overrides.capturedLogs !== undefined ? captureLogger(overrides.capturedLogs) : stderrLoggerLayer
+  // Absent an explicit capture, discard rather than write to stderr: boot emits
+  // real diagnostics and a test run's output has to stay pristine. A test that
+  // cares passes `capturedLogs` and asserts on it.
+  const loggerLayer = captureLogger(overrides.capturedLogs ?? [])
   const cursorStore = overrides.cursorStore ?? createMemoryCursorStore()
   // A known shared session-id deferred, so a test can assert the boot feeder
   // filled it from CLAUDE_CODE_SESSION_ID in the child env, and can bind a
