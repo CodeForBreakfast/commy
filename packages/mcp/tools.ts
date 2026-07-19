@@ -1,5 +1,6 @@
 import type {
   AgentComms,
+  ChannelDescription,
   ChannelName,
   ChannelRef,
   Identity,
@@ -14,6 +15,7 @@ import type {
 import {
   ChannelPermalinkSchema,
   ChannelRefSchema,
+  decodeChannelDescription,
   decodeChannelId,
   decodeChannelName,
   decodeEmoji,
@@ -407,6 +409,13 @@ const ReadThreadArgs = Schema.Struct({
 const ThreadResolutionArgs = Schema.Struct({
   channel_name: Schema.String,
   thread: Schema.String,
+})
+const ChannelDescriptionArgs = Schema.Struct({
+  channel_name: Schema.String,
+})
+const SetChannelDescriptionArgs = Schema.Struct({
+  channel_name: Schema.String,
+  description: Schema.String,
 })
 const MessageLinkArgs = Schema.Struct({
   message_id: Schema.String,
@@ -961,6 +970,65 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             yield* adapter.publisher.unresolveThread(
               yield* decodeChannelName(parsed.channel_name),
               yield* decodeThreadName(parsed.thread),
+            )
+          }),
+        )
+        return {}
+      },
+    },
+    {
+      name: 'get_channel_description',
+      description:
+        "Read a channel's standing description — the short statement of what the channel is for, which a project keeps as its charter. Returns {description}, null when nobody has set one. Distinct from the messages in the channel: it is channel-level state, and read_channel will not show it.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          channel_name: { type: 'string', description: 'Channel to read the description of' },
+        },
+        required: ['channel_name'],
+        additionalProperties: false,
+      },
+      handler: async (args) => {
+        const description = await runEdge(
+          Effect.gen(function* () {
+            const parsed = yield* Schema.decodeUnknown(ChannelDescriptionArgs)(args)
+            return yield* adapter.directory.channelDescription(
+              yield* decodeChannelName(parsed.channel_name),
+            )
+          }),
+        )
+        return { description: Option.getOrNull(description) }
+      },
+    },
+    {
+      name: 'set_channel_description',
+      description:
+        "Set a channel's standing description, replacing whatever it says now. Pass an empty description to clear it. Idempotent — writing the text already there changes nothing. What you write is read back verbatim: a description the substrate cannot store as given (too long, or spanning multiple lines) is refused with an error saying so, never silently trimmed or reflowed. Fails with a clear error when the bound identity lacks permission to edit the channel.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          channel_name: { type: 'string', description: 'Channel to describe' },
+          description: {
+            type: 'string',
+            description: "The channel's new description; empty string clears it",
+          },
+        },
+        required: ['channel_name', 'description'],
+        additionalProperties: false,
+      },
+      handler: async (args) => {
+        await runEdge(
+          Effect.gen(function* () {
+            const parsed = yield* Schema.decodeUnknown(SetChannelDescriptionArgs)(args)
+            // An empty string is how a caller clears a description over a wire
+            // that has no null — the port models "undescribed" as Option.none.
+            const description =
+              parsed.description.length === 0
+                ? Option.none<ChannelDescription>()
+                : Option.some(yield* decodeChannelDescription(parsed.description))
+            yield* adapter.publisher.setChannelDescription(
+              yield* decodeChannelName(parsed.channel_name),
+              description,
             )
           }),
         )

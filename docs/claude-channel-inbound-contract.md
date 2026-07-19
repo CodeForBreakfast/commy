@@ -25,8 +25,10 @@ emits no inbound event. A consumer observes the current state as
 `ObservedThread.resolved` on the thread facet of any message it reads
 (`Option<ObservedThread>.resolved` on `MessageRef.thread`) — the clean thread
 name never encodes resolution, and no substrate-specific marker (Zulip's
-✔-prefixed topic) crosses the port. Only new posts, reactions, and mentions are
-pushed as inbound frames; derived state changes are pull-only.
+✔-prefixed topic) crosses the port. A **channel description** is the same shape
+again: `set_channel_description` emits no inbound event, and a consumer reads
+the current text with `get_channel_description`. Only new posts, reactions, and
+mentions are pushed as inbound frames; derived state changes are pull-only.
 
 ## Transport: a JSON-RPC notification
 

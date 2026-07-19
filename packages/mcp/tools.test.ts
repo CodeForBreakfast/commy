@@ -660,6 +660,84 @@ test('resolve_thread then unresolve_thread flip a thread’s resolved status, su
     ),
   ))
 
+// The tool pair over the port's Option: the wire has no null to write, so an
+// empty `description` is how a caller clears one, and a channel with none
+// reads back as `null` rather than an empty string.
+test('get_channel_description / set_channel_description round-trip, and empty clears', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* ensureBound()
+            cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
+          }),
+        )
+        const readDescription = (): Promise<string | null> =>
+          rig.client
+            .callTool({ name: 'get_channel_description', arguments: { channel_name: 'home' } })
+            .then((r) => (r.structuredContent as { description: string | null }).description)
+
+        expect(yield* Effect.promise(readDescription)).toBeNull()
+
+        const charter = 'Where the home crowd coordinates.'
+        const setResult = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'set_channel_description',
+            arguments: { channel_name: 'home', description: charter },
+          }),
+        )
+        expect(setResult.isError).toBeFalsy()
+        expect(yield* Effect.promise(readDescription)).toBe(charter)
+
+        const clearResult = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'set_channel_description',
+            arguments: { channel_name: 'home', description: '' },
+          }),
+        )
+        expect(clearResult.isError).toBeFalsy()
+        expect(yield* Effect.promise(readDescription)).toBeNull()
+      }),
+    ),
+  ))
+
+test('set_channel_description surfaces a substrate refusal as a tool error, storing nothing', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRigAndCache((adapter, cache, ensureBound) =>
+          Effect.gen(function* () {
+            yield* ensureBound()
+            cache.rememberChannel(yield* adapter.seedChannel('home').pipe(Effect.orDie))
+          }),
+        )
+        const error = yield* Effect.flip(
+          Effect.tryPromise({
+            try: () =>
+              rig.client.callTool({
+                name: 'set_channel_description',
+                arguments: { channel_name: 'home', description: 'first line\nsecond line' },
+              }),
+            catch: (e) => e as { message: string },
+          }),
+        )
+        // The refusal reaches the caller naming both the failure and the fix,
+        // rather than a generic write error.
+        expect(error.message).toContain('ChannelDescriptionRejected')
+        expect(error.message).toContain('single line')
+
+        const after = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'get_channel_description',
+            arguments: { channel_name: 'home' },
+          }),
+        )
+        expect((after.structuredContent as { description: string | null }).description).toBeNull()
+      }),
+    ),
+  ))
+
 test('post returns a clickable permalink for the new message', () =>
   Effect.runPromise(
     Effect.scoped(

@@ -105,6 +105,8 @@ const EXPECTED_TOOL_NAMES = [
   'read_thread',
   'resolve_thread',
   'unresolve_thread',
+  'get_channel_description',
+  'set_channel_description',
   'message_link',
   'subscribe',
   'unsubscribe',
