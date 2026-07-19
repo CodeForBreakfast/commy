@@ -1963,3 +1963,62 @@ test(
     ),
   ITERATOR_TEST_TIMEOUT_MS,
 )
+
+test(
+  'a mid-stream queue adoption is recorded, not left to be inferred from the next batch line',
+  () =>
+    runSilently(
+      Effect.gen(function* () {
+        // comms-gh88.5. The adoption path (comms-gh88.4) swaps the polled queue
+        // without going through `registerFreshQueue`, so it is the one queue
+        // change that leaves no register line. The adopted id does surface in
+        // the next batch line, but that makes an operator deduce the swap from
+        // two adjacent observations — the producer knows it happened and should
+        // say so.
+        const lines: string[] = []
+        let registration = {
+          queue: { queueId: 'q-mentions', lastEventId: 0 },
+          mode: 'mentions' as 'all' | 'mentions',
+        }
+        let getCalls = 0
+        const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
+          http: fakeHttp({
+            onPost: () => ({ result: 'success', queue_id: 'q-unused', last_event_id: 0 }),
+            onGet: () => {
+              getCalls += 1
+              // The flip lands between the first and second poll, so the second
+              // step reads a registration that differs from the observed one.
+              if (getCalls === 1) {
+                registration = { queue: { queueId: 'q-all', lastEventId: 0 }, mode: 'all' }
+              }
+              return {
+                result: 'success',
+                events: [
+                  {
+                    id: getCalls,
+                    type: 'message',
+                    message: aChannelMessage({ id: 100 + getCalls }),
+                  },
+                ],
+              }
+            },
+          }),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
+          mode: 'mentions',
+          initialQueue: { queueId: 'q-mentions', lastEventId: 0 },
+          currentRegistration: Effect.sync(() => Option.some(registration)),
+          boundIdentity: HERMES,
+          messageRefCache: createMessageRefCache(),
+        }
+        yield* drainN(config, 2).pipe(Effect.provide(captureLogger(lines)))
+
+        const adopted = lines.find((line) => line.includes('adopted queue_id='))
+        expect(adopted).toBeDefined()
+        expect(adopted).toContain('queue_id=q-all')
+        expect(adopted).toContain('replaced=q-mentions')
+        expect(adopted).toContain('mode=all')
+      }),
+    ),
+  ITERATOR_TEST_TIMEOUT_MS,
+)
