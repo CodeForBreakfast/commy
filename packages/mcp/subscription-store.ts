@@ -3,7 +3,17 @@ import { join } from 'node:path'
 import { ChannelNameSchema, ThreadNameSchema } from '@commy/core/ports'
 import { FileSystem } from '@effect/platform'
 import type { PlatformError } from '@effect/platform/Error'
-import { Config, Context, Deferred, Effect, Layer, Option, type ParseResult, Schema } from 'effect'
+import {
+  Array as Arr,
+  Config,
+  Context,
+  Deferred,
+  Effect,
+  Layer,
+  Option,
+  type ParseResult,
+  Schema,
+} from 'effect'
 import { SessionId, type SessionIdValue } from './session-id.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 
@@ -78,7 +88,6 @@ export interface FileSubscriptionStoreDeps {
  * the persisted strings straight back into the in-memory intent type.
  */
 const SubscribeIntentSchema = Schema.Union(
-  Schema.Struct({ kind: Schema.Literal('mentions') }),
   Schema.Struct({ kind: Schema.Literal('channel'), channelName: ChannelNameSchema }),
   Schema.Struct({
     kind: Schema.Literal('thread'),
@@ -88,8 +97,53 @@ const SubscribeIntentSchema = Schema.Union(
   Schema.Struct({ kind: Schema.Literal('new-topics-in-channel'), channelName: ChannelNameSchema }),
 )
 
-const SubscriptionsFileSchema = Schema.parseJson(Schema.Array(SubscribeIntentSchema))
-const decodeSubscriptionsFile = Schema.decodeUnknown(SubscriptionsFileSchema)
+/**
+ * The retired `mentions` intent, still decodable so a set persisted before
+ * mentions became implicit does not fail its whole restore on one dead entry.
+ * It carries no narrow, so {@link decodeSubscriptionsFile} drops it.
+ */
+const RetiredMentionsSchema = Schema.Struct({ kind: Schema.Literal('mentions') })
+
+const PersistedIntentSchema = Schema.Union(SubscribeIntentSchema, RetiredMentionsSchema)
+
+const isRetired = (
+  intent: Schema.Schema.Type<typeof PersistedIntentSchema>,
+): intent is Schema.Schema.Type<typeof RetiredMentionsSchema> => intent.kind === 'mentions'
+
+const SubscriptionsFileSchema = Schema.parseJson(Schema.Array(PersistedIntentSchema))
+
+/**
+ * Shares the `commy plugin: <component> drop (<reason>) …` shape the event
+ * pump's discards use (`event-pump.ts`), so one grep answers "what did this
+ * seat silently lose?" across both layers. Session rather than identity
+ * because the store is keyed on session_id — see the header doc for why
+ * keying on identity would be wrong.
+ *
+ * Observability only. This is NOT an expiry instrument: the on-disk entry is
+ * cleared solely by `persistSubscriptions`, which fires on a runtime
+ * subscribe/unsubscribe, so a listen-only seat keeps it forever and
+ * re-discards on every resume. Listen-only is precisely the population the
+ * retired schema protects, so these lines will never go quiet for the seats
+ * that matter — silence here is not permission to delete the shim.
+ */
+const traceRetiredDiscards = (
+  id: SessionIdValue,
+  intents: ReadonlyArray<Schema.Schema.Type<typeof PersistedIntentSchema>>,
+): Effect.Effect<void> =>
+  Effect.forEach(Arr.filter(intents, isRetired), (retired) =>
+    Effect.logInfo(
+      `commy plugin: subscription-store drop (retired-intent) kind=${retired.kind} session=${id as string}`,
+    ),
+  ).pipe(Effect.asVoid)
+
+const decodeSubscriptionsFile = (
+  id: SessionIdValue,
+  raw: string,
+): Effect.Effect<ReadonlyArray<SubscribeIntent>, ParseResult.ParseError> =>
+  Schema.decodeUnknown(SubscriptionsFileSchema)(raw).pipe(
+    Effect.tap((intents) => traceRetiredDiscards(id, intents)),
+    Effect.map(Arr.filter((intent) => !isRetired(intent))),
+  )
 
 const FILENAME_SAFE = /[^a-zA-Z0-9._-]/g
 
@@ -114,13 +168,14 @@ const isNotFound = (error: PlatformError | ParseResult.ParseError): boolean =>
  */
 const readSubscriptions = (
   fs: FileSystem.FileSystem,
+  id: SessionIdValue,
   path: string,
 ): Effect.Effect<
   Option.Option<ReadonlyArray<SubscribeIntent>>,
   PlatformError | ParseResult.ParseError
 > =>
   fs.readFileString(path).pipe(
-    Effect.flatMap(decodeSubscriptionsFile),
+    Effect.flatMap((raw) => decodeSubscriptionsFile(id, raw)),
     Effect.map((intents) => Option.some(intents)),
     Effect.catchIf(isNotFound, () => Effect.succeed(Option.none<ReadonlyArray<SubscribeIntent>>())),
   )
@@ -130,7 +185,7 @@ export const createFileSubscriptionStore = (deps: FileSubscriptionStoreDeps): Su
   const pathFor = (id: SessionIdValue): string => join(dir, subscriptionFilename(id))
 
   const read: SubscriptionStore['read'] = () =>
-    Effect.flatMap(Deferred.await(session), (id) => readSubscriptions(fs, pathFor(id)))
+    Effect.flatMap(Deferred.await(session), (id) => readSubscriptions(fs, id, pathFor(id)))
 
   const write: SubscriptionStore['write'] = (intents) =>
     Effect.flatMap(Deferred.await(session), (id) =>

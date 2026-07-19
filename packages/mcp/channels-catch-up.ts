@@ -96,7 +96,6 @@ const fetchForIntent = (
 ): Effect.Effect<ReadonlyArray<Message>, HistoryError> =>
   Match.value(intent).pipe(
     Match.discriminatorsExhaustive('kind')({
-      mentions: () => Effect.succeed([] as ReadonlyArray<Message>),
       channel: (i) => history.readChannel(i.channelName, { since: defaultSince }),
       'new-topics-in-channel': (i) =>
         history

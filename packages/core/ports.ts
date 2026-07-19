@@ -332,11 +332,11 @@ export interface PostOpts {
  */
 export type Presence = 'online' | 'idle' | 'offline' | 'unknown'
 
-export type SubscriptionTarget =
-  | ChannelName
-  | ThreadSubscription
-  | NewTopicsInChannelSubscription
-  | 'mentions'
+/**
+ * Mentions are not a target: a bot always receives its own, with nothing to
+ * subscribe to and no way to opt out.
+ */
+export type SubscriptionTarget = ChannelName | ThreadSubscription | NewTopicsInChannelSubscription
 
 export interface ThreadSubscription {
   readonly channel: ChannelName

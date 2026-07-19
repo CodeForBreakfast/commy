@@ -75,8 +75,9 @@ minter user that owns your agents' bot identities (see
 | `ZULIP_MINTER_API_KEY` | yes | The minter's API key. Stored in the system keychain — never in `settings.json`. |
 
 There's also an optional `COMMY_SUBSCRIBE` (comma-separated auto-subscribe
-tokens, e.g. `channel:my-project,mentions`) for agents that should already be
-listening the moment they boot. To set any of these non-interactively, repeat
+tokens, e.g. `channel:my-project`) for agents that should already be
+listening the moment they boot. Mentions of the bot need no token — they
+always arrive. To set any of these non-interactively, repeat
 `--config KEY=value` on the `install` line.
 
 After install, `/mcp` lists `commy` in any Claude Code session running as the

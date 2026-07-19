@@ -319,7 +319,8 @@ test('lazy mode still applies COMMY_SUBSCRIBE at boot (pre-acquire subscriptions
   }
   await runProgram(env, fake.adapter)
   expect(fake.calls.acquired).toEqual([])
-  expect(fake.calls.subscribed).toEqual([decodeChannelNameSync('home'), 'mentions'])
+  // The retired `mentions` token parses and registers nothing.
+  expect(fake.calls.subscribed).toEqual([decodeChannelNameSync('home')])
   expect(fake.calls.closes.count).toBe(1)
 })
 
@@ -343,10 +344,12 @@ test('main does not subscribe when acquire fails', async () => {
   expect(fake.calls.subscribed).toEqual([])
 })
 
-test('main subscribes only the Type-1 mentions default when COMMY_SUBSCRIBE is unset and no project is set', async () => {
+// No project slug resolves, so the Type-1 default set is empty and nothing is
+// subscribed at all. The seat is not deaf: mentions of it arrive unconditionally.
+test('main subscribes nothing when COMMY_SUBSCRIBE is unset and no project is set', async () => {
   const fake = buildFakeAdapter()
   await runProgram(validEnv, fake.adapter, { readGitContext: () => Effect.succeed(NotInRepo()) })
-  expect(fake.calls.subscribed).toEqual(['mentions'])
+  expect(fake.calls.subscribed).toEqual([])
 })
 
 test('main drives a real memory adapter through acquire + env subscribe + close', async () => {
@@ -382,15 +385,13 @@ test('main drives a real memory adapter through acquire + env subscribe + close'
     loggerLayer: captureLogger(logs),
     readGitContext: () => Effect.succeed(NotInRepo()),
   })
-  // Type-1 default `mentions` lands first (post-acquire); the env tokens follow.
+  // No project → no Type-1 defaults; only the env tokens that name a narrow.
   expect(subscribed).toEqual([
-    'mentions',
     decodeChannelNameSync('home'),
     {
       channel: decodeChannelNameSync('home'),
       thread: decodeThreadNameSync('payments'),
     },
-    'mentions',
   ])
   expect(closes).toBe(1)
 })
@@ -408,9 +409,9 @@ test('main aborts non-zero when COMMY_SUBSCRIBE contains a malformed token', asy
   expect(String((failureValue(exit) as { message?: string }).message)).toMatch(
     /invalid subscribe token/,
   )
-  // Type-1 default (`mentions`) lands first, then the env channel sub,
-  // then the parser aborts on the malformed token before reaching `channel:llm-feed`.
-  expect(fake.calls.subscribed).toEqual(['mentions', decodeChannelNameSync('home')])
+  // No project → no Type-1 defaults. The env channel sub lands, then the parser
+  // aborts on the malformed token before reaching `channel:llm-feed`.
+  expect(fake.calls.subscribed).toEqual([decodeChannelNameSync('home')])
   expect(fake.calls.closes.count).toBe(1)
 })
 
@@ -422,15 +423,13 @@ test('main applies env-driven subscriptions in order after acquire and Type-1 de
   }
   await runProgram(env, fake.adapter, { readGitContext: () => Effect.succeed(NotInRepo()) })
   expect(fake.calls.acquired).toEqual(['myproject-concierge'])
-  // Type-1 default `mentions` (no project) comes first; env tokens follow.
+  // No project → no Type-1 defaults; the retired `mentions` token registers nothing.
   expect(fake.calls.subscribed).toEqual([
-    'mentions',
     decodeChannelNameSync('home'),
     {
       channel: decodeChannelNameSync('home'),
       thread: decodeThreadNameSync('payments'),
     },
-    'mentions',
   ])
   expect(fake.calls.closes.count).toBe(1)
 })
@@ -473,13 +472,12 @@ test('main keeps booting when reconcile reports an error (log + continue)', asyn
 
 // ─── Type-1 default sub set for project concierges ──────────────
 
-test('persistent mode + project registers Type-1 defaults (mentions + new-topics + thread/general)', async () => {
+test('persistent mode + project registers Type-1 defaults (new-topics + thread/general)', async () => {
   const fake = buildFakeAdapter()
   const env = { ...validEnv, COMMY_PROJECT: 'foo' }
   await runProgram(env, fake.adapter)
   expect(fake.calls.acquired).toEqual(['myproject-concierge'])
   expect(fake.calls.subscribed).toEqual([
-    'mentions',
     {
       kind: 'new-topics-in-channel',
       channel: decodeChannelNameSync('foo'),
@@ -491,12 +489,12 @@ test('persistent mode + project registers Type-1 defaults (mentions + new-topics
   ])
 })
 
-test('persistent mode without project registers only the universal mentions narrow', async () => {
+test('persistent mode without project registers no narrows at all', async () => {
   const fake = buildFakeAdapter()
   // Inject readGitContext so the worktree's own git context can't
   // accidentally resolve a project slug for the boot-time defaults.
   await runProgram(validEnv, fake.adapter, { readGitContext: () => Effect.succeed(NotInRepo()) })
-  expect(fake.calls.subscribed).toEqual(['mentions'])
+  expect(fake.calls.subscribed).toEqual([])
 })
 
 test('Type-1 defaults register after acquire and before COMMY_SUBSCRIBE entries', async () => {
@@ -511,7 +509,6 @@ test('Type-1 defaults register after acquire and before COMMY_SUBSCRIBE entries'
     fake.calls.events.indexOf('subscribe'),
   )
   expect(fake.calls.subscribed).toEqual([
-    'mentions',
     {
       kind: 'new-topics-in-channel',
       channel: decodeChannelNameSync('foo'),

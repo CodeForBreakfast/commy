@@ -197,11 +197,14 @@ describe('catchUpChannels', () => {
     expect(notifier.payloads[0]?.content).toBe('in-thread')
   })
 
-  test('mentions intent → skipped (deferred to the mentions catch-up), no calls or dispatches', async () => {
+  // Mentions have their own catch-up (mentions-catch-up.ts) keyed on
+  // identityId, so an empty intent set must leave this one entirely idle
+  // rather than sweeping channels on mentions' behalf.
+  test('no intents → no calls or dispatches', async () => {
     const history = buildHistorySpy()
     const notifier = buildNotifierSpy()
     await runCatchUp({
-      intents: [{ kind: 'mentions' }],
+      intents: [],
       history: history.history,
       notifier: notifier.notifier,
       botIdentityId: botIdentity.id,
@@ -234,7 +237,6 @@ describe('catchUpChannels', () => {
         channelName: decodeChannelNameSync('home'),
         threadName: 'payments' as ThreadName,
       },
-      { kind: 'mentions' },
     ]
     await runCatchUp({
       intents,

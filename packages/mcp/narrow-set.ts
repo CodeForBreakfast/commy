@@ -25,10 +25,10 @@ import type { SubscribeIntent } from './subscribe-parser.ts'
  * inside `inbox.subscribe()` for streams created after the plugin
  * booted.
  *
- * `mentions` matches only when the bot identity is known (i.e.
- * post-acquire). Pre-acquire it never matches a `message-posted`
- * event — there is nothing to compare the message's mentions
- * against.
+ * Mentions are the one exception to "empty narrow → nothing delivered": a bot
+ * always receives its own, with nothing to subscribe to and no way to opt out.
+ * They match only once the bot identity is known (i.e. post-acquire) —
+ * pre-acquire there is nothing to compare a message's mentions against.
  */
 export interface NarrowSet {
   add(intent: SubscribeIntent): void
@@ -78,7 +78,6 @@ export interface NarrowSet {
  * `intents` membership set and the `seenTopics` first-message ledger key
  * on this type.
  */
-const MENTIONS_KEY = Data.struct({ kind: 'mentions' as const })
 const channelKeyOf = (channelName: ChannelName) =>
   Data.struct({ kind: 'channel' as const, channelName })
 const threadKeyOf = (channelName: ChannelName, threadName: ThreadName) =>
@@ -87,7 +86,6 @@ const newTopicsKeyOf = (channelName: ChannelName) =>
   Data.struct({ kind: 'new-topics' as const, channelName })
 
 type IntentKey =
-  | typeof MENTIONS_KEY
   | ReturnType<typeof channelKeyOf>
   | ReturnType<typeof threadKeyOf>
   | ReturnType<typeof newTopicsKeyOf>
@@ -101,7 +99,6 @@ type PendingDelta = { readonly op: 'add' | 'remove'; readonly key: IntentKey }
 const intentKey = (intent: SubscribeIntent): IntentKey =>
   Match.value(intent).pipe(
     Match.discriminatorsExhaustive('kind')({
-      mentions: (): IntentKey => MENTIONS_KEY,
       channel: (i): IntentKey => channelKeyOf(i.channelName),
       thread: (i): IntentKey => threadKeyOf(i.channelName, i.threadName),
       'new-topics-in-channel': (i): IntentKey => newTopicsKeyOf(i.channelName),
@@ -116,7 +113,6 @@ const intentKey = (intent: SubscribeIntent): IntentKey =>
 const keyToIntent = (key: IntentKey): SubscribeIntent =>
   Match.value(key).pipe(
     Match.discriminatorsExhaustive('kind')({
-      mentions: (): SubscribeIntent => ({ kind: 'mentions' }),
       channel: (k): SubscribeIntent => ({ kind: 'channel', channelName: k.channelName }),
       thread: (k): SubscribeIntent => ({
         kind: 'thread',
@@ -141,15 +137,18 @@ const refMatches = (ref: MessageRef, intents: HashSet.HashSet<IntentKey>): boole
   HashSet.has(intents, channelKey(ref)) ||
   Option.exists(threadKey(ref), (tk) => HashSet.has(intents, tk))
 
+/**
+ * Unconditional: a bot always receives its own mentions, so this consults no
+ * intent. That is what makes an empty narrow set survivable — a seat that has
+ * subscribed to nothing still hears its own name.
+ *
+ * Still gated on the bot being bound. Pre-acquire there is no identity to
+ * compare a message's mentions against, so nothing can match.
+ */
 const mentionsMatches = (
-  intents: HashSet.HashSet<IntentKey>,
   mentions: ReadonlyArray<Mention>,
   botIdentityId: IdentityId | undefined,
-): boolean => {
-  if (botIdentityId === undefined) return false
-  if (!HashSet.has(intents, MENTIONS_KEY)) return false
-  return mentionsIdentity(mentions, botIdentityId)
-}
+): boolean => botIdentityId !== undefined && mentionsIdentity(mentions, botIdentityId)
 
 export const createNarrowSet = (): NarrowSet => {
   let intents = HashSet.empty<IntentKey>()
@@ -227,10 +226,9 @@ export const createNarrowSet = (): NarrowSet => {
         Match.discriminatorsExhaustive('kind')({
           'message-posted': (e) =>
             messagePostedMatches(e.message.ref) ||
-            mentionsMatches(intents, e.message.mentions, botIdentityId),
+            mentionsMatches(e.message.mentions, botIdentityId),
           'mention-received': (e) =>
-            refMatches(e.message.ref, intents) ||
-            mentionsMatches(intents, e.mentions, botIdentityId),
+            refMatches(e.message.ref, intents) || mentionsMatches(e.mentions, botIdentityId),
           'reaction-added': (e) => refMatches(e.target, intents),
           'reaction-removed': (e) => refMatches(e.target, intents),
         }),

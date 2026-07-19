@@ -2292,26 +2292,14 @@ effectTest('inbox.subscribe with thread subscribes to its underlying channel', (
   }),
 )
 
-effectTest('inbox.subscribe with mentions target does not call /users/me/subscriptions', () =>
+effectTest('inbox.subscribe(channel) twice registers the events queue only once', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedRegisterOk(stub)
+    yield* seedSubscribeOk(stub, 'general')
     const adapter = yield* buildAdapter(stub)
-    yield* adapter.inbox.subscribe('mentions')
-    const reqs = yield* stub.captured
-    expect(
-      reqs.find((r) => r.method === 'POST' && r.url.pathname === '/api/v1/users/me/subscriptions'),
-    ).toBeUndefined()
-  }),
-)
-
-effectTest('inbox.subscribe(mentions) twice registers the events queue only once', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedRegisterOk(stub)
-    const adapter = yield* buildAdapter(stub)
-    yield* adapter.inbox.subscribe('mentions')
-    yield* adapter.inbox.subscribe('mentions')
+    yield* adapter.inbox.subscribe(generalChannel.name)
+    yield* adapter.inbox.subscribe(generalChannel.name)
     const registers = (yield* stub.captured).filter(
       (r) => r.method === 'POST' && r.url.pathname === '/api/v1/register',
     )
@@ -2326,14 +2314,16 @@ effectTest('inbox.subscribe(mentions) twice registers the events queue only once
 // process-singleton adapter, no MCP-side serialization, parallel subscribe tool
 // calls in one agent turn. The SynchronizedRef.modifyEffect holds the lock
 // across registerQueue so the second call observes the first's write and skips.
-effectTest('concurrent inbox.subscribe(mentions) calls register the events queue only once', () =>
+effectTest('concurrent inbox.subscribe calls register the events queue only once', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedRegisterOk(stub)
+    yield* seedSubscribeOk(stub, 'general')
     const adapter = yield* buildAdapter(stub)
-    yield* Effect.all([adapter.inbox.subscribe('mentions'), adapter.inbox.subscribe('mentions')], {
-      concurrency: 2,
-    })
+    yield* Effect.all(
+      [adapter.inbox.subscribe(generalChannel.name), adapter.inbox.subscribe(generalChannel.name)],
+      { concurrency: 2 },
+    )
     const registers = (yield* stub.captured).filter(
       (r) => r.method === 'POST' && r.url.pathname === '/api/v1/register',
     )
@@ -2341,17 +2331,21 @@ effectTest('concurrent inbox.subscribe(mentions) calls register the events queue
   }),
 )
 
-effectTest('inbox.subscribe flipping mentions -> all re-registers the events queue', () =>
+// The queue carries no narrow, so one registration serves every subscription
+// state and a later subscribe reuses it. Re-registering would abandon a live
+// queue (Zulip GCs it by TTL) and lose whatever arrived before the replacement
+// fixed its baseline — for no gain, since both queues would be identical.
+effectTest('inbox.subscribe of a second target reuses the events queue', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedSubscribeOk(stub, 'general')
     const adapter = yield* buildAdapter(stub)
-    yield* adapter.inbox.subscribe('mentions')
+    yield* adapter.inbox.subscribe({ kind: 'new-topics-in-channel', channel: generalChannel.name })
     yield* adapter.inbox.subscribe(generalChannel.name)
     const registers = (yield* stub.captured).filter(
       (r) => r.method === 'POST' && r.url.pathname === '/api/v1/register',
     )
-    expect(registers).toHaveLength(2)
+    expect(registers).toHaveLength(1)
   }),
 )
 
@@ -2365,20 +2359,6 @@ effectTest('inbox.unsubscribe(channel) DELETEs /users/me/subscriptions with the 
     const params = new URLSearchParams(req.body)
     const subs = JSON.parse(params.get('subscriptions') ?? '[]') as unknown
     expect(subs).toEqual(['general'])
-  }),
-)
-
-effectTest('inbox.unsubscribe with mentions target does not call /users/me/subscriptions', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    const adapter = yield* buildAdapter(stub)
-    yield* adapter.inbox.unsubscribe('mentions')
-    const reqs = yield* stub.captured
-    expect(
-      reqs.find(
-        (r) => r.method === 'DELETE' && r.url.pathname === '/api/v1/users/me/subscriptions',
-      ),
-    ).toBeUndefined()
   }),
 )
 
@@ -2524,26 +2504,29 @@ effectTest(
     }),
 )
 
-effectTest(
-  'inbox.events register includes narrow=[["is","mentioned"]] when subscribed mentions',
-  () =>
-    Effect.gen(function* () {
-      const stub = yield* makeStubHttpClient
-      // subscribe('mentions') eagerly registers the events queue (the
-      // readiness contract — events() must see anything posted after
-      // subscribe resolves). The narrow assertion lives here so the queue
-      // used by events() is exclusive to mentions.
-      const adapter = yield* buildAdapter(stub)
-      yield* seedUsers(stub, [HERMES])
-      yield* seedRegisterOk(stub, 'queue-1', 0)
-      yield* adapter.inbox.subscribe('mentions')
-      const reqs = yield* stub.captured
-      const reg = reqs.find((r) => r.method === 'POST' && r.url.pathname === '/api/v1/register')
-      if (reg === undefined) throw new Error('expected captured POST /api/v1/register')
-      const params = new URLSearchParams(reg.body)
-      const narrow = JSON.parse(params.get('narrow') ?? 'null') as unknown
-      expect(narrow).toEqual([['is', 'mentioned']])
-    }),
+// comms-n1my. Zulip evaluates a queue narrow against the queue's OWNER, and
+// this queue is owned by the minter — so `is:mentioned` matched the *minter's*
+// mentions and dropped the bound bot's at the server, before any adapter-side
+// check could see them. A mentions-only seat was therefore reading someone
+// else's inbox while looking like it had a working one. The queue goes out
+// wide; per-session narrowing happens above it.
+effectTest('inbox.events register carries no narrow', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    // subscribe eagerly registers the events queue (the readiness contract —
+    // events() must see anything posted after subscribe resolves), so the
+    // register this asserts on is the one events() goes on to poll.
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES])
+    yield* seedRegisterOk(stub, 'queue-1', 0)
+    yield* seedSubscribeOk(stub, 'general')
+    yield* adapter.inbox.subscribe(generalChannel.name)
+    const reqs = yield* stub.captured
+    const reg = reqs.find((r) => r.method === 'POST' && r.url.pathname === '/api/v1/register')
+    if (reg === undefined) throw new Error('expected captured POST /api/v1/register')
+    const params = new URLSearchParams(reg.body)
+    expect(params.get('narrow')).toBeNull()
+  }),
 )
 
 // ─── pre-acquire surfaces run on minter creds ────────────────────

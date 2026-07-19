@@ -4,7 +4,7 @@ import type {
   ThreadName as ThreadNameType,
 } from '@commy/core/ports'
 import { decodeChannelName, decodeThreadName } from '@commy/core/ports'
-import { Data, Effect, Match, String as Str } from 'effect'
+import { Data, Effect, Match, Option, String as Str } from 'effect'
 
 /**
  * Parser-stage representation of `COMMY_SUBSCRIBE` tokens and
@@ -21,7 +21,6 @@ export type SubscribeIntent =
       readonly threadName: ThreadNameType
     }
   | { readonly kind: 'new-topics-in-channel'; readonly channelName: ChannelNameType }
-  | { readonly kind: 'mentions' }
 
 export class SubscribeTokenError extends Data.TaggedError('SubscribeTokenError')<{
   readonly token: string
@@ -46,9 +45,16 @@ const MENTIONS_LITERAL = 'mentions'
 const asTokenError = (token: string, reason: string) =>
   Effect.mapError(() => new SubscribeTokenError({ token, reason }))
 
+/**
+ * `None` means the token is valid but names no narrow — the caller registers
+ * nothing and reports success. `mentions` is the only such token: mentions are
+ * implicit and unconditional, so there is nothing to subscribe to. It parses
+ * rather than failing so a config written before the keyword was retired still
+ * boots; a later grammar change retires the dead form for good.
+ */
 export const parseSubscribeTarget = (
   token: string,
-): Effect.Effect<SubscribeIntent, SubscribeTokenError> =>
+): Effect.Effect<Option.Option<SubscribeIntent>, SubscribeTokenError> =>
   Effect.gen(function* () {
     if (Str.isEmpty(token)) {
       return yield* new SubscribeTokenError({ token, reason: 'token is empty' })
@@ -61,21 +67,21 @@ export const parseSubscribeTarget = (
     }
 
     if (token === MENTIONS_LITERAL) {
-      return { kind: 'mentions' } as const
+      return Option.none()
     }
 
     if (token.startsWith(CHANNEL_PREFIX)) {
       const channelName = yield* decodeChannelName(token.slice(CHANNEL_PREFIX.length)).pipe(
         asTokenError(token, 'channel name after "channel:" must not be empty'),
       )
-      return { kind: 'channel', channelName } as const
+      return Option.some({ kind: 'channel', channelName } as const)
     }
 
     if (token.startsWith(NEW_TOPICS_PREFIX)) {
       const channelName = yield* decodeChannelName(token.slice(NEW_TOPICS_PREFIX.length)).pipe(
         asTokenError(token, 'channel name after "new-topics:" must not be empty'),
       )
-      return { kind: 'new-topics-in-channel', channelName } as const
+      return Option.some({ kind: 'new-topics-in-channel', channelName } as const)
     }
 
     if (token.startsWith(THREAD_PREFIX)) {
@@ -93,12 +99,12 @@ export const parseSubscribeTarget = (
       const threadName = yield* decodeThreadName(rest.slice(slashAt + 1)).pipe(
         asTokenError(token, 'thread name in thread:<channel>/<thread> must not be empty'),
       )
-      return { kind: 'thread', channelName, threadName } as const
+      return Option.some({ kind: 'thread', channelName, threadName } as const)
     }
 
     return yield* new SubscribeTokenError({
       token,
-      reason: `unknown prefix — expected "channel:<name>", "thread:<channel>/<thread>", "new-topics:<channel>", or "mentions"`,
+      reason: `unknown prefix — expected "channel:<name>", "thread:<channel>/<thread>", or "new-topics:<channel>"`,
     })
   })
 
@@ -111,7 +117,6 @@ export const parseSubscribeTarget = (
 export const intentToTarget = (intent: SubscribeIntent): SubscriptionTarget =>
   Match.value(intent).pipe(
     Match.discriminatorsExhaustive('kind')({
-      mentions: (): SubscriptionTarget => 'mentions',
       channel: ({ channelName }): SubscriptionTarget => channelName,
       'new-topics-in-channel': ({ channelName }): SubscriptionTarget => ({
         kind: 'new-topics-in-channel',

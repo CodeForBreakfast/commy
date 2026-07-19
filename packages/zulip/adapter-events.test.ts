@@ -529,7 +529,6 @@ effectTest(
       yield* seedSubscribeOk(stub)
       yield* seedRegister(stub)
       yield* adapter.inbox.subscribe(homeChannel.name)
-      yield* adapter.inbox.subscribe('mentions')
       yield* stub.respondSequence('GET', '/api/v1/events', [
         {
           body: {
@@ -847,47 +846,47 @@ effectTest(
   { layer: TestContext.TestContext },
 )
 
-// A mode flip re-registers the events queue (mentions-narrow → all), but the
-// pump calls `inbox.events()` exactly once, so the queue and narrow it reads
-// are fixed for the pump's lifetime. If the flip happens while the pump is
-// running, the freshly registered queue is never polled and the pump keeps
-// draining the narrower one — every channel message stays invisible for the
-// rest of the process.
+// A seat that has subscribed to nothing when the pump starts has no registered
+// queue, so the producer registers one of its own. Its first `subscribe()`
+// then registers the queue the inbox holds — and the pump calls
+// `inbox.events()` exactly once, so without a live read the producer would go
+// on draining its own for the rest of the process while the inbox's readiness
+// contract ("posts from this moment onward are observed") stood against a
+// queue nothing polls. This is the ordinary ephemeral path: acquire is lazy,
+// so the acquire-time default narrows land mid-stream on every first post.
 effectTest(
-  'inbox.events adopts the queue registered by a mode flip that happens mid-stream',
+  'inbox.events adopts the queue registered by a subscribe that happens mid-stream',
   () =>
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
       const adapter = yield* buildAdapter(stub)
       yield* seedSubscribeOk(stub)
       yield* stub.respondSequence('POST', '/api/v1/register', [
-        { body: { result: 'success', queue_id: 'queue-mentions', last_event_id: 0 } },
-        { body: { result: 'success', queue_id: 'queue-all', last_event_id: 0 } },
+        { body: { result: 'success', queue_id: 'queue-producer', last_event_id: 0 } },
+        { body: { result: 'success', queue_id: 'queue-inbox', last_event_id: 0 } },
       ])
-      // Mentions-only: currentMode is 'mentions', so the pump starts on the
-      // narrow queue.
-      yield* adapter.inbox.subscribe('mentions')
       // A sticky empty batch, not a finite sequence: the drain answers
       // instantly and runs to exhaustion whenever this fiber yields, so any
-      // fixed number of canned responses is spent before the flip below can
-      // land — leaving no post-flip poll to assert on. An always-available
-      // empty batch guarantees the producer polls again after the flip.
+      // fixed number of canned responses is spent before the subscribe below
+      // can land — leaving no post-subscribe poll to assert on. An
+      // always-available empty batch guarantees the producer polls again.
       yield* stub.respond('GET', '/api/v1/events', {
         body: { result: 'success', events: [] },
       })
+      // No subscribe yet: the pump starts on the producer's own registration.
       const queue = yield* eventQueue(adapter)
       void queue
       yield* awaitEventPolls(stub, 1)
-      // Subscribing a channel flips the mode to 'all' and registers afresh.
       yield* adapter.inbox.subscribe(homeChannel.name)
-      // Every poll from here on started its step after the flip had been
-      // recorded, so all of them must be on the new queue — not just the last.
-      const atFlip = (yield* eventPolls(stub)).length
-      yield* awaitEventPolls(stub, atFlip + 2)
+      // Every poll from here on started its step after the registration had
+      // been recorded, so all of them must be on the new queue — not just the
+      // last.
+      const atSubscribe = (yield* eventPolls(stub)).length
+      yield* awaitEventPolls(stub, atSubscribe + 2)
       const polls = yield* eventPolls(stub)
-      const afterFlip = polls.slice(atFlip).map((p) => p.url.searchParams.get('queue_id'))
-      expect(afterFlip.length).toBeGreaterThan(0)
-      expect([...new Set(afterFlip)]).toEqual(['queue-all'])
+      const afterSubscribe = polls.slice(atSubscribe).map((p) => p.url.searchParams.get('queue_id'))
+      expect(afterSubscribe.length).toBeGreaterThan(0)
+      expect([...new Set(afterSubscribe)]).toEqual(['queue-inbox'])
     }),
   { layer: TestContext.TestContext },
 )

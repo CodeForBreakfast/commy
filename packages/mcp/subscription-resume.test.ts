@@ -45,12 +45,15 @@ const DECISIONS_THREAD = 'ref-types-split-decisions'
 const SID_RESUME = '61b08d76-0000-4000-8000-000000000001'
 const SID_FRESH = 'f9e5f9e5-0000-4000-8000-000000000002'
 
+const generalTopicsIntent: SubscribeIntent = {
+  kind: 'new-topics-in-channel',
+  channelName: decodeChannelNameSync('general'),
+}
 const decisionsThreadIntent: SubscribeIntent = {
   kind: 'thread',
   channelName: decodeChannelNameSync(DECISIONS_CHANNEL),
   threadName: decodeThreadNameSync(DECISIONS_THREAD),
 }
-const mentionsIntent: SubscribeIntent = { kind: 'mentions' }
 const channelIntent = (name: string): SubscribeIntent => ({
   kind: 'channel',
   channelName: decodeChannelNameSync(name),
@@ -137,7 +140,7 @@ test('restore rehydrates the persisted narrow set when the shared deferred is fi
       const session = yield* Deferred.make<SessionId>()
       const subscriptionStore = inMemorySubscriptionStore(
         session,
-        new Map([[SID_RESUME, [decisionsThreadIntent, mentionsIntent]]]),
+        new Map([[SID_RESUME, [decisionsThreadIntent, generalTopicsIntent]]]),
       )
 
       // Boot-fork restore: it parks on the store read, which awaits the deferred.
@@ -157,7 +160,7 @@ test('restore rehydrates the persisted narrow set when the shared deferred is fi
       expect(narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(true)
       expect(subscribes).toContainEqual(intentToTarget(decisionsThreadIntent))
       expect(sortIntents(narrowSet.intents())).toEqual(
-        sortIntents([decisionsThreadIntent, mentionsIntent]),
+        sortIntents([decisionsThreadIntent, generalTopicsIntent]),
       )
     }),
   ))
@@ -178,7 +181,7 @@ test('deltas racing the load are journaled and replayed onto the restored base',
       const session = yield* Deferred.make<SessionId>()
       const subscriptionStore = inMemorySubscriptionStore(
         session,
-        new Map([[SID_RESUME, [decisionsThreadIntent, mentionsIntent]]]),
+        new Map([[SID_RESUME, [decisionsThreadIntent, generalTopicsIntent]]]),
       )
 
       const fiber = yield* Effect.fork(
@@ -187,12 +190,12 @@ test('deltas racing the load are journaled and replayed onto the restored base',
 
       // Before the id lands: subscribe something new, unsubscribe a persisted sub.
       narrowSet.add(channelIntent('fresh-sub'))
-      narrowSet.remove(mentionsIntent)
+      narrowSet.remove(generalTopicsIntent)
 
       yield* Deferred.succeed(session, asSessionId(SID_RESUME))
       yield* Fiber.join(fiber)
 
-      // Restored base with deltas replayed: fresh-sub survived, mentions removed,
+      // Restored base with deltas replayed: fresh-sub survived, new-topics removed,
       // env-default stayed dropped.
       expect(sortIntents(narrowSet.intents())).toEqual(
         sortIntents([decisionsThreadIntent, channelIntent('fresh-sub')]),

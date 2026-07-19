@@ -332,33 +332,32 @@ const captureRegisterBody = (): {
 
 test('registerQueue maps the response to a QueueState', async () => {
   const { http } = captureRegisterBody()
-  const state = await runSilently(registerQueue(http, 'all'))
+  const state = await runSilently(registerQueue(http))
   expect(state).toEqual({ queueId: 'q-1', lastEventId: 7 })
 })
 
 test('registerQueue omits idle_queue_timeout when no timeout is supplied', async () => {
   const { http, captured } = captureRegisterBody()
-  await runSilently(registerQueue(http, 'all'))
+  await runSilently(registerQueue(http))
   expect(captured()).toEqual({ event_types: JSON.stringify(['message', 'reaction', 'realm']) })
 })
 
 test('registerQueue sends idle_queue_timeout when a timeout is supplied', async () => {
   const { http, captured } = captureRegisterBody()
-  await runSilently(registerQueue(http, 'all', 3600))
+  await runSilently(registerQueue(http, 3600))
   expect(captured()).toEqual({
     event_types: JSON.stringify(['message', 'reaction', 'realm']),
     idle_queue_timeout: 3600,
   })
 })
 
-test('registerQueue in mentions mode keeps the narrow alongside idle_queue_timeout', async () => {
+// Zulip evaluates a queue narrow against the queue's owner — the minter — so
+// an `is:mentioned` narrow here matched the minter's mentions and dropped the
+// bound bot's before the adapter could see them. The queue must go out wide.
+test('registerQueue never narrows the queue', async () => {
   const { http, captured } = captureRegisterBody()
-  await runSilently(registerQueue(http, 'mentions', 100))
-  expect(captured()).toEqual({
-    event_types: JSON.stringify(['message', 'reaction', 'realm']),
-    narrow: JSON.stringify([['is', 'mentioned']]),
-    idle_queue_timeout: 100,
-  })
+  await runSilently(registerQueue(http, 100))
+  expect(captured()).not.toHaveProperty('narrow')
 })
 
 const drainOne = (
@@ -447,7 +446,6 @@ test(
             }),
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
           queueIdleTimeoutSecs: 3600,
@@ -478,7 +476,6 @@ test(
             }),
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
           onQueueRegister: (q) => Effect.sync(() => void registered.push(q)),
@@ -517,7 +514,6 @@ const realmSettingsConfig = (
     onGet: () => ({ result: 'success', events }),
   }),
   resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-  mode: 'all',
   boundIdentity: HERMES,
   messageRefCache: createMessageRefCache(),
   onRealmSettings,
@@ -636,7 +632,6 @@ test(
             }),
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
           onQueueAdvance: (id) => Effect.sync(() => void advanced.push(id)),
@@ -672,7 +667,6 @@ test(
             },
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
           onQueueAdvance: (id) => Effect.sync(() => void advanced.push(id)),
@@ -705,7 +699,6 @@ test(
             }),
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
           initialQueue: { queueId: 'q-resumed', lastEventId: 4 },
@@ -747,7 +740,6 @@ test(
             },
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
           initialQueue: { queueId: 'q-dead', lastEventId: 4 },
@@ -792,7 +784,6 @@ test(
             },
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
           initialQueue: { queueId: 'q-resumed', lastEventId: 0 },
@@ -835,7 +826,6 @@ test(
           },
         }),
         resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-        mode: 'all',
         boundIdentity: HERMES,
         messageRefCache: createMessageRefCache(),
         initialQueue: { queueId: 'q-wedged', lastEventId: 4 },
@@ -891,7 +881,6 @@ test(
             },
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
           queueIdleTimeoutSecs: 100,
@@ -944,7 +933,6 @@ test(
             },
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
         }
@@ -986,7 +974,6 @@ test(
             },
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
         }
@@ -1045,7 +1032,6 @@ test(
             },
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
         }
@@ -1094,7 +1080,6 @@ test(
             },
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
         }
@@ -1204,7 +1189,6 @@ test(
             },
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
           replay: (since) =>
@@ -1360,7 +1344,6 @@ test(
             },
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
           replay: (since) =>
@@ -1430,7 +1413,6 @@ test(
             },
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
           // No `replay` field — iterator should skip gap-fill entirely.
@@ -1490,7 +1472,6 @@ test(
             },
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
           replay: () =>
@@ -1562,7 +1543,6 @@ test(
             },
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
           replay: () =>
@@ -1630,7 +1610,6 @@ test('producer retries on transient ZulipApiError and emits transient/reconnect 
           },
         }),
         resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-        mode: 'all',
         boundIdentity: HERMES,
         messageRefCache: createMessageRefCache(),
       }
@@ -1685,7 +1664,6 @@ test('producer survives multiple consecutive transient failures before recovery'
           },
         }),
         resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-        mode: 'all',
         boundIdentity: HERMES,
         messageRefCache: createMessageRefCache(),
       }
@@ -1760,7 +1738,6 @@ test('producer fires each retry only after its capped-exponential backoff elapse
           },
         }),
         resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-        mode: 'all',
         boundIdentity: HERMES,
         messageRefCache: createMessageRefCache(),
       }
@@ -1816,7 +1793,6 @@ test('producer surfaces non-Error rejections via the ZulipApiError message in th
           },
         }),
         resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-        mode: 'all',
         boundIdentity: HERMES,
         messageRefCache: createMessageRefCache(),
       }
@@ -1859,7 +1835,6 @@ test('producer logs a rate-limit backoff breadcrumb when /events returns HTTP 42
           },
         }),
         resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-        mode: 'all',
         boundIdentity: HERMES,
         messageRefCache: createMessageRefCache(),
       }
@@ -1892,7 +1867,6 @@ test(
             }),
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'all',
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
         }
@@ -1913,15 +1887,13 @@ test(
 )
 
 test(
-  'the register record names the narrow actually registered against, not the construction-time mode',
+  'a re-register after an expired queue leaves a record naming the fresh queue',
   () =>
     runSilently(
       Effect.gen(function* () {
-        // comms-d51h + comms-gh88.4 meet here. A re-register after a mode flip
-        // cuts the fresh queue against the inbox's *current* narrow, so a record
-        // reporting `config.mode` would name the stale one — misreporting
-        // precisely the case the re-register exists to fix. A line that reads
-        // authoritative and is wrong where it matters is worse than no line.
+        // comms-d51h. A (re-)register is the one moment a seat can silently
+        // lose its backlog, so it must leave a trace — otherwise a gap in the
+        // record looks like a quiet realm.
         const lines: string[] = []
         let getCalls = 0
         const config: EventsConfig = {
@@ -1945,11 +1917,7 @@ test(
             },
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          // Constructed narrow, since superseded by the flip below.
-          mode: 'mentions',
-          currentRegistration: Effect.succeed(
-            Option.some({ queue: { queueId: 'q-stale', lastEventId: 0 }, mode: 'all' as const }),
-          ),
+          currentRegistration: Effect.succeed(Option.some({ queueId: 'q-stale', lastEventId: 0 })),
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
         }
@@ -1957,8 +1925,7 @@ test(
 
         const registered = lines.find((line) => line.includes('registered queue_id=q-wide'))
         expect(registered).toBeDefined()
-        expect(registered).toContain('mode=all')
-        expect(registered).not.toContain('mode=mentions')
+        expect(registered).toContain('last_event_id=0')
       }),
     ),
   ITERATOR_TEST_TIMEOUT_MS,
@@ -1976,10 +1943,7 @@ test(
         // two adjacent observations — the producer knows it happened and should
         // say so.
         const lines: string[] = []
-        let registration = {
-          queue: { queueId: 'q-mentions', lastEventId: 0 },
-          mode: 'mentions' as 'all' | 'mentions',
-        }
+        let registration: QueueState = { queueId: 'q-producer', lastEventId: 0 }
         let getCalls = 0
         const config: EventsConfig = {
           permalinkBase: PERMALINK_BASE,
@@ -1987,10 +1951,11 @@ test(
             onPost: () => ({ result: 'success', queue_id: 'q-unused', last_event_id: 0 }),
             onGet: () => {
               getCalls += 1
-              // The flip lands between the first and second poll, so the second
-              // step reads a registration that differs from the observed one.
+              // The inbox registers between the first and second poll, so the
+              // second step reads a registration that differs from the observed
+              // one.
               if (getCalls === 1) {
-                registration = { queue: { queueId: 'q-all', lastEventId: 0 }, mode: 'all' }
+                registration = { queueId: 'q-inbox', lastEventId: 0 }
               }
               return {
                 result: 'success',
@@ -2005,8 +1970,7 @@ test(
             },
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          mode: 'mentions',
-          initialQueue: { queueId: 'q-mentions', lastEventId: 0 },
+          initialQueue: { queueId: 'q-producer', lastEventId: 0 },
           currentRegistration: Effect.sync(() => Option.some(registration)),
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
@@ -2015,9 +1979,8 @@ test(
 
         const adopted = lines.find((line) => line.includes('adopted queue_id='))
         expect(adopted).toBeDefined()
-        expect(adopted).toContain('queue_id=q-all')
-        expect(adopted).toContain('replaced=q-mentions')
-        expect(adopted).toContain('mode=all')
+        expect(adopted).toContain('queue_id=q-inbox')
+        expect(adopted).toContain('replaced=q-producer')
       }),
     ),
   ITERATOR_TEST_TIMEOUT_MS,

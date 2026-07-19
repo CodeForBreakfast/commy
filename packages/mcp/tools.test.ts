@@ -1073,11 +1073,22 @@ test('unsubscribe routes through inbox.unsubscribe with the parsed target', () =
         const result = yield* Effect.promise(() =>
           rig.client.callTool({
             name: 'unsubscribe',
-            arguments: { target: 'mentions' },
+            arguments: { target: 'channel:home' },
           }),
         )
         expect(result.isError).toBeFalsy()
-        expect(unsubscribed).toEqual(['mentions'])
+        expect(unsubscribed).toEqual([decodeChannelNameSync('home')])
+
+        // The retired `mentions` token still succeeds, and reaches neither sink
+        // — a bot cannot stop receiving its own mentions.
+        const retired = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'unsubscribe',
+            arguments: { target: 'mentions' },
+          }),
+        )
+        expect(retired.isError).toBeFalsy()
+        expect(unsubscribed).toEqual([decodeChannelNameSync('home')])
       }),
     ),
   ))

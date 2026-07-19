@@ -157,9 +157,9 @@ export const forkIdleSweep = (
 /**
  * Type-2 default sub set for interactive CC sessions. Fires
  * once per ephemeral slot, right after the substrate-side acquire
- * resolves: registers the universal `mentions` narrow plus the project
- * broadcast topic `thread:#<project>/general` (skipped when no project
- * slug could be derived).
+ * resolves: registers the project broadcast topic
+ * `thread:#<project>/general` (skipped when no project slug could be
+ * derived). Mentions need no narrow — they arrive unconditionally.
  *
  * Failures are swallowed with a log line — the bot is already minted at
  * this point and refusing the caller's tool call over a transient
@@ -177,16 +177,14 @@ const createType2DefaultsOnAcquire = (
       Effect.zipRight(inbox.subscribe(intentToTarget(intent))),
     )
   return (project) =>
-    registerIntent({ kind: 'mentions' }).pipe(
-      Effect.zipRight(
-        project !== undefined
-          ? Effect.all([decodeChannelName(project), decodeThreadName('general')]).pipe(
-              Effect.flatMap(([channelName, threadName]) =>
-                registerIntent({ kind: 'thread', channelName, threadName }),
-              ),
-            )
-          : Effect.void,
-      ),
+    (project !== undefined
+      ? Effect.all([decodeChannelName(project), decodeThreadName('general')]).pipe(
+          Effect.flatMap(([channelName, threadName]) =>
+            registerIntent({ kind: 'thread', channelName, threadName }),
+          ),
+        )
+      : Effect.void
+    ).pipe(
       Effect.catchAll((err) =>
         Effect.logError(
           `commy plugin: Type-2 default narrow registration failed: ${Cause.pretty(Cause.fail(err))}`,
@@ -200,14 +198,14 @@ const createType2DefaultsOnAcquire = (
  * Fires once at boot, immediately after the persistent-mode eager
  * acquire resolves. Registers:
  *
- *   1. `mentions` — universal: every persistent bot hears @-mentions.
- *   2. `new-topics:<project>` — first message of every new topic in the
+ *   1. `new-topics:<project>` — first message of every new topic in the
  *      project channel. Concierge-specific delivery rule so a fresh
  *      enquiry surfaces while replies in unrelated topics stay quiet.
- *   3. `thread:<project>/general` — project broadcast topic.
+ *   2. `thread:<project>/general` — project broadcast topic.
  *
- * (2) and (3) are skipped when no project slug resolves from
- * `COMMY_PROJECT`; (1) always runs. Failures swallow with a log
+ * Both are skipped when no project slug resolves from `COMMY_PROJECT`,
+ * leaving the set empty — mentions still arrive, because they are
+ * unconditional and need no narrow. Failures swallow with a log
  * line — the bot is already minted at this point and refusing service
  * over a transient substrate hiccup would be worse than the missing
  * default. The operator can compose narrows by hand via the `subscribe`
@@ -231,13 +229,12 @@ const registerType1DefaultsOnBoot = (
     ? Effect.all([decodeChannelName(project), decodeThreadName('general')]).pipe(
         Effect.map(
           ([channelName, threadName]): ReadonlyArray<SubscribeIntent> => [
-            { kind: 'mentions' },
             { kind: 'new-topics-in-channel', channelName },
             { kind: 'thread', channelName, threadName },
           ],
         ),
       )
-    : Effect.succeed<ReadonlyArray<SubscribeIntent>>([{ kind: 'mentions' }])
+    : Effect.succeed<ReadonlyArray<SubscribeIntent>>([])
   ).pipe(
     Effect.flatMap((intents) =>
       Effect.forEach(intents, (intent) =>
@@ -250,9 +247,7 @@ const registerType1DefaultsOnBoot = (
       ),
     ),
     Effect.catchAll((err) =>
-      logType1Failure(err).pipe(
-        Effect.as([{ kind: 'mentions' }] as ReadonlyArray<SubscribeIntent>),
-      ),
+      logType1Failure(err).pipe(Effect.as([] as ReadonlyArray<SubscribeIntent>)),
     ),
   )
 
