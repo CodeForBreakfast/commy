@@ -846,3 +846,48 @@ effectTest(
     }),
   { layer: TestContext.TestContext },
 )
+
+// A mode flip re-registers the events queue (mentions-narrow → all), but the
+// pump calls `inbox.events()` exactly once, so the queue and narrow it reads
+// are fixed for the pump's lifetime. If the flip happens while the pump is
+// running, the freshly registered queue is never polled and the pump keeps
+// draining the narrower one — every channel message stays invisible for the
+// rest of the process.
+effectTest(
+  'inbox.events adopts the queue registered by a mode flip that happens mid-stream',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* seedSubscribeOk(stub)
+      yield* stub.respondSequence('POST', '/api/v1/register', [
+        { body: { result: 'success', queue_id: 'queue-mentions', last_event_id: 0 } },
+        { body: { result: 'success', queue_id: 'queue-all', last_event_id: 0 } },
+      ])
+      // Mentions-only: currentMode is 'mentions', so the pump starts on the
+      // narrow queue.
+      yield* adapter.inbox.subscribe('mentions')
+      // A sticky empty batch, not a finite sequence: the drain answers
+      // instantly and runs to exhaustion whenever this fiber yields, so any
+      // fixed number of canned responses is spent before the flip below can
+      // land — leaving no post-flip poll to assert on. An always-available
+      // empty batch guarantees the producer polls again after the flip.
+      yield* stub.respond('GET', '/api/v1/events', {
+        body: { result: 'success', events: [] },
+      })
+      const queue = yield* eventQueue(adapter)
+      void queue
+      yield* awaitEventPolls(stub, 1)
+      // Subscribing a channel flips the mode to 'all' and registers afresh.
+      yield* adapter.inbox.subscribe(homeChannel.name)
+      // Every poll from here on started its step after the flip had been
+      // recorded, so all of them must be on the new queue — not just the last.
+      const atFlip = (yield* eventPolls(stub)).length
+      yield* awaitEventPolls(stub, atFlip + 2)
+      const polls = yield* eventPolls(stub)
+      const afterFlip = polls.slice(atFlip).map((p) => p.url.searchParams.get('queue_id'))
+      expect(afterFlip.length).toBeGreaterThan(0)
+      expect([...new Set(afterFlip)]).toEqual(['queue-all'])
+    }),
+  { layer: TestContext.TestContext },
+)
