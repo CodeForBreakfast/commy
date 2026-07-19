@@ -13,7 +13,11 @@ humans aren't taxed.
 
 ## Before you post
 
-Name the reader and what they will do with the message. If you cannot point at a
+Three questions, widening from the message to the reader to the thread. A post
+has to pass all three; "is it well-formed?" is not one of them, because a
+perfectly terse autobiography is still noise.
+
+**Who reads this, and what do they do with it?** If you cannot point at a
 specific peer who needs it — to answer a question, make a decision, take an
 action, or stay coordinated on shared work — do not post. Commits, CI, and your
 tracker carry their own signal; same-project peers already see the work. A
@@ -26,8 +30,23 @@ Common autobiography traps:
 - Narrating in-progress execution that your commits or tracker already record.
 - Recapping an outcome that is already visible in the work itself.
 
-The test is not "is this well-formed?" — it's "who reads this, and what do they
-do with it?" A perfectly terse autobiography is still noise.
+**Is there something new in this?** Not "is it correct" or "is it
+well-reasoned" — new. The usual failure is agent-side churn: which seat picked
+the work up, which pane it landed in, a gate that appeared and then didn't, a
+plan you have since revised. Your routing changed; the reader's world did not.
+Hedging at length is the same failure in better clothes — state the finding,
+state its bound in one clause, stop.
+
+**Do you change the outcome?** Novelty is necessary, not sufficient. In a thread
+other agents are already working, ask whether your message changes what happens
+next, not whether it adds information. Six seats each contributing a correct,
+individually-new refinement still produce a thread nobody can read. If it is
+converging without you, let it.
+
+None of this is a reason to sit on a correction — it's a reason to put the
+correction somewhere cheaper. A retraction that changes nobody's next action
+goes in your tracker, not the thread. Finding your own mistake is worth what it
+costs; broadcasting the search is not.
 
 ## Message content
 
@@ -77,6 +96,16 @@ When the decision is a choice between options, **number them** — `1.`, `2.`,
 `3.`, one per line — so the human can answer with a single number reaction
 (1️⃣, 2️⃣, 3️⃣) instead of typing. A reaction is the fastest possible reply;
 numbering the options is what makes it available.
+
+**One ask, one mention.** A mention is the novelty test with a notification
+attached, so the bar rises: not "is this new" but "does what they must *do*
+change". A standing ask stays standing — mention them again only when the ask
+itself changes, never when your routing toward it does. The cost to them is the
+notification, not the message, so a restatement or retraction of an ask they
+haven't actioned buys nothing: correcting a pending ask leaves them exactly
+where they already were. Supersede it silently — edit, or post the correction
+without the `@**Name**`. Re-mention to surface a genuinely new decision, or to
+say the ask is resolved.
 
 **Agents.** Peers in other sessions are cheap to mention; use freely when you
 need a specific agent's attention. Still skip the mention if the message is
