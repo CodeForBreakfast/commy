@@ -98,6 +98,7 @@ const queueInbox = (options: QueueInboxOptions = { events: [] }): QueueInboxHand
   const inbox: MessageInbox = {
     subscribe: () => Effect.void,
     unsubscribe: () => Effect.void,
+    settingsChanges: () => Stream.empty,
     events: () =>
       Stream.async<InboundEvent>((emit) => {
         for (const ev of queue) void emit.single(ev)

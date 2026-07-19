@@ -397,6 +397,28 @@ export type InboundEvent =
     }
 
 /**
+ * Realm-wide settings a consumer's own capability surface depends on.
+ *
+ * Deliberately NOT a member of {@link InboundEvent}. Every `InboundEvent`
+ * variant carries a message and an originating identity, and consumers
+ * are total over that union — the event pump's `originatorId`,
+ * `identitiesIn` and `renderEvent`, the narrow-set filter, and the
+ * memory adapter all rely on it. A settings change has no message, no
+ * channel and no author, so admitting one to the union would make every
+ * one of those partial and force each to answer what a non-conversational
+ * event means. It travels on its own stream instead
+ * ({@link MessageInbox.settingsChanges}), and must never be rendered to
+ * a consumer as a conversational event.
+ */
+export interface RealmSettings {
+  /**
+   * Mirrors {@link MessagePublisher.editingAvailable} — the realm-wide
+   * message-editing switch as of this change.
+   */
+  readonly editingAvailable: boolean
+}
+
+/**
  * Opaque substrate-specific credential blob. Each adapter publishes the
  * keys it populates (Zulip: `email`+`apiKey`; Memory: synthesised
  * marker fields). Callers persist the blob if they need to reconstruct
@@ -628,6 +650,19 @@ export interface MessageInbox {
    * retry; consumers see only successfully-decoded events.
    */
   events(): Stream.Stream<InboundEvent>
+  /**
+   * Stream of realm-wide setting changes that affect a consumer's own
+   * capability surface — see {@link RealmSettings} for why these travel
+   * separately from `events()` rather than joining `InboundEvent`.
+   *
+   * Emits only on an observed change, never an initial value: a consumer
+   * samples the opening state itself (`editingAvailable`) and uses this
+   * to stay current. Like `events()` the Stream is infinite with a
+   * `never` error channel; substrates that cannot observe settings
+   * changes return an empty Stream, and a consumer that sees nothing
+   * degrades to the boot-time sample rather than breaking.
+   */
+  settingsChanges(): Stream.Stream<RealmSettings>
   /**
    * Backfill messages newer than the given timestamp. Used at session
    * start to recover messages missed while offline.

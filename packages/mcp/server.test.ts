@@ -194,6 +194,7 @@ const buildFakeAdapter = (
         subscribed.push(target)
       }),
     unsubscribe: (_target: SubscriptionTarget) => Effect.void,
+    settingsChanges: () => Stream.empty,
     events: () => Stream.empty,
     replay: (_since: TimestampType) => Effect.succeed([]),
   }

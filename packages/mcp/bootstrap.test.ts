@@ -801,6 +801,7 @@ const buildFakeInbox = (options: { readonly rejectOn?: number } = {}): FakeInbox
         return Effect.void
       }),
     unsubscribe: () => Effect.void,
+    settingsChanges: () => Stream.empty,
     events: () => Stream.empty,
     replay: () => Effect.succeed([]),
   }

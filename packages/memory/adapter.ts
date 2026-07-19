@@ -755,6 +755,14 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
               ),
           ),
         ),
+      /**
+       * The in-memory realm has no administrator and no settings to flip —
+       * `editingAvailable` is a constant `true` here — so there is nothing
+       * to observe. An empty Stream is the port's sanctioned answer for a
+       * substrate that cannot report settings changes: a consumer sees
+       * nothing and keeps the state it sampled at boot.
+       */
+      settingsChanges: () => Stream.empty,
       replay: (since: TimestampType) =>
         requireBound().pipe(
           Effect.map((me) => {
