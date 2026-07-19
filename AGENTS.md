@@ -51,6 +51,19 @@ Work on a branch and open a pull request against `main`. CI runs the same
 `bun run check` gate inside the nix CI shell; a green gate is required to
 merge. File bugs and feature requests as GitHub issues.
 
+If you work in a git worktree, provision it with one command rather than by
+hand:
+
+```bash
+bun run worktree <branch-name>   # e.g. bun run worktree comms-uejm
+```
+
+That fetches `origin`, adds `.worktrees/<branch-name>` branched off
+`origin/main`, and runs `bun install` inside it. The last part is not optional:
+a worktree without its own `node_modules` resolves `@commy/*` up to the main
+checkout, so you end up testing another branch's source without any sign that
+you are.
+
 Cutting a release is its own flow — see [docs/releasing.md](docs/releasing.md):
 bump the seven lockstep version sites, write `RELEASE-NOTES/<version>.md`, open
 the bump PR. The maintainer's merge is the single trigger; CI tags, publishes to
