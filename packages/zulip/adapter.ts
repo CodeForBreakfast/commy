@@ -297,17 +297,25 @@ const sentMessageSchema = Schema.Struct({
 const successSchema = Schema.Struct({ result: Schema.Literal('success') })
 
 /**
- * Classify a failed content edit. Zulip walls a content edit two ways —
- * edit-window expired, and not-the-original-sender — but raises both as a
- * bare 400 with the same generic code; only the human message string
- * distinguishes them (verified against Zulip's `validate_user_can_edit_message`).
- * Match on stable substrings of those two messages so a caller gets a typed
- * `MessageEditRefused` reason; every other failure (network, 5xx, an
- * unrecognised 400) stays a generic, retryable `PublisherError`.
+ * Classify a failed content edit. Zulip walls a content edit three ways —
+ * realm editing disabled, edit-window expired, and not-the-original-sender —
+ * but raises all three as a bare 400 with the same generic code; only the
+ * human message string distinguishes them (verified against Zulip's
+ * `validate_user_can_edit_message`). Match on stable substrings of those three
+ * messages so a caller gets a typed `MessageEditRefused` reason; every other
+ * failure (network, 5xx, an unrecognised 400) stays a generic, retryable
+ * `PublisherError`.
+ *
+ * These strings are i18n'd by Zulip, so matching them only works because every
+ * request pins `Accept-Language: en` (see `makeZulipHttp`) — that is what keeps
+ * the responses English regardless of the realm's or the bot's own language.
  */
 const classifyEditFailure = (cause: unknown): MessageEditRefused | PublisherError => {
   if (cause instanceof ZulipApiError) {
     const text = cause.message.toLowerCase()
+    if (text.includes('turned off message editing')) {
+      return new MessageEditRefused({ reason: 'editing-disabled', cause })
+    }
     if (text.includes('time limit for editing this message')) {
       return new MessageEditRefused({ reason: 'window-expired', cause })
     }
@@ -407,6 +415,20 @@ const senderMessagesResponseSchema = Schema.Struct({
 const RECENT_THREADS_DEFAULT_LIMIT = 10
 const RECENT_THREADS_FETCH_LIMIT = 50
 const HISTORY_DEFAULT_LIMIT = 100
+
+/**
+ * The slice of Zulip's `/register` initial state that carries the realm-wide
+ * editing switch. Zulip exposes realm settings on no GET endpoint at all
+ * (`rest_path("realm", PATCH=update_realm)` is write-only), so `/register`
+ * with `fetch_event_types` is the only read path. `fetch_event_types` selects
+ * the returned state independently of `event_types`, which selects what the
+ * queue receives — so asking for `[]` events and `['realm']` state fetches the
+ * setting without subscribing to anything.
+ */
+const realmEditingStateSchema = Schema.Struct({
+  queue_id: Schema.String,
+  realm_allow_message_editing: Schema.Boolean,
+})
 
 const presenceStatusSchema = Schema.Literal('active', 'idle', 'offline')
 type ZulipPresenceStatus = Schema.Schema.Type<typeof presenceStatusSchema>
@@ -1494,6 +1516,35 @@ export const zulipAdapter = (
             cause instanceof UnresolvedMention ? cause : classifyEditFailure(cause),
           ),
         ),
+      // Read through the MINTER, never `boundHttp()`: this is sampled at
+      // connect, when a listen-only seat has acquired no identity and
+      // `boundHttp()` would fail. The setting is realm-scoped rather than
+      // viewer-scoped, so the minter's answer is the same answer any seat
+      // would get.
+      //
+      // Reading costs a queue: `/register` always allocates one, even asked
+      // for no event types. We hand it straight back. If that DELETE fails we
+      // ignore it — the queue is then orphaned until Zulip reaps it at its
+      // DEFAULT idle timeout (600s; note this register does not ask for the
+      // 86400 the event pump uses), which is bounded and self-healing, and
+      // not worth failing a capability probe over.
+      editingAvailable: () =>
+        minterHttp
+          .post('/register', realmEditingStateSchema, {
+            event_types: JSON.stringify([]),
+            fetch_event_types: JSON.stringify(['realm']),
+          })
+          .pipe(
+            Effect.tap((res) =>
+              minterHttp
+                .delete('/events', successSchema, { queue_id: res.queue_id })
+                .pipe(Effect.ignore),
+            ),
+            Effect.map((res) => res.realm_allow_message_editing),
+            Effect.mapError(
+              (cause) => new PublisherError({ operation: 'editingAvailable', cause }),
+            ),
+          ),
       react: (message, emoji) =>
         boundHttp().pipe(
           Effect.flatMap((http) =>

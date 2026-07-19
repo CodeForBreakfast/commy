@@ -581,6 +581,10 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
             return Effect.void
           }),
         ),
+      // The in-memory store has no realm-wide editing switch to turn off, so
+      // editing is always available — the honest answer for a substrate whose
+      // only edit refusals are per-message.
+      editingAvailable: () => Effect.succeed(true),
       react: (message, emoji) =>
         requireBound().pipe(
           Effect.flatMap((self) => {

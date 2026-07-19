@@ -10,7 +10,7 @@
  * ports.
  */
 
-import { Data, type Duration, type Effect, type Option, Schema, type Stream } from 'effect'
+import { Data, type Duration, type Effect, Match, type Option, Schema, type Stream } from 'effect'
 
 import { messageOf } from './messageOf.ts'
 
@@ -467,6 +467,25 @@ export interface MessagePublisher {
     message: MessageRef,
     body: MessageBody,
   ): Effect.Effect<void, UnresolvedMention | MessageEditRefused | PublisherError>
+  /**
+   * Whether the substrate permits `edit` at all *right now*, for anyone —
+   * the realm-wide switch behind `MessageEditRefused`'s `editing-disabled`
+   * reason, not the per-message walls. A substrate with no such switch
+   * answers `true`.
+   *
+   * Deliberately a verb rather than a field on `Capabilities`: this is a
+   * setting an administrator flips at runtime, so any value a caller holds
+   * is a sample with an age, not a static fact about the substrate. Callers
+   * that need a durable answer must decide how long a sample stays good —
+   * a driving adapter gating its tool surface samples once at connect and
+   * accepts a stale answer until it reconnects, which is why the
+   * `editing-disabled` arm of {@link MessageEditRefused} remains the
+   * backstop and is not made redundant by this verb.
+   *
+   * Answering may cost a substrate round-trip, so callers sample it
+   * deliberately rather than per-operation.
+   */
+  editingAvailable(): Effect.Effect<boolean, PublisherError>
   react(message: MessageRef, emoji: Emoji): Effect.Effect<void, PublisherError>
   unreact(message: MessageRef, emoji: Emoji): Effect.Effect<void, PublisherError>
   /**
@@ -766,7 +785,10 @@ export class UnresolvedMention extends Data.TaggedError('UnresolvedMention')<{
  * caller can tell "this message can never be edited from here, re-post" apart
  * from "the substrate hiccuped, retry".
  *
- * Zulip walls a content edit two ways, and commy can fix neither from code:
+ * Zulip walls a content edit three ways, and commy can fix none from code:
+ *  - `editing-disabled`: the realm has `allow_message_editing` off, so no
+ *    message on it is editable by anyone. Zulip checks this wall first, so on
+ *    such a realm it is the only wall any caller ever meets.
  *  - `window-expired`: the realm's `message_content_edit_limit_seconds` has
  *    elapsed since the message was sent. An operator knob on the realm — see
  *    docs/self-hosting.md — not something the substrate widens from code.
@@ -775,21 +797,36 @@ export class UnresolvedMention extends Data.TaggedError('UnresolvedMention')<{
  *    per-session — so a message posted by a previous session's seat can never
  *    be edited by today's seat, at any age. No realm setting changes that.
  *
- * Both walls force the same recovery, which retrying cannot reach: re-post
+ * All three walls force the same recovery, which retrying cannot reach: re-post
  * rather than edit. Tagged (like `UnknownChannel`) so the MCP edge and callers
  * discriminate it from a generic `PublisherError`. Zulip returns no
- * distinguishing error code for either wall — only the human message string
+ * distinguishing error code for any of them — only the human message string
  * differs — so the adapter classifies on that string, and any failure it does
  * not recognise stays a `PublisherError` (transient, retryable).
  */
 export class MessageEditRefused extends Data.TaggedError('MessageEditRefused')<{
-  readonly reason: 'window-expired' | 'not-original-sender'
+  readonly reason: 'editing-disabled' | 'window-expired' | 'not-original-sender'
   readonly cause: unknown
 }> {
   override get message(): string {
-    return this.reason === 'window-expired'
-      ? "edit refused: the realm's message edit-window (message_content_edit_limit_seconds) has passed for this message — re-post instead of editing"
-      : "edit refused: only the original sender may edit this message, and a cross-session ephemeral seat can never edit a prior seat's message at any age — re-post, or ask the original author"
+    return Match.value(this.reason).pipe(
+      Match.when(
+        'editing-disabled',
+        () =>
+          'edit refused: this realm has message editing turned off (allow_message_editing), so no message on it is editable by anyone — re-post instead of editing; neither re-authoring nor waiting helps',
+      ),
+      Match.when(
+        'window-expired',
+        () =>
+          "edit refused: the realm's message edit-window (message_content_edit_limit_seconds) has passed for this message — re-post instead of editing",
+      ),
+      Match.when(
+        'not-original-sender',
+        () =>
+          "edit refused: only the original sender may edit this message, and a cross-session ephemeral seat can never edit a prior seat's message at any age — re-post, or ask the original author",
+      ),
+      Match.exhaustive,
+    )
   }
 }
 
@@ -809,6 +846,7 @@ export class PublisherError extends Data.TaggedError('PublisherError')<{
     | 'resolveThread'
     | 'unresolveThread'
     | 'setChannelDescription'
+    | 'editingAvailable'
   readonly cause: unknown
 }> {
   override get message(): string {

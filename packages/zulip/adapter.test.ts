@@ -1259,6 +1259,130 @@ effectTest(
     }),
 )
 
+effectTest(
+  'publisher.edit surfaces MessageEditRefused editing-disabled when the realm has editing off',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* stub.respond('PATCH', '/api/v1/messages/42', {
+        body: {
+          result: 'error',
+          msg: 'Your organization has turned off message editing',
+          code: 'BAD_REQUEST',
+        },
+        status: 400,
+      })
+      const adapter = yield* buildAdapter(stub)
+      const target: MessageRef = {
+        id: decodeMessageIdSync('42'),
+        channel: generalChannel,
+        thread: Option.none(),
+        permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
+      }
+      const err = yield* Effect.flip(adapter.publisher.edit(target, decodeMessageBodySync('nope')))
+      expect(err).toBeInstanceOf(MessageEditRefused)
+      if (err instanceof MessageEditRefused) {
+        expect(err.reason).toBe('editing-disabled')
+        expect(err.cause).toBeInstanceOf(ZulipApiError)
+      }
+    }),
+)
+
+const seedRealmEditing = (stub: StubHttpClient, allowed: boolean): Effect.Effect<void> =>
+  stub.respond('POST', '/api/v1/register', {
+    body: {
+      result: 'success',
+      queue_id: 'probe-queue',
+      last_event_id: -1,
+      realm_allow_message_editing: allowed,
+    },
+  })
+
+effectTest('publisher.editingAvailable reports true when the realm allows editing', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedRealmEditing(stub, true)
+    yield* stub.respond('DELETE', '/api/v1/events', { body: { result: 'success' } })
+    const adapter = yield* buildAdapter(stub)
+    expect(yield* adapter.publisher.editingAvailable()).toBe(true)
+  }),
+)
+
+effectTest('publisher.editingAvailable reports false when the realm has editing off', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedRealmEditing(stub, false)
+    yield* stub.respond('DELETE', '/api/v1/events', { body: { result: 'success' } })
+    const adapter = yield* buildAdapter(stub)
+    expect(yield* adapter.publisher.editingAvailable()).toBe(false)
+  }),
+)
+
+// The gate samples this at connect, before any seat has acquired an identity.
+// A listen-only seat never acquires at all, so a probe routed through
+// `boundHttp()` would fail in production and nowhere else — this pins it to
+// the minter.
+effectTest('publisher.editingAvailable works on a seat that never acquires an identity', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedRealmEditing(stub, false)
+    yield* stub.respond('DELETE', '/api/v1/events', { body: { result: 'success' } })
+    const config = yield* makeConfig()
+    const adapter = yield* zulipAdapter(stub, config)
+    expect(yield* adapter.publisher.editingAvailable()).toBe(false)
+    const req = yield* findRequest(stub, 'POST', '/api/v1/register')
+    expect(req.headers.get('authorization')).toBe(`Basic ${btoa('minter@example.com:minter-key')}`)
+    // Asks for no events and only realm state: the probe reads a setting, it
+    // does not subscribe to anything.
+    expect(req.body).toContain('event_types=%5B%5D')
+    expect(req.body).toContain(encodeURIComponent(JSON.stringify(['realm'])))
+  }),
+)
+
+effectTest('publisher.editingAvailable hands back the queue that /register allocated', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedRealmEditing(stub, true)
+    yield* stub.respond('DELETE', '/api/v1/events', { body: { result: 'success' } })
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.publisher.editingAvailable()
+    const req = yield* findRequest(stub, 'DELETE', '/api/v1/events')
+    expect(req.body).toContain('queue_id=probe-queue')
+  }),
+)
+
+// An orphaned queue is reaped by Zulip's default idle timeout; it is not worth
+// failing a capability probe over.
+effectTest('publisher.editingAvailable still answers when the queue teardown fails', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedRealmEditing(stub, false)
+    yield* stub.respond('DELETE', '/api/v1/events', {
+      body: { result: 'error', msg: 'Bad event queue id', code: 'BAD_EVENT_QUEUE_ID' },
+      status: 400,
+    })
+    const adapter = yield* buildAdapter(stub)
+    expect(yield* adapter.publisher.editingAvailable()).toBe(false)
+  }),
+)
+
+// server.ts fails open on this error rather than hiding a working tool. (A 429
+// is not this case — the shared send path spends its cumulative retry budget on
+// a rate-limited realm before the probe ever sees a failure.)
+effectTest('publisher.editingAvailable surfaces a typed PublisherError when the read fails', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* stub.respond('POST', '/api/v1/register', {
+      body: { result: 'error', msg: 'Bad request', code: 'BAD_REQUEST' },
+      status: 400,
+    })
+    const adapter = yield* buildAdapter(stub)
+    const err = yield* Effect.flip(adapter.publisher.editingAvailable())
+    expect(err).toBeInstanceOf(PublisherError)
+    expect(err.operation).toBe('editingAvailable')
+  }),
+)
+
 effectTest('publisher.react POSTs /messages/{id}/reactions with emoji_name', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient

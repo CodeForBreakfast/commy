@@ -58,6 +58,7 @@ type ExtraToolDeps = Partial<{
     urlPath: string,
   ) => Effect.Effect<{ filePath: string; contentType: string; size: number }>
   upload: (path: string) => Effect.Effect<{ reference: string; filename: string; size: number }>
+  canEditMessages: boolean
 }>
 
 /**
@@ -149,6 +150,54 @@ test('tools/list advertises current_identity with optional session_id', () =>
         // session_id is optional (not in required[]).
         const inputSchema = tool?.inputSchema as { required?: ReadonlyArray<string> }
         expect(inputSchema.required ?? []).not.toContain('session_id')
+      }),
+    ),
+  ))
+
+test('tools/list advertises edit_message when the substrate allows editing', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
+        const result = yield* Effect.promise(() => rig.client.listTools())
+        expect(result.tools.map((t) => t.name)).toContain('edit_message')
+      }),
+    ),
+  ))
+
+test('tools/list omits edit_message when the substrate has editing disabled', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const adapter = yield* memoryAdapter()
+        const deps = yield* buildDeps(adapter)
+        const rig = yield* mountAndConnect(adapter, deps, { canEditMessages: false })
+        const result = yield* Effect.promise(() => rig.client.listTools())
+        expect(result.tools.map((t) => t.name)).not.toContain('edit_message')
+        // Only edit_message is gated — the rest of the surface is untouched.
+        expect(result.tools.map((t) => t.name)).toContain('post')
+      }),
+    ),
+  ))
+
+test('a gated-off edit_message is not callable through the back door', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const adapter = yield* memoryAdapter()
+        const deps = yield* buildDeps(adapter)
+        const rig = yield* mountAndConnect(adapter, deps, { canEditMessages: false })
+        // Withheld from the list means withheld from dispatch too: a client
+        // that calls it anyway (stale list, hand-written request) is refused
+        // by the protocol as an unknown tool, not handed to the adapter.
+        const outcome = yield* Effect.promise(() =>
+          rig.client
+            .callTool({ name: 'edit_message', arguments: { message_id: '1', body: 'nope' } })
+            .then(() => 'dispatched' as const)
+            .catch((error: unknown) => (error instanceof Error ? error.message : String(error))),
+        )
+        expect(outcome).not.toBe('dispatched')
+        expect(outcome).toContain('edit_message')
       }),
     ),
   ))
