@@ -4,6 +4,7 @@ import type {
   InboundEvent,
   MessageId,
   MessageInbox,
+  MessageRef,
   RealmSettings,
   Timestamp,
 } from '@commy/core/ports'
@@ -16,6 +17,7 @@ import {
   Effect,
   Fiber,
   Match,
+  Option,
   Predicate,
   Record as Rec,
   Stream,
@@ -194,6 +196,42 @@ const renderReaction = (
   )
 
 /**
+ * Every discard path shares this prefix so one grep over a seat's log answers
+ * "did this event reach the pump, and if so what ate it?" — the question that
+ * was unanswerable during comms-9iro because all three discards were bare
+ * `Effect.void`.
+ *
+ * Levels are chosen by signal, not by severity. `no-narrow-match` and
+ * `self-echo` are the expected common cases — the adapter ships the minter's
+ * entire event stream, so most events legitimately fail the narrow — and sit
+ * at DEBUG to stay switchable. `duplicate` and every delivery sit at INFO:
+ * a delivery record is what makes a *missing* delivery legible, which is the
+ * whole point.
+ */
+const DROP_PREFIX = 'commy plugin: event-pump drop'
+
+const describeRef = (kind: InboundEvent['kind'], ref: MessageRef): string =>
+  `kind=${kind} id=${ref.id} channel=${ref.channel.name} thread=${Option.match(ref.thread, {
+    onNone: () => '-',
+    onSome: (thread) => thread.name,
+  })}`
+
+/**
+ * Stable one-line identifier for an event. Reactions describe their *target*
+ * message: a reaction carries no id of its own, and the target is what an
+ * investigator correlates against the realm.
+ */
+const describeEvent = (event: InboundEvent): string =>
+  Match.value(event).pipe(
+    Match.discriminatorsExhaustive('kind')({
+      'message-posted': (e) => describeRef(e.kind, e.message.ref),
+      'mention-received': (e) => describeRef(e.kind, e.message.ref),
+      'reaction-added': (e) => describeRef(e.kind, e.target),
+      'reaction-removed': (e) => describeRef(e.kind, e.target),
+    }),
+  )
+
+/**
  * Bounded retention for the message-delivery dedup log. A
  * single Zulip mention surfaces as both `message-posted` and
  * `mention-received` from the adapter (`messageToInboundEvents` in
@@ -281,9 +319,15 @@ export const startEventPump = (deps: EventPumpDeps): Effect.Effect<EventPumpHand
 
     const dispatchEvent = (event: InboundEvent): Effect.Effect<void, DispatchFailure> =>
       Effect.suspend(() => {
-        if (deps.match !== undefined && !deps.match(event)) return Effect.void
+        if (deps.match !== undefined && !deps.match(event)) {
+          return Effect.logDebug(`${DROP_PREFIX} (no-narrow-match) ${describeEvent(event)}`)
+        }
         const botIdentityId = deps.getBotIdentityId()
-        if (isSelfEvent(event, botIdentityId)) return Effect.void
+        if (isSelfEvent(event, botIdentityId)) {
+          return Effect.logDebug(
+            `${DROP_PREFIX} (self-echo) ${describeEvent(event)} originator=${originatorId(event)}`,
+          )
+        }
 
         if (deps.rememberIdentity !== undefined) {
           for (const identity of identitiesIn(event)) deps.rememberIdentity(identity)
@@ -294,7 +338,11 @@ export const startEventPump = (deps: EventPumpDeps): Effect.Effect<EventPumpHand
             ? deps.onMention(event.message.ts)
             : Effect.void
 
-        if (recordMessageDelivery(event, seenDelivered) === 'duplicate') return advance
+        if (recordMessageDelivery(event, seenDelivered) === 'duplicate') {
+          return Effect.logInfo(`${DROP_PREFIX} (duplicate) ${describeEvent(event)}`).pipe(
+            Effect.zipRight(advance),
+          )
+        }
 
         return advance.pipe(
           Effect.zipRight(renderEvent(event, botIdentityId)),
@@ -303,6 +351,9 @@ export const startEventPump = (deps: EventPumpDeps): Effect.Effect<EventPumpHand
               try: () => deps.notifier(payload),
               catch: (cause) => new DispatchFailure({ cause }),
             }),
+          ),
+          Effect.zipRight(
+            Effect.logInfo(`commy plugin: event-pump delivered ${describeEvent(event)}`),
           ),
         )
       })
