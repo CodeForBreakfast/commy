@@ -37,7 +37,20 @@ const NEVER_RENDERED: RenderedContentLookup = () => Effect.succeedNone
 /**
  * A lookup that reads one message's rendering on demand. For the events path,
  * where messages arrive one at a time and there is no batch to amortise
- * across — one rate-limited request per mention-bearing message.
+ * across — one rate-limited request per mention-bearing message. The
+ * long-poll's exemption from `api_by_user` does not extend to this call: it is
+ * a plain Django request on the same budget as any other.
+ *
+ * INVARIANT this call must not break: the pump's retry never gives up
+ * (`defaultRetrySchedule`, wrapped around the whole poll step), so nothing
+ * inside that step may fail *deterministically* — a failure that recurs on
+ * every attempt stalls all inbound traffic, not only the message that caused
+ * it. Substrate-level failures are fine; they resolve on their own. This
+ * fetch currently satisfies that: Zulip answers an anchor naming no live
+ * message with an empty result rather than an error. Anything that changes
+ * that — a stricter decode here, a narrower permission on the reading
+ * identity, an upstream change to `/messages` — needs the pump's retry
+ * revisited, not just this function.
  */
 export const renderedContentPerMessage =
   (http: ZulipHttp): RenderedContentLookup =>
