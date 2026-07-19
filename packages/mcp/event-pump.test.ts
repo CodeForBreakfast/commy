@@ -21,6 +21,7 @@ import {
   decodeTimestampSync,
   MessagePermalinkSchema,
   ThreadPermalinkSchema,
+  userMentions,
 } from '@commy/core/ports'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
@@ -250,8 +251,8 @@ test('pump drops mention-received whose message sender is the bound bot identity
         events: [
           {
             kind: 'mention-received',
-            message: msg({ sender: selfSender, mentions: [alice] }),
-            mentions: [alice],
+            message: msg({ sender: selfSender, mentions: userMentions([alice]) }),
+            mentions: userMentions([alice]),
           },
         ],
         closeAfterDrain: true,
@@ -355,7 +356,7 @@ test('pump sets mentioned="true" when the bound bot is in the mention list', () 
     Effect.gen(function* () {
       const bot: Identity = { id: BOT_ID, name: decodeDisplayNameSync('cc-bot'), kind: 'agent' }
       const inbox = queueInbox({
-        events: [{ kind: 'message-posted', message: msg({ mentions: [bot] }) }],
+        events: [{ kind: 'message-posted', message: msg({ mentions: userMentions([bot]) }) }],
         closeAfterDrain: true,
       })
       const collector = collectingNotifier()
@@ -375,7 +376,7 @@ test('pump omits mentioned (and never surfaces bot_identity_id) when getBotIdent
     Effect.gen(function* () {
       const bot: Identity = { id: BOT_ID, name: decodeDisplayNameSync('cc-bot'), kind: 'agent' }
       const inbox = queueInbox({
-        events: [{ kind: 'message-posted', message: msg({ mentions: [bot] }) }],
+        events: [{ kind: 'message-posted', message: msg({ mentions: userMentions([bot]) }) }],
         closeAfterDrain: true,
       })
       const collector = collectingNotifier()
@@ -424,8 +425,8 @@ test('pump dispatches mention-received with mentions meta populated', () =>
         events: [
           {
             kind: 'mention-received',
-            message: msg({ mentions: [alice] }),
-            mentions: [alice],
+            message: msg({ mentions: userMentions([alice]) }),
+            mentions: userMentions([alice]),
           },
         ],
         closeAfterDrain: true,
@@ -528,8 +529,8 @@ test('pump calls rememberIdentity with sender + mentions of a mention-received e
         events: [
           {
             kind: 'mention-received',
-            message: msg({ mentions: [alice, bob] }),
-            mentions: [alice],
+            message: msg({ mentions: userMentions([alice, bob]) }),
+            mentions: userMentions([alice]),
           },
         ],
         closeAfterDrain: true,
@@ -702,15 +703,19 @@ test('pump calls onMention with the ts of each delivered mention-received event'
         events: [
           {
             kind: 'mention-received',
-            message: msg({ ts: decodeTimestampSync(1715450100), sender: alice, mentions: [bot] }),
-            mentions: [bot],
+            message: msg({
+              ts: decodeTimestampSync(1715450100),
+              sender: alice,
+              mentions: userMentions([bot]),
+            }),
+            mentions: userMentions([bot]),
           },
           {
             kind: 'mention-received',
             message: msg({
               ts: decodeTimestampSync(1715450200),
               sender: alice,
-              mentions: [bot],
+              mentions: userMentions([bot]),
               ref: {
                 id: decodeMessageIdSync('msg-2'),
                 channel: {
@@ -726,7 +731,7 @@ test('pump calls onMention with the ts of each delivered mention-received event'
                 ),
               },
             }),
-            mentions: [bot],
+            mentions: userMentions([bot]),
           },
         ],
         closeAfterDrain: true,
@@ -786,8 +791,8 @@ test('pump does NOT call onMention for events filtered out by the narrow predica
         events: [
           {
             kind: 'mention-received',
-            message: msg({ sender: alice, mentions: [bot] }),
-            mentions: [bot],
+            message: msg({ sender: alice, mentions: userMentions([bot]) }),
+            mentions: userMentions([bot]),
           },
         ],
         closeAfterDrain: true,
@@ -828,8 +833,8 @@ test('pump does NOT call onMention for self-echo mentions', () =>
         events: [
           {
             kind: 'mention-received',
-            message: msg({ sender: selfSender, mentions: [someone] }),
-            mentions: [someone],
+            message: msg({ sender: selfSender, mentions: userMentions([someone]) }),
+            mentions: userMentions([someone]),
           },
         ],
         closeAfterDrain: true,
@@ -854,11 +859,11 @@ test('pump dispatches a single notifier call when message-posted and mention-rec
   Effect.runPromise(
     Effect.gen(function* () {
       const bot: Identity = { id: BOT_ID, name: decodeDisplayNameSync('cc-bot'), kind: 'agent' }
-      const portMessage = msg({ mentions: [bot] })
+      const portMessage = msg({ mentions: userMentions([bot]) })
       const inbox = queueInbox({
         events: [
           { kind: 'message-posted', message: portMessage },
-          { kind: 'mention-received', message: portMessage, mentions: [bot] },
+          { kind: 'mention-received', message: portMessage, mentions: userMentions([bot]) },
         ],
         closeAfterDrain: true,
       })
@@ -881,11 +886,14 @@ test('pump still calls onMention when mention-received is the deduped duplicate'
       // even though the consumer sees one block, the bot's seen-up-to mark
       // for mentions must still move forward off the mention-received event.
       const bot: Identity = { id: BOT_ID, name: decodeDisplayNameSync('cc-bot'), kind: 'agent' }
-      const portMessage = msg({ ts: decodeTimestampSync(1715450500), mentions: [bot] })
+      const portMessage = msg({
+        ts: decodeTimestampSync(1715450500),
+        mentions: userMentions([bot]),
+      })
       const inbox = queueInbox({
         events: [
           { kind: 'message-posted', message: portMessage },
-          { kind: 'mention-received', message: portMessage, mentions: [bot] },
+          { kind: 'mention-received', message: portMessage, mentions: userMentions([bot]) },
         ],
         closeAfterDrain: true,
       })

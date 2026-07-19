@@ -25,6 +25,7 @@ import {
   decodeMessageId,
   decodeThreadName,
   decodeTimestamp,
+  mentionsIdentity,
 } from '@commy/core/ports'
 import {
   Chunk,
@@ -336,7 +337,7 @@ export const messageToInboundEvents = (
       sender,
       body,
       ts,
-      mentions: extractMentions(message.content, {
+      mentions: yield* extractMentions(message.content, {
         byName: directory.byName,
         byUserId: (userId) => directory.byId.get(userId),
       }),
@@ -351,10 +352,7 @@ export const messageToInboundEvents = (
     // flag is keyed to the queue owner rather than the bound bot. The
     // extracted mentions list is the authoritative answer to "was the bound
     // bot mentioned in this message?".
-    if (
-      boundIdentity !== undefined &&
-      portMessage.mentions.some((m) => m.id === boundIdentity.id)
-    ) {
+    if (boundIdentity !== undefined && mentionsIdentity(portMessage.mentions, boundIdentity.id)) {
       out.push({
         kind: 'mention-received',
         message: portMessage,

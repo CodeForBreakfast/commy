@@ -6,7 +6,7 @@ import type {
   MessageInbox,
   Timestamp,
 } from '@commy/core/ports'
-import { decodeTimestamp } from '@commy/core/ports'
+import { decodeTimestamp, mentionedIdentities } from '@commy/core/ports'
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import {
   Array as Arr,
@@ -121,9 +121,13 @@ const identitiesIn = (event: InboundEvent): ReadonlyArray<Identity> =>
   Match.value(event).pipe(
     Match.discriminatorsExhaustive('kind')({
       'message-posted': (message) =>
-        dedupeById([message.message.sender, ...message.message.mentions]),
+        dedupeById([message.message.sender, ...mentionedIdentities(message.message.mentions)]),
       'mention-received': (message) =>
-        dedupeById([message.message.sender, ...message.message.mentions, ...message.mentions]),
+        dedupeById([
+          message.message.sender,
+          ...mentionedIdentities(message.message.mentions),
+          ...mentionedIdentities(message.mentions),
+        ]),
       'reaction-added': (reaction) => dedupeById([reaction.by]),
       'reaction-removed': (reaction) => dedupeById([reaction.by]),
     }),

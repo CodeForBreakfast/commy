@@ -19,6 +19,7 @@ import {
   decodeTimestampSync,
   MessagePermalinkSchema,
   ThreadPermalinkSchema,
+  userMentions,
 } from '@commy/core/ports'
 import { Option } from 'effect'
 import { formatError, formatMessage, formatReaction } from './events.ts'
@@ -82,7 +83,7 @@ const mentionReceived = (
 ): InboundEvent & { kind: 'mention-received' } => ({
   kind: 'mention-received',
   message: msg,
-  mentions,
+  mentions: userMentions(mentions),
 })
 
 test('formatMessage — content is the message body verbatim', () => {
@@ -177,7 +178,10 @@ test('formatMessage — bot_identity_id is never surfaced (self-echo is emitter-
 })
 
 test('formatMessage — mentions meta lists display names ;-separated when non-empty', () => {
-  const out = formatMessage(messagePosted(baseMessage({ mentions: [alice, bob] })), BOT_ID)
+  const out = formatMessage(
+    messagePosted(baseMessage({ mentions: userMentions([alice, bob]) })),
+    BOT_ID,
+  )
   expect(out.meta['mentions']).toBe('Alice;Bob')
 })
 
@@ -192,7 +196,10 @@ test('formatMessage — a mention name containing the ; delimiter is sanitised, 
     name: decodeDisplayNameSync('Ev;il'),
     kind: 'agent',
   }
-  const out = formatMessage(messagePosted(baseMessage({ mentions: [evil, bob] })), BOT_ID)
+  const out = formatMessage(
+    messagePosted(baseMessage({ mentions: userMentions([evil, bob]) })),
+    BOT_ID,
+  )
   expect(out.meta['mentions']).toBe('Ev_il;Bob')
 })
 
@@ -202,12 +209,18 @@ test('formatMessage — mentioned="true" when the bound bot is in the mention li
     name: decodeDisplayNameSync('Me'),
     kind: 'agent',
   }
-  const out = formatMessage(messagePosted(baseMessage({ mentions: [alice, self] })), BOT_ID)
+  const out = formatMessage(
+    messagePosted(baseMessage({ mentions: userMentions([alice, self]) })),
+    BOT_ID,
+  )
   expect(out.meta['mentioned']).toBe('true')
 })
 
 test('formatMessage — mentioned absent when the bound bot is not in the mention list', () => {
-  const out = formatMessage(messagePosted(baseMessage({ mentions: [alice, bob] })), BOT_ID)
+  const out = formatMessage(
+    messagePosted(baseMessage({ mentions: userMentions([alice, bob]) })),
+    BOT_ID,
+  )
   expect(out.meta).not.toHaveProperty('mentioned')
 })
 
@@ -217,7 +230,10 @@ test('formatMessage — mentioned absent when there is no bound bot', () => {
     name: decodeDisplayNameSync('Me'),
     kind: 'agent',
   }
-  const out = formatMessage(messagePosted(baseMessage({ mentions: [self] })), undefined)
+  const out = formatMessage(
+    messagePosted(baseMessage({ mentions: userMentions([self]) })),
+    undefined,
+  )
   expect(out.meta).not.toHaveProperty('mentioned')
 })
 
@@ -267,7 +283,7 @@ test('formatMessage — body is NOT mutated by the formatter (host owns content 
 })
 
 test('formatMessage — mention-received produces the same payload as message-posted for matching input', () => {
-  const msg = baseMessage({ mentions: [alice] })
+  const msg = baseMessage({ mentions: userMentions([alice]) })
   const posted = formatMessage(messagePosted(msg), BOT_ID)
   const mentioned = formatMessage(mentionReceived(msg, [alice]), BOT_ID)
   expect(mentioned).toEqual(posted)
@@ -286,8 +302,8 @@ test('formatMessage — replayed=true on the event surfaces as meta.replayed="tr
 test('formatMessage — replayed=true also flagged on mention-received', () => {
   const replayed: InboundEvent & { kind: 'mention-received' } = {
     kind: 'mention-received',
-    message: baseMessage({ mentions: [alice] }),
-    mentions: [alice],
+    message: baseMessage({ mentions: userMentions([alice]) }),
+    mentions: userMentions([alice]),
     replayed: true,
   }
   const out = formatMessage(replayed, BOT_ID)

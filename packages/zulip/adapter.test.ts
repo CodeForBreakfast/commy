@@ -16,6 +16,7 @@ import {
   IdentityError,
   MessageEditRefused,
   MessagePermalinkSchema,
+  mentionedIdentities,
   PublisherError,
   ThreadPermalinkSchema,
   UnknownChannel,
@@ -1367,7 +1368,9 @@ effectTest('history.readChannel excludes a code-span mention but keeps a real on
       },
     ])
     const messages = yield* adapter.history.readChannel(generalChannel.name, { limit: 50 })
-    expect(messages[0]?.mentions.map((m) => m.name)).toEqual([decodeDisplayNameSync('Robin Reyes')])
+    expect(mentionedIdentities(messages[0]?.mentions ?? []).map((m) => m.name)).toEqual([
+      decodeDisplayNameSync('Robin Reyes'),
+    ])
   }),
 )
 

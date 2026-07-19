@@ -36,6 +36,7 @@ import type {
   IdentityKind,
   IdentityPort,
   InboundEvent,
+  Mention,
   Message,
   MessageBody as MessageBodyType,
   MessageId,
@@ -66,10 +67,12 @@ import {
   type Emoji,
   HistoryError,
   MessagePermalinkSchema,
+  mentionsIdentity,
   PublisherError,
   ThreadPermalinkSchema,
   UnknownChannel,
   UnknownIdentity,
+  userMentions,
 } from '@commy/core/ports'
 import {
   Array as Arr,
@@ -114,7 +117,7 @@ interface StoredMessage {
   readonly sender: Identity
   readonly body: MessageBodyType
   readonly ts: TimestampType
-  readonly mentions: ReadonlyArray<Identity>
+  readonly mentions: ReadonlyArray<Mention>
 }
 
 interface Binding {
@@ -548,7 +551,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
             sender: self,
             body,
             ts,
-            mentions: opts?.mentions === undefined ? [] : [...opts.mentions],
+            mentions: userMentions(opts?.mentions ?? []),
           }
           bucket.push(stored)
           messagesById.set(id, stored)
@@ -667,7 +670,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
           }
           if (HashSet.has(subs, MENTIONS_KEY) && Option.isSome(current)) {
             const me = current.value.identity
-            if (stored.mentions.some((m) => m.id === me.id)) return true
+            if (mentionsIdentity(stored.mentions, me.id)) return true
           }
           return false
         }),
@@ -700,7 +703,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         const current = yield* Ref.get(bound)
         if (Option.isSome(current)) {
           const me = current.value.identity
-          if (stored.mentions.some((m) => m.id === me.id)) {
+          if (mentionsIdentity(stored.mentions, me.id)) {
             yield* dispatchEvent({
               kind: 'mention-received',
               message: portMessage,
@@ -769,7 +772,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
                 collectReactions(stored.ref.id),
               )
               out.push({ kind: 'message-posted', message: portMessage })
-              if (stored.mentions.some((m) => m.id === me.id)) {
+              if (mentionsIdentity(stored.mentions, me.id)) {
                 out.push({
                   kind: 'mention-received',
                   message: portMessage,
@@ -910,7 +913,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
           sender: peer,
           body,
           ts,
-          mentions: opts?.mentions === undefined ? [] : [...opts.mentions],
+          mentions: userMentions(opts?.mentions ?? []),
         }
         bucket.push(stored)
         messagesById.set(id, stored)

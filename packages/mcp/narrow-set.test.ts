@@ -18,6 +18,7 @@ import {
   decodeTimestampSync,
   MessagePermalinkSchema,
   ThreadPermalinkSchema,
+  userMentions,
 } from '@commy/core/ports'
 import { Option } from 'effect'
 import { createNarrowSet } from './narrow-set.ts'
@@ -73,7 +74,7 @@ const buildMessagePosted = (
     sender: buildIdentity('user:alice', 'alice'),
     body: decodeMessageBodySync('hi'),
     ts: decodeTimestampSync(1_700_000_000),
-    mentions,
+    mentions: userMentions(mentions),
     reactions: [],
   },
 })
@@ -88,10 +89,10 @@ const buildMentionReceived = (
     sender: buildIdentity('user:alice', 'alice'),
     body: decodeMessageBodySync('hi'),
     ts: decodeTimestampSync(1_700_000_000),
-    mentions,
+    mentions: userMentions(mentions),
     reactions: [],
   },
-  mentions,
+  mentions: userMentions(mentions),
 })
 
 const buildReactionAdded = (channelName: string, threadName?: string): InboundEvent => ({

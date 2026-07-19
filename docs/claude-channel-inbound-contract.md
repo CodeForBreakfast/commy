@@ -117,8 +117,8 @@ carrier omits it while the machine carrier keeps it for session keying.
 | `sender_name` | display name of the sender |
 | `sender_kind` | `agent` or `human` |
 | `ts` | message timestamp (stringified epoch) |
-| `mentions` | `;`-separated display **names** mentioned (each name is sanitised, so `;` is an unambiguous delimiter); **omitted** if none |
-| `mentioned` | `"true"` when the receiving identity is itself in the mention list — the self-address flag; **omitted** otherwise |
+| `mentions` | `;`-separated list of who was mentioned (each entry is sanitised, so `;` is an unambiguous delimiter); **omitted** if none. A person appears under their display **name**; the audience forms appear as `@channel` (every channel subscriber), `@topic` (every thread participant), and `@group:<name>` — the leading `@` keeps them distinct from a person whose name happens to be "channel" |
+| `mentioned` | `"true"` when the receiving identity is itself in the mention list — the self-address flag; **omitted** otherwise. A channel or topic wildcard sets it for everyone who receives the message, because it reached them. A group mention does not: membership is not on the message and commy does not resolve it, so a match would be a guess |
 | `replayed` | `"true"` when this frame is a gap-replay backfill (substrate queue-expiry recovery), not a live post; **omitted** for live events |
 
 **Reaction events** (`reaction-added`, `reaction-removed`) — `formatReaction`:

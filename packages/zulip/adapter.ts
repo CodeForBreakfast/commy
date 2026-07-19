@@ -44,6 +44,7 @@ import {
   IdentityError,
   InboxError,
   MessageEditRefused,
+  mentionsIdentity,
   PublisherError,
   UnknownChannel,
   UnresolvedMention,
@@ -93,6 +94,7 @@ import { ApiKey, BotEmail, makeZulipHttp, ZulipApiError } from './http.ts'
 import {
   extractMentions,
   type MentionDirectory,
+  MentionToken,
   mentionTokens,
   unresolvedMentions,
 } from './mentions.ts'
@@ -622,12 +624,13 @@ export const zulipAdapter = (
     // scan is markdown-aware (a dead form quoted inside a code span is literal
     // text Zulip never delivers, not a failed mention) and runs first so a
     // mention-free body — the common case — never pays for a directory fetch
-    // onto the rate-limited realm.
+    // onto the rate-limited realm. Only user tokens can be dead, so a body
+    // whose only mentions are wildcards or groups skips the fetch too.
     const validateOutboundMentions = (
       operation: 'post' | 'edit',
       body: string,
     ): Effect.Effect<void, UnresolvedMention | ZulipApiError | ParseResult.ParseError> =>
-      mentionTokens(body).length === 0
+      !mentionTokens(body).some(MentionToken.$is('UserToken'))
         ? Effect.void
         : buildDirectoryLookup().pipe(
             Effect.flatMap((directory) => {
@@ -685,7 +688,7 @@ export const zulipAdapter = (
           sender,
           body,
           ts: m.ts,
-          mentions: extractMentions(m.content, mentionDirectory(directory)),
+          mentions: yield* extractMentions(m.content, mentionDirectory(directory)),
           reactions,
         }
       })
@@ -1577,7 +1580,7 @@ export const zulipAdapter = (
             if (
               state.mentionsSubscribed &&
               me !== undefined &&
-              message.mentions.some((m) => m.id === me.id)
+              mentionsIdentity(message.mentions, me.id)
             ) {
               return [true, ticked]
             }

@@ -11,6 +11,7 @@ import {
   decodeTimestampSync,
   MessagePermalinkSchema,
   type Timestamp,
+  userMentions,
 } from '@commy/core/ports'
 import { Effect, Option, TestClock, TestContext } from 'effect'
 import type { CursorStore } from './cursor-store.ts'
@@ -62,10 +63,10 @@ const buildMention = (ts: number, body: string): InboundEvent => ({
     sender: otherSender,
     body: decodeMessageBodySync(body),
     ts: decodeTimestampSync(ts),
-    mentions: [botIdentity],
+    mentions: userMentions([botIdentity]),
     reactions: [],
   },
-  mentions: [botIdentity],
+  mentions: userMentions([botIdentity]),
 })
 
 const buildMessagePosted = (ts: number, body: string): InboundEvent => ({

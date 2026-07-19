@@ -2,9 +2,11 @@ import type {
   ChannelName,
   IdentityId,
   InboundEvent,
+  Mention,
   MessageRef,
   ThreadName,
 } from '@commy/core/ports'
+import { mentionsIdentity } from '@commy/core/ports'
 import { Array as Arr, Data, HashSet, Match, Option } from 'effect'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 
@@ -141,12 +143,12 @@ const refMatches = (ref: MessageRef, intents: HashSet.HashSet<IntentKey>): boole
 
 const mentionsMatches = (
   intents: HashSet.HashSet<IntentKey>,
-  mentions: ReadonlyArray<{ readonly id: IdentityId }>,
+  mentions: ReadonlyArray<Mention>,
   botIdentityId: IdentityId | undefined,
 ): boolean => {
   if (botIdentityId === undefined) return false
   if (!HashSet.has(intents, MENTIONS_KEY)) return false
-  return mentions.some((m) => m.id === botIdentityId)
+  return mentionsIdentity(mentions, botIdentityId)
 }
 
 export const createNarrowSet = (): NarrowSet => {
