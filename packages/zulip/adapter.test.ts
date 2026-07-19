@@ -14,6 +14,7 @@ import {
   decodeThreadNameSync,
   decodeTimestampSync,
   IdentityError,
+  MessageEditRefused,
   MessagePermalinkSchema,
   PublisherError,
   ThreadPermalinkSchema,
@@ -1173,7 +1174,10 @@ effectTest('publisher.edit PATCHes /messages/{id} with the new content', () =>
   }),
 )
 
-effectTest('publisher.edit propagates ZulipApiError on permission failure', () =>
+// An edit failure the adapter cannot classify into one of the two known
+// walls stays a generic PublisherError — transient, retryable — rather than
+// being mislabelled as a permanent refusal.
+effectTest('publisher.edit wraps an unrecognised edit failure as a generic PublisherError', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* stub.respond('PATCH', '/api/v1/messages/42', {
@@ -1191,6 +1195,68 @@ effectTest('publisher.edit propagates ZulipApiError on permission failure', () =
     expect(err).toBeInstanceOf(PublisherError)
     expect((err as { cause: unknown }).cause).toBeInstanceOf(ZulipApiError)
   }),
+)
+
+// Zulip walls a content edit two ways and gives no distinguishing error
+// code — only the message string differs. The adapter classifies each wall
+// into a MessageEditRefused reason so a caller can tell "never editable from
+// here, re-post" from a transient PublisherError it should retry.
+effectTest(
+  'publisher.edit surfaces MessageEditRefused window-expired when the realm edit-window has passed',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* stub.respond('PATCH', '/api/v1/messages/42', {
+        body: {
+          result: 'error',
+          msg: 'The time limit for editing this message has passed',
+          code: 'BAD_REQUEST',
+        },
+        status: 400,
+      })
+      const adapter = yield* buildAdapter(stub)
+      const target: MessageRef = {
+        id: decodeMessageIdSync('42'),
+        channel: generalChannel,
+        thread: Option.none(),
+        permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
+      }
+      const err = yield* Effect.flip(adapter.publisher.edit(target, decodeMessageBodySync('nope')))
+      expect(err).toBeInstanceOf(MessageEditRefused)
+      if (err instanceof MessageEditRefused) {
+        expect(err.reason).toBe('window-expired')
+        expect(err.cause).toBeInstanceOf(ZulipApiError)
+      }
+    }),
+)
+
+effectTest(
+  'publisher.edit surfaces MessageEditRefused not-original-sender when the seat is not the author',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* stub.respond('PATCH', '/api/v1/messages/42', {
+        body: {
+          result: 'error',
+          msg: "You don't have permission to edit this message",
+          code: 'BAD_REQUEST',
+        },
+        status: 400,
+      })
+      const adapter = yield* buildAdapter(stub)
+      const target: MessageRef = {
+        id: decodeMessageIdSync('42'),
+        channel: generalChannel,
+        thread: Option.none(),
+        permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
+      }
+      const err = yield* Effect.flip(adapter.publisher.edit(target, decodeMessageBodySync('nope')))
+      expect(err).toBeInstanceOf(MessageEditRefused)
+      if (err instanceof MessageEditRefused) {
+        expect(err.reason).toBe('not-original-sender')
+        expect(err.cause).toBeInstanceOf(ZulipApiError)
+      }
+    }),
 )
 
 effectTest('publisher.react POSTs /messages/{id}/reactions with emoji_name', () =>

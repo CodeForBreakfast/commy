@@ -45,6 +45,29 @@ A template for the live-test env ships in the repo root — copy it and supply
 your own realm's values (it references a secret manager for the actual values;
 copy the variable shape, supply your own).
 
+## Realm settings that shape commy behaviour
+
+Some of your realm's own Zulip settings — operator knobs on the realm, not
+commy env vars — change how the substrate behaves. The one that matters today
+is **`message_content_edit_limit_seconds`**: how long after posting an author
+may still edit a message's content.
+
+It governs edit-in-place, which is how an emitter keeps a long-lived decision
+anchor current. Once the window passes, `edit_message` is refused (commy
+surfaces this as a typed `MessageEditRefused` with reason `window-expired`) and
+the only recovery is to re-post. A **long** window makes edit-in-place viable
+for anchors that live for hours; a **short** one — the stock default is minutes
+— forces re-posts. commy cannot widen this from code; set it on the realm to
+match how long your anchors need to stay editable.
+
+There is a second edit wall no realm setting lifts: Zulip only lets the
+**original sender** edit content, and commy's ephemeral identities are
+per-session. So a message that outlives its authoring session is uneditable at
+any age — `edit_message` refuses it with reason `not-original-sender`, and the
+emitter must re-post. Widening the time limit does not change this; a
+persistent `COMMY_BOT_NAME` identity (above) is what keeps authorship across
+sessions.
+
 ## Running outside Claude Code
 
 The MCP server is a plain **stdio** server with no Claude Code dependency at

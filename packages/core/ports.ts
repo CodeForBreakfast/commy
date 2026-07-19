@@ -456,11 +456,17 @@ export interface MessagePublisher {
    * (Zulip's PATCH /messages/{id}); substrates without one MAY surface
    * a substrate-shaped error. Edits do not emit InboundEvents — the
    * port surfaces the new body via history.readChannel only.
+   *
+   * Fails with a typed `MessageEditRefused` when the substrate refuses the
+   * edit for a structural reason the caller can act on (edit-window expired,
+   * or the bound identity is not the original sender — see the class doc),
+   * so a caller distinguishes "re-post, never editable from here" from a
+   * transient `PublisherError` it should retry.
    */
   edit(
     message: MessageRef,
     body: MessageBody,
-  ): Effect.Effect<void, UnresolvedMention | PublisherError>
+  ): Effect.Effect<void, UnresolvedMention | MessageEditRefused | PublisherError>
   react(message: MessageRef, emoji: Emoji): Effect.Effect<void, PublisherError>
   unreact(message: MessageRef, emoji: Emoji): Effect.Effect<void, PublisherError>
   /**
@@ -751,6 +757,39 @@ export class UnresolvedMention extends Data.TaggedError('UnresolvedMention')<{
       .join(
         ', ',
       )}; the message would notify nobody. Fix the name or list_agents/list_humans to find the live form.`
+  }
+}
+
+/**
+ * A content edit the substrate refused for a structural reason the caller can
+ * act on, surfaced by `edit` distinct from a transient `PublisherError` so a
+ * caller can tell "this message can never be edited from here, re-post" apart
+ * from "the substrate hiccuped, retry".
+ *
+ * Zulip walls a content edit two ways, and commy can fix neither from code:
+ *  - `window-expired`: the realm's `message_content_edit_limit_seconds` has
+ *    elapsed since the message was sent. An operator knob on the realm — see
+ *    docs/self-hosting.md — not something the substrate widens from code.
+ *  - `not-original-sender`: Zulip only lets the original sender edit content.
+ *    commy edits as the bound identity, and ephemeral `cc-<8>` identities are
+ *    per-session — so a message posted by a previous session's seat can never
+ *    be edited by today's seat, at any age. No realm setting changes that.
+ *
+ * Both walls force the same recovery, which retrying cannot reach: re-post
+ * rather than edit. Tagged (like `UnknownChannel`) so the MCP edge and callers
+ * discriminate it from a generic `PublisherError`. Zulip returns no
+ * distinguishing error code for either wall — only the human message string
+ * differs — so the adapter classifies on that string, and any failure it does
+ * not recognise stays a `PublisherError` (transient, retryable).
+ */
+export class MessageEditRefused extends Data.TaggedError('MessageEditRefused')<{
+  readonly reason: 'window-expired' | 'not-original-sender'
+  readonly cause: unknown
+}> {
+  override get message(): string {
+    return this.reason === 'window-expired'
+      ? "edit refused: the realm's message edit-window (message_content_edit_limit_seconds) has passed for this message — re-post instead of editing"
+      : "edit refused: only the original sender may edit this message, and a cross-session ephemeral seat can never edit a prior seat's message at any age — re-post, or ask the original author"
   }
 }
 

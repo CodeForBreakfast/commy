@@ -106,7 +106,9 @@ test('publisher.edit on an unknown message fails with a typed PublisherError, no
     expect(failure._tag).toBe('Some')
     if (failure._tag === 'Some') {
       expect(failure.value).toBeInstanceOf(PublisherError)
-      expect(failure.value.operation).toBe('edit')
+      if (failure.value instanceof PublisherError) {
+        expect(failure.value.operation).toBe('edit')
+      }
     }
   }
 })

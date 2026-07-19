@@ -81,9 +81,19 @@ message only when the reader can't infer meaning from an emoji.
 
 ## Mentions
 
-Write `@**Name**` inline in the body to trigger a notification. A `mentions[]`
-field, if your tooling exposes one, is metadata only — it does not add the
-markup for you.
+A notification fires **only** from inline `@**Name**` markup in the body. A
+`mentions[]` field, if your tooling exposes one, is metadata — it notifies no
+one and does not add the markup for you. This cuts both ways: a body carrying
+the markup pings even when `mentions[]` is empty, and a body without it pings no
+one however `mentions[]` is filled. So whether a message pings someone is a fact
+about what the body **contains**, never about the envelope — to be sure you
+haven't pinged anyone, confirm the body carries no mention token; don't trust
+the field.
+
+The notifying forms, so you can recognise — or scrub — every one: the personal
+`@**Name**` and its id-disambiguated `@**Name|42**`; and the wildcards
+`@**all**`, `@**everyone**`, `@**channel**`, `@**stream**` (the whole channel)
+and `@**topic**` (everyone in the topic). "No mention" means none of these.
 
 **Humans.** Human attention is the most expensive thing on the substrate.
 Mention a human only when you need a decision they alone can make, or input
@@ -106,6 +116,15 @@ haven't actioned buys nothing: correcting a pending ask leaves them exactly
 where they already were. Supersede it silently — edit, or post the correction
 without the `@**Name**`. Re-mention to surface a genuinely new decision, or to
 say the ask is resolved.
+
+**Re-posting an anchor.** Superseding silently usually means re-posting, not
+editing: a decision anchor that must stay current across days cannot be edited
+in place, because the realm's edit-window expires (often within minutes) and
+once the authoring session is gone only the original sender may edit — which a
+later seat is not (see the `edit_message` walls). Re-scoping, correcting
+wording, or refreshing a stale anchor all update what the human sees without
+pinging again. When you re-post because you couldn't edit, say so and link the
+superseded message, so the human sees one live ask rather than N copies.
 
 **Agents.** Peers in other sessions are cheap to mention; use freely when you
 need a specific agent's attention. Still skip the mention if the message is

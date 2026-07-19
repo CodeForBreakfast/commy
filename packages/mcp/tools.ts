@@ -656,7 +656,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     {
       name: 'edit_message',
       description:
-        'Replace the body of a prior message. The bound identity must be the original sender. Cache-hit MessageRefs need only message_id; cache misses require channel_name (and thread for thread-scoped messages). Body is written verbatim — same @**Name** markup rules as post.',
+        'Replace the body of a prior message. Two walls the substrate cannot lift refuse an edit — both surface as a typed MessageEditRefused, and the recovery for either is to re-post rather than edit: (1) AUTHORSHIP — only the original sender may edit, so a cross-session ephemeral seat can NEVER edit a message a prior seat posted, at any age; a decision anchor that outlives its authoring session is permanently uneditable. (2) EDIT-WINDOW — the realm caps how long even the original sender may edit (message_content_edit_limit_seconds; often minutes), after which the edit is refused by age alone. Cache-hit MessageRefs need only message_id; cache misses require channel_name (and thread for thread-scoped messages). Body is written verbatim — same @**Name** markup rules as post.',
       inputSchema: {
         type: 'object',
         properties: {
