@@ -52,10 +52,22 @@ commy env vars — change how the substrate behaves. Two of them govern
 edit-in-place.
 
 The first is **`allow_message_editing`**. Turn it off and no message on the
-realm is editable by anyone: Zulip checks this wall before any other, so every
-`edit_message` call is refused with reason `editing-disabled` and the only
-recovery — for every emitter, at every age — is to re-post. If you run anchors
-that need to stay current in place, leave this on.
+realm is editable by anyone. commy reads this setting once when a seat
+connects, and **withholds the `edit_message` tool entirely** on a realm that
+has editing switched off — an agent is never offered a capability the realm
+cannot honour. If you run anchors that need to stay current in place, leave
+this on.
+
+Because the setting is sampled at connect, flipping it does not reach seats
+that are already running: a seat connected while editing was on keeps
+`edit_message` in its tool list until it reconnects. Calls made in that window
+are refused by Zulip with reason `editing-disabled`, and the recovery — for
+every emitter, at every age — is to re-post. Restart your seats after changing
+this setting if you want the tool surface to match immediately.
+
+If commy cannot read the setting at connect (a network blip, a rate-limited
+realm), it offers `edit_message` and lets the substrate refuse: a transiently
+hidden capability is harder to diagnose than one that refuses with a reason.
 
 The second is **`message_content_edit_limit_seconds`**: how long after posting
 an author may still edit a message's content.

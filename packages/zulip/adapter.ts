@@ -416,6 +416,20 @@ const RECENT_THREADS_DEFAULT_LIMIT = 10
 const RECENT_THREADS_FETCH_LIMIT = 50
 const HISTORY_DEFAULT_LIMIT = 100
 
+/**
+ * The slice of Zulip's `/register` initial state that carries the realm-wide
+ * editing switch. Zulip exposes realm settings on no GET endpoint at all
+ * (`rest_path("realm", PATCH=update_realm)` is write-only), so `/register`
+ * with `fetch_event_types` is the only read path. `fetch_event_types` selects
+ * the returned state independently of `event_types`, which selects what the
+ * queue receives — so asking for `[]` events and `['realm']` state fetches the
+ * setting without subscribing to anything.
+ */
+const realmEditingStateSchema = Schema.Struct({
+  queue_id: Schema.String,
+  realm_allow_message_editing: Schema.Boolean,
+})
+
 const presenceStatusSchema = Schema.Literal('active', 'idle', 'offline')
 type ZulipPresenceStatus = Schema.Schema.Type<typeof presenceStatusSchema>
 
@@ -1502,6 +1516,35 @@ export const zulipAdapter = (
             cause instanceof UnresolvedMention ? cause : classifyEditFailure(cause),
           ),
         ),
+      // Read through the MINTER, never `boundHttp()`: this is sampled at
+      // connect, when a listen-only seat has acquired no identity and
+      // `boundHttp()` would fail. The setting is realm-scoped rather than
+      // viewer-scoped, so the minter's answer is the same answer any seat
+      // would get.
+      //
+      // Reading costs a queue: `/register` always allocates one, even asked
+      // for no event types. We hand it straight back. If that DELETE fails we
+      // ignore it — the queue is then orphaned until Zulip reaps it at its
+      // DEFAULT idle timeout (600s; note this register does not ask for the
+      // 86400 the event pump uses), which is bounded and self-healing, and
+      // not worth failing a capability probe over.
+      editingAvailable: () =>
+        minterHttp
+          .post('/register', realmEditingStateSchema, {
+            event_types: JSON.stringify([]),
+            fetch_event_types: JSON.stringify(['realm']),
+          })
+          .pipe(
+            Effect.tap((res) =>
+              minterHttp
+                .delete('/events', successSchema, { queue_id: res.queue_id })
+                .pipe(Effect.ignore),
+            ),
+            Effect.map((res) => res.realm_allow_message_editing),
+            Effect.mapError(
+              (cause) => new PublisherError({ operation: 'editingAvailable', cause }),
+            ),
+          ),
       react: (message, emoji) =>
         boundHttp().pipe(
           Effect.flatMap((http) =>

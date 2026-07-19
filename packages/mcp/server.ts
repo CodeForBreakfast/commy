@@ -450,6 +450,29 @@ export const makeProgram = (
         }),
       )
 
+      // Sample the realm-wide editing switch once, before the tool list is
+      // built, so a seat on a realm with editing off is never offered
+      // `edit_message`. Sampled here rather than held as a static capability
+      // because an administrator can flip it at runtime: this answer is good
+      // until the seat reconnects, and the `editing-disabled` arm of
+      // `MessageEditRefused` is the deliberate backstop for the window where
+      // the list has gone stale. That arm is not made redundant by this gate.
+      //
+      // FAIL OPEN. A probe that fails (network blip, rate limit) presents the
+      // tool. Hiding a working capability because of a transient error is the
+      // worse failure of the two: the tool still refuses legibly if editing
+      // really is off, whereas a wrongly-hidden tool is simply gone with no
+      // way for the caller to discover why. Do not make this fatal.
+      const canEditMessages = yield* adapter.publisher
+        .editingAvailable()
+        .pipe(
+          Effect.catchAll((error) =>
+            Effect.logWarning(
+              `commy plugin: could not read the realm's message-editing setting (${error.message}); offering edit_message and letting the substrate refuse if it is off`,
+            ).pipe(Effect.as(true)),
+          ),
+        )
+
       const narrowSet = createNarrowSet()
       const mcp = buildMcpServer()
       const notifier = params.notifier ?? channelNotifier(mcp)
@@ -672,6 +695,7 @@ export const makeProgram = (
         ensureSessionSubscriptions,
         persistSessionSubscriptions,
         feedSessionId,
+        canEditMessages,
         downloadFile: (urlPath) =>
           Effect.gen(function* () {
             const result = yield* adapter.downloadFile(urlPath)

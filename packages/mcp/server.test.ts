@@ -180,6 +180,7 @@ const buildFakeAdapter = (
   const publisher: MessagePublisher = {
     post: () => Effect.die(new Error('unused fake')),
     edit: () => Effect.void,
+    editingAvailable: () => Effect.succeed(true),
     react: () => Effect.void,
     unreact: () => Effect.void,
     resolveThread: () => Effect.void,

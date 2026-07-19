@@ -180,6 +180,17 @@ export interface RegisterToolsDeps {
     { reference: string; filename: string; size: number },
     ZulipApiError | ParseResult.ParseError | PlatformError
   >
+  /**
+   * Whether the substrate permitted editing when the caller sampled
+   * `MessagePublisher.editingAvailable` at connect. `false` withholds
+   * `edit_message` from the tool list entirely, so a seat on a realm with
+   * editing switched off is never offered a tool that cannot work.
+   *
+   * A plain boolean, resolved by the caller: registration branches on a
+   * capability, never on a substrate. Omitted means "assume available" —
+   * see the fail-open note in `server.ts` where it is sampled.
+   */
+  readonly canEditMessages?: boolean
 }
 
 /**
@@ -656,7 +667,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     {
       name: 'edit_message',
       description:
-        'Replace the body of a prior message. Three walls the substrate cannot lift refuse an edit — all surface as a typed MessageEditRefused, and the recovery for any of them is to re-post rather than edit: (1) AUTHORSHIP — only the original sender may edit, so a cross-session ephemeral seat can NEVER edit a message a prior seat posted, at any age; a decision anchor that outlives its authoring session is permanently uneditable. (2) EDIT-WINDOW — the realm caps how long even the original sender may edit (message_content_edit_limit_seconds; often minutes), after which the edit is refused by age alone. (3) EDITING-DISABLED — the realm has message editing turned off entirely (allow_message_editing), so nothing on it is ever editable by anyone; this wall is checked first, so on such a realm every edit takes this path. Cache-hit MessageRefs need only message_id; cache misses require channel_name (and thread for thread-scoped messages). Body is written verbatim — same @**Name** markup rules as post.',
+        'Replace the body of a prior message. Three walls the substrate cannot lift refuse an edit — all surface as a typed MessageEditRefused, and the recovery for any of them is to re-post rather than edit: (1) AUTHORSHIP — only the original sender may edit, so a cross-session ephemeral seat can NEVER edit a message a prior seat posted, at any age; a decision anchor that outlives its authoring session is permanently uneditable. (2) EDIT-WINDOW — the realm caps how long even the original sender may edit (message_content_edit_limit_seconds; often minutes), after which the edit is refused by age alone. (3) EDITING-DISABLED — the realm has message editing turned off entirely (allow_message_editing), so nothing on it is ever editable by anyone. This tool is withheld from the tool list on such a realm, so seeing it at all means editing was on when this session connected; you can still hit this wall if an administrator switched editing off mid-session. Cache-hit MessageRefs need only message_id; cache misses require channel_name (and thread for thread-scoped messages). Body is written verbatim — same @**Name** markup rules as post.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1172,7 +1183,15 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
       },
     } satisfies ToolDef)
   }
-  return optionalTools.length === 0 ? coreTools : [...coreTools, ...optionalTools]
+  // A capability the substrate reports as switched off is withheld rather
+  // than advertised-and-refused. Only the realm-wide switch gates: the
+  // edit-window and original-sender walls are per-message, so a realm with a
+  // 60-second window still has a usable `edit_message`.
+  const availableTools =
+    deps.canEditMessages === false
+      ? coreTools.filter((def) => def.name !== 'edit_message')
+      : coreTools
+  return optionalTools.length === 0 ? availableTools : [...availableTools, ...optionalTools]
 }
 
 export const registerTools = (server: Server, deps: RegisterToolsDeps): ToolsCache => {

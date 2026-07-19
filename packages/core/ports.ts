@@ -467,6 +467,25 @@ export interface MessagePublisher {
     message: MessageRef,
     body: MessageBody,
   ): Effect.Effect<void, UnresolvedMention | MessageEditRefused | PublisherError>
+  /**
+   * Whether the substrate permits `edit` at all *right now*, for anyone —
+   * the realm-wide switch behind `MessageEditRefused`'s `editing-disabled`
+   * reason, not the per-message walls. A substrate with no such switch
+   * answers `true`.
+   *
+   * Deliberately a verb rather than a field on `Capabilities`: this is a
+   * setting an administrator flips at runtime, so any value a caller holds
+   * is a sample with an age, not a static fact about the substrate. Callers
+   * that need a durable answer must decide how long a sample stays good —
+   * a driving adapter gating its tool surface samples once at connect and
+   * accepts a stale answer until it reconnects, which is why the
+   * `editing-disabled` arm of {@link MessageEditRefused} remains the
+   * backstop and is not made redundant by this verb.
+   *
+   * Answering may cost a substrate round-trip, so callers sample it
+   * deliberately rather than per-operation.
+   */
+  editingAvailable(): Effect.Effect<boolean, PublisherError>
   react(message: MessageRef, emoji: Emoji): Effect.Effect<void, PublisherError>
   unreact(message: MessageRef, emoji: Emoji): Effect.Effect<void, PublisherError>
   /**
@@ -827,6 +846,7 @@ export class PublisherError extends Data.TaggedError('PublisherError')<{
     | 'resolveThread'
     | 'unresolveThread'
     | 'setChannelDescription'
+    | 'editingAvailable'
   readonly cause: unknown
 }> {
   override get message(): string {
