@@ -315,11 +315,10 @@ test('lazy mode still applies COMMY_SUBSCRIBE at boot (pre-acquire subscriptions
     ZULIP_MINTER_EMAIL: 'minter-bot@zulip.example.com',
     ZULIP_MINTER_API_KEY: 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk1',
     CLAUDE_CODE_SESSION_ID: 'abcdef12-3456-4789-89ab-cdef01234567',
-    COMMY_SUBSCRIBE: 'channel:home,mentions',
+    COMMY_SUBSCRIBE: 'home',
   }
   await runProgram(env, fake.adapter)
   expect(fake.calls.acquired).toEqual([])
-  // The retired `mentions` token parses and registers nothing.
   expect(fake.calls.subscribed).toEqual([decodeChannelNameSync('home')])
   expect(fake.calls.closes.count).toBe(1)
 })
@@ -338,7 +337,7 @@ test('main does not subscribe when acquire fails', async () => {
   const fake = buildFakeAdapter({ acquireError: new Error('boom') })
   const env = {
     ...validEnv,
-    COMMY_SUBSCRIBE: 'channel:home',
+    COMMY_SUBSCRIBE: 'home',
   }
   await runProgram(env, fake.adapter, { loggerLayer: captureLogger([]) })
   expect(fake.calls.subscribed).toEqual([])
@@ -372,7 +371,7 @@ test('main drives a real memory adapter through acquire + env subscribe + close'
   )
   const env = {
     ...validEnv,
-    COMMY_SUBSCRIBE: 'channel:home,thread:home/payments,mentions',
+    COMMY_SUBSCRIBE: 'home,home/payments',
   }
   const logs: string[] = []
   // The memory adapter's history is id-strict; the synthetic refs the
@@ -385,7 +384,7 @@ test('main drives a real memory adapter through acquire + env subscribe + close'
     loggerLayer: captureLogger(logs),
     readGitContext: () => Effect.succeed(NotInRepo()),
   })
-  // No project → no Type-1 defaults; only the env tokens that name a narrow.
+  // No project → no Type-1 defaults; only the env tokens.
   expect(subscribed).toEqual([
     decodeChannelNameSync('home'),
     {
@@ -400,7 +399,7 @@ test('main aborts non-zero when COMMY_SUBSCRIBE contains a malformed token', asy
   const fake = buildFakeAdapter()
   const env = {
     ...validEnv,
-    COMMY_SUBSCRIBE: 'channel:home,not-a-thing,channel:llm-feed',
+    COMMY_SUBSCRIBE: 'home,home/,llm-feed',
   }
   const exit = await runProgram(env, fake.adapter, {
     readGitContext: () => Effect.succeed(NotInRepo()),
@@ -410,7 +409,7 @@ test('main aborts non-zero when COMMY_SUBSCRIBE contains a malformed token', asy
     /invalid subscribe token/,
   )
   // No project → no Type-1 defaults. The env channel sub lands, then the parser
-  // aborts on the malformed token before reaching `channel:llm-feed`.
+  // aborts on the malformed token before reaching `llm-feed`.
   expect(fake.calls.subscribed).toEqual([decodeChannelNameSync('home')])
   expect(fake.calls.closes.count).toBe(1)
 })
@@ -419,11 +418,11 @@ test('main applies env-driven subscriptions in order after acquire and Type-1 de
   const fake = buildFakeAdapter()
   const env = {
     ...validEnv,
-    COMMY_SUBSCRIBE: 'channel:home,thread:home/payments,mentions',
+    COMMY_SUBSCRIBE: 'home,home/payments',
   }
   await runProgram(env, fake.adapter, { readGitContext: () => Effect.succeed(NotInRepo()) })
   expect(fake.calls.acquired).toEqual(['myproject-concierge'])
-  // No project → no Type-1 defaults; the retired `mentions` token registers nothing.
+  // No project → no Type-1 defaults.
   expect(fake.calls.subscribed).toEqual([
     decodeChannelNameSync('home'),
     {
@@ -442,7 +441,7 @@ test('main reconciles minter subscriptions during boot before env subscribes', a
     },
   })
   const log: string[] = []
-  const env = { ...validEnv, COMMY_SUBSCRIBE: 'channel:home' }
+  const env = { ...validEnv, COMMY_SUBSCRIBE: 'home' }
   await runProgram(env, fake.adapter, { loggerLayer: captureLogger(log) })
   expect(fake.calls.reconcileCalls.count).toBe(1)
   expect(fake.calls.events.indexOf('reconcile')).toBeLessThan(
@@ -502,7 +501,7 @@ test('Type-1 defaults register after acquire and before COMMY_SUBSCRIBE entries'
   const env = {
     ...validEnv,
     COMMY_PROJECT: 'foo',
-    COMMY_SUBSCRIBE: 'channel:home',
+    COMMY_SUBSCRIBE: 'home',
   }
   await runProgram(env, fake.adapter)
   expect(fake.calls.events.indexOf('acquire(myproject-concierge)')).toBeLessThan(

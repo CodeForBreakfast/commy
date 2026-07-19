@@ -341,7 +341,7 @@ test('subscribe carrying no session_id persists the snapshot when the id is alre
         // A subscribe that carries NO session_id in args: the matcher never
         // stamps it on subscribe, so this is the real live shape.
         yield* Effect.promise(() =>
-          rig.client.callTool({ name: 'subscribe', arguments: { target: 'channel:other' } }),
+          rig.client.callTool({ name: 'subscribe', arguments: { target: 'other' } }),
         )
 
         // Persist fired id-blind: the session-keyed snapshot now holds the new
@@ -361,7 +361,7 @@ test('subscribe carrying no session_id with an unfed deferred returns promptly a
         // has delivered. An unconditional persist would park on the store's
         // `Deferred.await`; the poll-guard must no-op and let the call return.
         const outcome = yield* Effect.promise(() =>
-          rig.client.callTool({ name: 'subscribe', arguments: { target: 'channel:other' } }),
+          rig.client.callTool({ name: 'subscribe', arguments: { target: 'other' } }),
         ).pipe(Effect.timeoutOption('2 seconds'))
 
         // Handler returned rather than hanging on the unfed deferred.

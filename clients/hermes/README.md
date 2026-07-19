@@ -91,7 +91,8 @@ transport binds the logging callback and forwards `params.data`.
 
 Each `(channel, topic)` gets its own commy server subprocess in
 **persistent mode** — `COMMY_BOT_NAME = deterministic(channel, topic)`,
-subscribed `thread:<channel>/<topic>` + `mentions`. Persistent mode gives a
+subscribed to the bare `<channel>/<topic>` path (mentions need no token).
+Persistent mode gives a
 stable identity (the substrate minter is idempotent by name → same Zulip
 `user_id` across teardown/respawn) and replays the thread's recent window on
 (re)acquire, so a respawned connection self-catches-up its triggering message.

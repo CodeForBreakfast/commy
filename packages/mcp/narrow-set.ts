@@ -74,7 +74,7 @@ export interface NarrowSet {
  * delimiter-joined string. Two distinct `(channel, thread)` pairs whose
  * names happen to contain `:` or `/` can no longer alias the same key —
  * the channel and thread names live in separate, individually-compared
- * fields instead of a single `thread:<ch>/<thread>` literal. Both the
+ * fields instead of a single `<ch>/<thread>` literal. Both the
  * `intents` membership set and the `seenTopics` first-message ledger key
  * on this type.
  */
@@ -162,11 +162,11 @@ export const createNarrowSet = (): NarrowSet => {
    * topic in a channel exactly once, consistent with the catch-up layer's
    * `firstMessagePerTopic` (channels-catch-up.ts) and the port contract
    * (ports.ts `NewTopicsInChannelSubscription`) — not channel-wide like a
-   * `channel:<ch>` narrow.
+   * whole-channel narrow.
    *
    * This is the one stateful match in the set: the decision *is* the record,
    * so it appends to `seenTopics`. A topic is identified by the same key a
-   * `thread:` intent uses, kept in a set separate from `intents`. Topic-less
+   * thread intent uses, kept in a set separate from `intents`. Topic-less
    * messages never surface — "new topic" presupposes a topic. `seenTopics`
    * persists for the set's lifetime (an unsubscribe / resubscribe does not
    * re-surface an already-seen topic), matching the port's "exactly once per

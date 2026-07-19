@@ -1,7 +1,7 @@
 """Boot-time channel listener tests.
 
 The listener is the one persistent-identity connection created at startup,
-subscribed ``channel:<name>`` + ``mentions``. Its sole job: notice a
+subscribed a bare ``<name>`` channel path. Its sole job: notice a
 ``(channel, topic)`` that no per-topic identity owns yet and trigger a spawn
 (``ensure_topic_connection``); an already-owned topic is a no-op (dedup by
 ownership). These tests drive the real listener logic — spec construction, the
@@ -116,15 +116,15 @@ def _frame(channel, thread, **meta):
 # --- subscription + identity (AC1) -------------------------------------------
 
 
-def test_channel_subscribe_tokens_are_channel_then_mentions():
-    assert channel_subscribe_tokens("myproject") == "channel:myproject,mentions"
+def test_channel_subscribe_tokens_are_the_bare_channel_path():
+    assert channel_subscribe_tokens("myproject") == "myproject"
 
 
 def test_build_listener_spec_carries_persistent_identity_and_channel_subscription():
     spec = build_listener_spec(_config(), "myproject")
     assert spec.bot_name == deterministic_listener_name("myproject")
     assert spec.env["COMMY_BOT_NAME"] == spec.bot_name
-    assert spec.env["COMMY_SUBSCRIBE"] == "channel:myproject,mentions"
+    assert spec.env["COMMY_SUBSCRIBE"] == "myproject"
     assert spec.env["ZULIP_SITE"] == "https://zulip.example"
     assert spec.env["ZULIP_MINTER_EMAIL"] == "minter@example.com"
     assert spec.env["ZULIP_MINTER_API_KEY"] == "key"
@@ -166,7 +166,7 @@ def test_build_listener_spec_attaches_persona_when_key_present():
     assert spec.bot_name == "hermes"
     assert spec.env["COMMY_BOT_NAME"] == "hermes"
     assert spec.env["COMMY_BOT_API_KEY"] == "persona-key"
-    assert spec.env["COMMY_SUBSCRIBE"] == "channel:myproject,mentions"
+    assert spec.env["COMMY_SUBSCRIBE"] == "myproject"
 
 
 def test_build_listener_spec_mints_deterministic_name_without_key():
@@ -365,7 +365,7 @@ def test_listener_spec_drives_a_real_subprocess_with_the_channel_subscription():
         asyncio.run(scenario())
         frame = received[0]
         assert frame["meta"]["echo_bot_name"] == deterministic_listener_name("myproject")
-        assert frame["meta"]["echo_subscribe"] == "channel:myproject,mentions"
+        assert frame["meta"]["echo_subscribe"] == "myproject"
 
 
 def test_listener_boots_real_subprocess_triggers_once_and_dedups_on_ownership():

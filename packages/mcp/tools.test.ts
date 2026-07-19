@@ -1005,7 +1005,7 @@ test('message_link builds a permalink from a channel hint for an uncached id', (
     ),
   ))
 
-test('subscribe with channel:<name> calls inbox.subscribe with a matching ChannelName', () =>
+test('subscribe with a bare channel name calls inbox.subscribe with a matching ChannelName', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -1024,7 +1024,7 @@ test('subscribe with channel:<name> calls inbox.subscribe with a matching Channe
         const result = yield* Effect.promise(() =>
           rig.client.callTool({
             name: 'subscribe',
-            arguments: { target: 'channel:home' },
+            arguments: { target: 'home' },
           }),
         )
         expect(result.isError).toBeFalsy()
@@ -1046,12 +1046,36 @@ test('subscribe with malformed target surfaces a protocol error', () =>
             try: () =>
               rig.client.callTool({
                 name: 'subscribe',
-                arguments: { target: 'not-a-valid-token' },
+                arguments: { target: 'home/' },
               }),
             catch: (e) => e as { message: string },
           }),
         )
         expect(error.message).toContain('SubscribeTokenError')
+      }),
+    ),
+  ))
+
+// A caller reaching for the old grammar gets an error rather than a narrow on a
+// channel whose name happens to start with `channel:` — the failure mode is a
+// seat that subscribes successfully and then hears nothing.
+test.each([
+  'channel:home',
+  'thread:home/payments',
+  'mentions',
+])('subscribe rejects the retired token form %p', (retired) =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
+        const error = yield* Effect.flip(
+          Effect.tryPromise({
+            try: () => rig.client.callTool({ name: 'subscribe', arguments: { target: retired } }),
+            catch: (e) => e as { message: string },
+          }),
+        )
+        expect(error.message).toContain('SubscribeTokenError')
+        expect(rig.narrowSet.size()).toBe(0)
       }),
     ),
   ))
@@ -1073,21 +1097,10 @@ test('unsubscribe routes through inbox.unsubscribe with the parsed target', () =
         const result = yield* Effect.promise(() =>
           rig.client.callTool({
             name: 'unsubscribe',
-            arguments: { target: 'channel:home' },
+            arguments: { target: 'home' },
           }),
         )
         expect(result.isError).toBeFalsy()
-        expect(unsubscribed).toEqual([decodeChannelNameSync('home')])
-
-        // The retired `mentions` token still succeeds, and reaches neither sink
-        // — a bot cannot stop receiving its own mentions.
-        const retired = yield* Effect.promise(() =>
-          rig.client.callTool({
-            name: 'unsubscribe',
-            arguments: { target: 'mentions' },
-          }),
-        )
-        expect(retired.isError).toBeFalsy()
         expect(unsubscribed).toEqual([decodeChannelNameSync('home')])
       }),
     ),

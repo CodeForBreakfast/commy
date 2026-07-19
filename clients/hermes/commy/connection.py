@@ -4,7 +4,7 @@ On-demand connections decoupled from process lifecycle. Given a
 ``(channel, topic)``, the manager brings up a fresh commy server
 subprocess in **persistent mode** — ``COMMY_BOT_NAME`` set to a
 deterministic per-topic name, subscribed ``thread:<channel>/<topic>`` +
-``mentions`` — holds the MCP connection that streams inbound frames into the
+a bare ``<channel>/<topic>`` path — holds the MCP connection that streams inbound frames into the
 adapter, reaps the subprocess after an idle window, and respawns on the next
 frame reusing the **same identity name** (so the substrate minter, idempotent by
 name, returns the same Zulip user_id and the persistent-mode catch-up replays
@@ -116,15 +116,16 @@ def subscribe_tokens(channel: str, topic: str) -> str:
     """The ``COMMY_SUBSCRIBE`` value for a per-topic identity.
 
     Comma-separated tokens (the substrate splits on ``,`` and trims each;
-    ``bootstrap.ts`` ``subscribeFromEnv``). ``thread:<channel>/<topic>`` makes
-    the bound identity receive the topic's frames (and triggers persistent-mode
-    channels catch-up for that thread); ``mentions`` makes it hear @-mentions so
-    cross-thread coordination reaches it. The substrate's thread token splits on
-    the first ``/`` only, so a topic containing ``/`` survives; a topic
-    containing a literal ``,`` is not expressible through this env var (a
-    substrate-side limitation, not a concern for slug-shaped topic names).
+    ``bootstrap.ts`` ``subscribeFromEnv``). A bare ``<channel>/<topic>`` path
+    makes the bound identity receive the topic's frames (and triggers
+    persistent-mode channels catch-up for that thread). @-mentions need no
+    token — they reach the identity unconditionally, so cross-thread
+    coordination arrives without one. The substrate splits the path on the
+    first ``/`` only, so a topic containing ``/`` survives; a topic containing
+    a literal ``,`` is not expressible through this env var (a substrate-side
+    limitation, not a concern for slug-shaped topic names).
     """
-    return f"thread:{channel}/{topic},mentions"
+    return f"{channel}/{topic}"
 
 
 def build_spec(config: SpawnConfig, channel: str, topic: str) -> ConnectionSpec:

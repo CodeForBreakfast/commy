@@ -94,7 +94,7 @@ def test_build_spec_carries_persistent_mode_identity_and_subscriptions():
     spec = build_spec(_config(), "myproject", "standup")
     assert spec.bot_name == deterministic_bot_name("myproject", "standup")
     assert spec.env["COMMY_BOT_NAME"] == spec.bot_name
-    assert spec.env["COMMY_SUBSCRIBE"] == "thread:myproject/standup,mentions"
+    assert spec.env["COMMY_SUBSCRIBE"] == "myproject/standup"
     assert spec.env["ZULIP_SITE"] == "https://zulip.example"
     assert spec.env["ZULIP_MINTER_EMAIL"] == "minter-bot@example.com"
     assert spec.env["ZULIP_MINTER_API_KEY"] == "secret-key"
@@ -118,8 +118,8 @@ def test_build_spec_ignores_attach_identity_keeping_per_topic_minted():
     assert "COMMY_BOT_API_KEY" not in spec.env
 
 
-def test_subscribe_tokens_are_thread_then_mentions():
-    assert subscribe_tokens("c", "t") == "thread:c/t,mentions"
+def test_subscribe_tokens_are_the_bare_channel_topic_path():
+    assert subscribe_tokens("c", "t") == "c/t"
 
 
 def test_catchup_window_is_passed_through_when_set():
@@ -145,7 +145,7 @@ def test_ensure_spawns_one_connection_with_built_spec():
     assert len(factory.created) == 1
     assert factory.created[0].started == 1
     assert factory.created[0].spec is spec
-    assert spec.env["COMMY_SUBSCRIBE"] == "thread:myproject/standup,mentions"
+    assert spec.env["COMMY_SUBSCRIBE"] == "myproject/standup"
     assert manager.active_keys() == {("myproject", "standup")}
 
 

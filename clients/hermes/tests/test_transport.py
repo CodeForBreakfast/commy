@@ -108,7 +108,7 @@ def test_manager_spawns_real_subprocess_routes_frame_and_reaps():
             assert frame["meta"]["echo_bot_name"] == deterministic_bot_name(
                 "myproject", "standup"
             )
-            assert frame["meta"]["echo_subscribe"] == "thread:myproject/standup,mentions"
+            assert frame["meta"]["echo_subscribe"] == "myproject/standup"
 
             pid = int(Path(pidfile).read_text())
             assert _process_alive(pid)

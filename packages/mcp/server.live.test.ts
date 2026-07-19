@@ -362,7 +362,7 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
               yield* Effect.sleep(MINTER_PACE)
               const client = yield* buildHarness({
                 COMMY_BOT_NAME: PERSISTENT_BOT_NAME,
-                COMMY_SUBSCRIBE: `channel:${e.channelName}`,
+                COMMY_SUBSCRIBE: `${e.channelName}`,
               })
 
               const ident = expectStructured(yield* callTool(client, 'current_identity'))
@@ -420,7 +420,7 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
               // Pace before main()'s boot-time minter calls (reconcile + subscribe).
               yield* Effect.sleep(MINTER_PACE)
               const client = yield* buildHarness({
-                COMMY_SUBSCRIBE: `channel:${e.channelName}`,
+                COMMY_SUBSCRIBE: `${e.channelName}`,
               })
 
               // Session A — mints bot A.
@@ -481,11 +481,10 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
           const bootEnv = {
             CLAUDE_CODE_SESSION_ID: RESUME_SESSION,
             XDG_STATE_HOME: stateHome,
-            COMMY_SUBSCRIBE: 'mentions',
           }
 
           // BOOT 1 — post a marker into a NON-DEFAULT thread, then subscribe that
-          // thread (persists {mentions, thread} under the session id), tear down.
+          // thread (persists the thread narrow under the session id), tear down.
           const messageId = yield* Effect.scoped(
             Effect.gen(function* () {
               yield* Effect.sleep(MINTER_PACE)
@@ -502,7 +501,7 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
               const id = posted['message_id'] as string
               expect(typeof id).toBe('string')
               yield* callTool(client, 'subscribe', {
-                target: `thread:${e.channelName}/${verifyTopic}`,
+                target: `${e.channelName}/${verifyTopic}`,
                 session_id: RESUME_SESSION,
               })
               return id
@@ -629,7 +628,7 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
           const boot1Env = {
             CLAUDE_CODE_SESSION_ID: DOWNTIME_RESUME_SESSION,
             XDG_STATE_HOME: stateHome,
-            COMMY_SUBSCRIBE: `mentions,thread:${e.channelName}/${verifyTopic}`,
+            COMMY_SUBSCRIBE: `${e.channelName}/${verifyTopic}`,
           }
           const boot2Env = {
             CLAUDE_CODE_SESSION_ID: DOWNTIME_RESUME_SESSION,
@@ -662,7 +661,7 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
               // Persist the narrow set (the thread is already subscribed via
               // COMMY_SUBSCRIBE, so mode stays 'all' and no queue re-registers).
               yield* callTool(client, 'subscribe', {
-                target: `thread:${e.channelName}/${verifyTopic}`,
+                target: `${e.channelName}/${verifyTopic}`,
                 session_id: DOWNTIME_RESUME_SESSION,
               })
               // Let the producer's long-poll return the marker and advance the

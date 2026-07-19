@@ -1,7 +1,7 @@
 """Boot-time channel listener for the commy Hermes adapter.
 
 One persistent-identity connection, created at startup, subscribed
-``channel:<name>`` + ``mentions``. Its sole job is the cold-start path: notice a
+a bare ``<name>`` channel path. Its sole job is the cold-start path: notice a
 ``(channel, topic)`` that no per-topic identity owns yet and trigger a spawn
 (``CommyAdapter.ensure_topic_connection`` → ``TopicConnectionManager.ensure``).
 Ongoing topics are owned by their per-topic
@@ -45,13 +45,13 @@ OwnedKeys = Callable[[], Set[TopicKey]]
 def channel_subscribe_tokens(channel: str) -> str:
     """The ``COMMY_SUBSCRIBE`` value for the boot listener.
 
-    ``channel:<name>`` delivers every topic's frames in the channel (so the
-    listener sees the first message of any brand-new topic), and ``mentions``
-    makes it hear @-mentions beyond its own channel so a mention into an unowned
-    topic also cold-starts it. The substrate splits on ``,`` and trims each
-    token (``bootstrap.ts`` ``subscribeFromEnv``).
+    A bare ``<name>`` path delivers every topic's frames in the channel, so the
+    listener sees the first message of any brand-new topic. @-mentions beyond
+    its own channel need no token — they arrive unconditionally, so a mention
+    into an unowned topic also cold-starts it. The substrate splits on ``,``
+    and trims each token (``bootstrap.ts`` ``subscribeFromEnv``).
     """
-    return f"channel:{channel},mentions"
+    return f"{channel}"
 
 
 def build_listener_spec(config: SpawnConfig, channel: str) -> ConnectionSpec:

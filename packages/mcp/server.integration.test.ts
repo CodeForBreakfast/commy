@@ -575,7 +575,7 @@ test('runtime: ~/.local/state/commy is untouched during a full plugin exercise',
     seedChannels: ['home'],
     seedAgents: ['alice'],
     seedHumans: ['carol'],
-    subscribe: 'channel:home',
+    subscribe: 'home',
   })
   try {
     await callTool(h.client, 'current_identity')
@@ -601,7 +601,7 @@ test('runtime: plugin directory tree is unchanged across a full plugin exercise'
     seedChannels: ['home'],
     seedAgents: ['alice'],
     seedHumans: ['carol'],
-    subscribe: 'channel:home',
+    subscribe: 'home',
   })
   try {
     await callTool(h.client, 'current_identity')
@@ -964,7 +964,7 @@ test('presence (happy): resolves an identity first seen only via an inbound noti
     )
   const h = await buildHarness({
     seedChannels: ['home'],
-    subscribe: 'channel:home',
+    subscribe: 'home',
     inboxOverrides: { events },
   })
   try {
@@ -1061,17 +1061,13 @@ test('unknown arguments are rejected with a clear error', async () => {
 
 // ─── Per-tool: subscribe ────────────────────────────────────────────────────
 
-test('subscribe (happy): accepts channel/thread tokens and the retired mentions token', async () => {
+test('subscribe (happy): accepts bare channel and channel/thread tokens', async () => {
   const h = await buildHarness({ seedChannels: ['home'] })
   try {
-    const a = expectStructured(await callTool(h.client, 'subscribe', { target: 'channel:home' }))
-    const b = expectStructured(
-      await callTool(h.client, 'subscribe', { target: 'thread:home/payments' }),
-    )
-    const c = expectStructured(await callTool(h.client, 'subscribe', { target: 'mentions' }))
+    const a = expectStructured(await callTool(h.client, 'subscribe', { target: 'home' }))
+    const b = expectStructured(await callTool(h.client, 'subscribe', { target: 'home/payments' }))
     expect(a).toEqual({})
     expect(b).toEqual({})
-    expect(c).toEqual({})
   } finally {
     await h.cleanup()
   }
@@ -1080,7 +1076,7 @@ test('subscribe (happy): accepts channel/thread tokens and the retired mentions 
 test('subscribe (error): rejects malformed token', async () => {
   const h = await buildHarness()
   try {
-    await expect(callTool(h.client, 'subscribe', { target: 'not-a-known-shape' })).rejects.toThrow(
+    await expect(callTool(h.client, 'subscribe', { target: 'home/' })).rejects.toThrow(
       /invalid subscribe token/,
     )
   } finally {
@@ -1093,10 +1089,8 @@ test('subscribe (error): rejects malformed token', async () => {
 test('unsubscribe (happy): accepts the same token grammar as subscribe', async () => {
   const h = await buildHarness({ seedChannels: ['home'] })
   try {
-    await callTool(h.client, 'subscribe', { target: 'channel:home' })
-    const result = expectStructured(
-      await callTool(h.client, 'unsubscribe', { target: 'channel:home' }),
-    )
+    await callTool(h.client, 'subscribe', { target: 'home' })
+    const result = expectStructured(await callTool(h.client, 'unsubscribe', { target: 'home' }))
     expect(result).toEqual({})
   } finally {
     await h.cleanup()
@@ -1106,9 +1100,9 @@ test('unsubscribe (happy): accepts the same token grammar as subscribe', async (
 test('unsubscribe (error): rejects malformed token', async () => {
   const h = await buildHarness()
   try {
-    await expect(
-      callTool(h.client, 'unsubscribe', { target: 'not-a-known-shape' }),
-    ).rejects.toThrow(/invalid subscribe token/)
+    await expect(callTool(h.client, 'unsubscribe', { target: 'home/' })).rejects.toThrow(
+      /invalid subscribe token/,
+    )
   } finally {
     await h.cleanup()
   }
@@ -1217,7 +1211,7 @@ test('post by self does NOT fire a claude/channel notification (self-echo suppre
   // frame at all); this asserts that wiring end-to-end.
   const h = await buildHarness({
     seedChannels: ['home'],
-    subscribe: 'channel:home',
+    subscribe: 'home',
   })
   try {
     await callTool(h.client, 'post', { channel_name: 'home', body: 'hello channel' })
@@ -1685,7 +1679,7 @@ test('ephemeral queue-ALIVE resume: history catch-up does NOT run, no duplicate 
     cursorStore,
     inboxOverrides,
     historyOverrides,
-    subscribe: 'channel:home',
+    subscribe: 'home',
     seedChannels: ['home'],
   })
   try {
@@ -1804,7 +1798,7 @@ test('ephemeral queue-DEAD resume: mentions + channels catch-up run and backfill
     cursorStore,
     inboxOverrides,
     historyOverrides,
-    subscribe: 'channel:home',
+    subscribe: 'home',
     seedChannels: ['home'],
   })
   try {
@@ -1840,9 +1834,9 @@ const captureSubscribes = (): {
 } => {
   const tokens: string[] = []
   const renderTarget = (target: SubscriptionTarget): string => {
-    if (typeof target === 'string') return `channel:${target}`
+    if (typeof target === 'string') return `${target}`
     if ('kind' in target) return `new-topics:${target.channel}`
-    return `thread:${target.channel}/${target.thread}`
+    return `${target.channel}/${target.thread}`
   }
   return {
     tokens,
@@ -1855,7 +1849,7 @@ const captureSubscribes = (): {
   }
 }
 
-test('ephemeral mode + project: first post registers mentions and thread:#<project>/general', async () => {
+test('ephemeral mode + project: first post registers mentions and <project>/general', async () => {
   const cap = captureSubscribes()
   const h = await buildHarness({
     ephemeral: true,
@@ -1873,7 +1867,7 @@ test('ephemeral mode + project: first post registers mentions and thread:#<proje
     // Order isn't load-bearing — only membership. The captured subscribes
     // here are exactly the onAcquire-time defaults; sticky-engagement
     // doesn't fire because the post has no thread.
-    expect(new Set(cap.tokens)).toEqual(new Set(['thread:myproject/general']))
+    expect(new Set(cap.tokens)).toEqual(new Set(['myproject/general']))
   } finally {
     await h.cleanup()
   }
@@ -1940,7 +1934,7 @@ test('ephemeral mode + project: repeat posts on same session_id register default
       acc[t] = (acc[t] ?? 0) + 1
       return acc
     }, {})
-    expect(counts).toEqual({ 'thread:myproject/general': 1 })
+    expect(counts).toEqual({ 'myproject/general': 1 })
   } finally {
     await h.cleanup()
   }
@@ -1972,7 +1966,7 @@ test('ephemeral mode + project: distinct session_ids each register their own def
       acc[t] = (acc[t] ?? 0) + 1
       return acc
     }, {})
-    expect(counts).toEqual({ 'thread:myproject/general': 2 })
+    expect(counts).toEqual({ 'myproject/general': 2 })
   } finally {
     await h.cleanup()
   }
@@ -2003,7 +1997,7 @@ test('ephemeral subscribe persists the live narrow set (defaults + new sub) unde
     sessionIdDeferred,
   })
   try {
-    await callTool(h.client, 'subscribe', { target: 'channel:home', session_id: sid })
+    await callTool(h.client, 'subscribe', { target: 'home', session_id: sid })
     await waitFor(() => writes.length > 0, 200)
     const last = writes.at(-1)
     expect(last?.sid).toBe(sid)
@@ -2047,7 +2041,7 @@ test('ephemeral resume restores the persisted narrow set and does NOT re-apply T
       session_id: '5e54e5e5-0000-4000-8000-0000000000a2',
     })
     await waitFor(() => cap.tokens.length > 0, 200)
-    expect(new Set(cap.tokens)).toEqual(new Set(['channel:home']))
+    expect(new Set(cap.tokens)).toEqual(new Set(['home']))
   } finally {
     await h.cleanup()
   }
@@ -2098,7 +2092,7 @@ test('persistent boot surfaces recent channel messages within the catch-up windo
   const before = Math.floor(Date.now() / 1000)
   const h = await buildHarness({
     seedChannels: ['home'],
-    subscribe: 'channel:home',
+    subscribe: 'home',
     historyOverrides,
   })
   try {
@@ -2143,9 +2137,7 @@ test('persistent boot with COMMY_PROJECT registers Type-1 defaults at the substr
     await new Promise((r) => setTimeout(r, 50))
     // Order isn't load-bearing — only membership. Persistent mode has no
     // additional onAcquire defaults beyond Type-1 itself.
-    expect(new Set(cap.tokens)).toEqual(
-      new Set(['new-topics:myproject', 'thread:myproject/general']),
-    )
+    expect(new Set(cap.tokens)).toEqual(new Set(['new-topics:myproject', 'myproject/general']))
   } finally {
     await h.cleanup()
   }
@@ -2293,9 +2285,7 @@ test('Type-4 cron-shape (project-scoped): Type-1 default subs registered post-ac
     expect(h.identityCalls.acquires).toEqual(['myproject-concierge'])
     // Type-1 defaults landed at boot — order isn't load-bearing,
     // membership is.
-    expect(new Set(cap.tokens)).toEqual(
-      new Set(['new-topics:myproject', 'thread:myproject/general']),
-    )
+    expect(new Set(cap.tokens)).toEqual(new Set(['new-topics:myproject', 'myproject/general']))
 
     const posted = expectStructured(
       await callTool(h.client, 'post', { channel_name: 'myproject', body: 'cron tick' }),
@@ -2310,9 +2300,7 @@ test('Type-4 cron-shape (project-scoped): Type-1 default subs registered post-ac
     // Sticky-engagement only fires for thread posts; the
     // post above had no thread, so no extra subscribes beyond the
     // Type-1 default set.
-    expect(new Set(cap.tokens)).toEqual(
-      new Set(['new-topics:myproject', 'thread:myproject/general']),
-    )
+    expect(new Set(cap.tokens)).toEqual(new Set(['new-topics:myproject', 'myproject/general']))
     expect(logs).toEqual([])
   } finally {
     await h.cleanup()
