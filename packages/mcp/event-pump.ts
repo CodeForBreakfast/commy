@@ -4,6 +4,7 @@ import type {
   InboundEvent,
   MessageId,
   MessageInbox,
+  RealmSettings,
   Timestamp,
 } from '@commy/core/ports'
 import { decodeTimestamp, mentionedIdentities } from '@commy/core/ports'
@@ -38,7 +39,7 @@ export interface EventPumpDeps {
    * future addition to the port that the pump genuinely needs has to
    * be added here on purpose.
    */
-  readonly inbox: Pick<MessageInbox, 'events'>
+  readonly inbox: Pick<MessageInbox, 'events' | 'settingsChanges'>
   readonly notifier: Notifier
   /**
    * Bot identity getter. Returns `undefined` pre-acquire (ephemeral
@@ -58,6 +59,20 @@ export interface EventPumpDeps {
    * narrow filter.
    */
   readonly match?: (event: InboundEvent) => boolean
+  /**
+   * Sink for realm-wide setting changes observed on
+   * `MessageInbox.settingsChanges`. Production wires this to the tool-list
+   * rebuild plus `notifications/tools/list_changed` so a seat's capability
+   * surface tracks the realm it is connected to.
+   *
+   * The pump consumes this stream rather than leaving it to the server
+   * because it already owns the substrate-stream lifecycle — one owner for
+   * both streams, cancelled together. It is never rendered to the consumer:
+   * a settings change is not conversational and deliberately never becomes
+   * an `InboundEvent` (see `RealmSettings` in core/ports). Total by
+   * contract (`Effect<void>`) — a failure here must not take the pump down.
+   */
+  readonly onRealmSettings?: (settings: RealmSettings) => Effect.Effect<void>
   /**
    * Optional sink for identities observed on inbound events (sender,
    * mentions, reactor). Production wires this to the `ToolsCache`
@@ -314,7 +329,20 @@ export const startEventPump = (deps: EventPumpDeps): Effect.Effect<EventPumpHand
       Effect.catchTag('DispatchFailure', (failure) => fatalPark(failure.cause)),
     )
 
-    const fiber = yield* Effect.forkDaemon(program)
+    // Two substrate streams, one lifetime. `Effect.all` with both running
+    // concurrently means `done` waits for whichever the test or the host
+    // ends on, and a single interrupt cancels both. The settings stream is
+    // empty on substrates that cannot observe changes, which completes
+    // immediately and leaves `done` governed by the event stream alone.
+    const onRealmSettings = deps.onRealmSettings
+    const settingsProgram =
+      onRealmSettings === undefined
+        ? Effect.void
+        : Stream.runForEach(deps.inbox.settingsChanges(), onRealmSettings)
+
+    const fiber = yield* Effect.forkDaemon(
+      Effect.all([program, settingsProgram], { concurrency: 2 }),
+    )
 
     return {
       done: Effect.asVoid(Fiber.await(fiber)),

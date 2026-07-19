@@ -62,7 +62,13 @@ export const buildMcpServer = (): Server =>
     { name: 'commy', version: PLUGIN_VERSION },
     {
       capabilities: {
-        tools: {},
+        // `listChanged` is what gives `notifications/tools/list_changed` its
+        // effect: clients read it to decide whether to honour the
+        // notification. The SDK's send-path guard only checks that `tools` is
+        // truthy, so omitting it would fail silently — the server emits, the
+        // client ignores, and a seat keeps a tool list the realm has moved on
+        // from (`registerTools`' `setEditingAvailable`).
+        tools: { listChanged: true },
         logging: {},
         experimental: {
           'claude/channel': {},

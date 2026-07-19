@@ -14,7 +14,14 @@
  */
 
 import { messageOf } from '@commy/core/messageOf'
-import type { Identity, InboundEvent, InboxError, MessageRef, Timestamp } from '@commy/core/ports'
+import type {
+  Identity,
+  InboundEvent,
+  InboxError,
+  MessageRef,
+  RealmSettings,
+  Timestamp,
+} from '@commy/core/ports'
 import {
   decodeChannelId,
   decodeChannelName,
@@ -232,6 +239,15 @@ export interface EventsConfig {
    * lives in the closure.
    */
   readonly onResumeOutcome?: (queueReplayed: boolean) => Effect.Effect<void>
+  /**
+   * Best-effort hook fired when a `realm` event reports a change to a
+   * realm-wide setting the consumer's capability surface depends on. The
+   * adapter republishes it on `MessageInbox.settingsChanges` so the MCP
+   * server can re-drive its tool list; the signal deliberately never joins
+   * the `InboundEvent` stream (see `RealmSettings` in core/ports). Total by
+   * contract (`Effect<void>` — never fails); fan-out lives in the closure.
+   */
+  readonly onRealmSettings?: (settings: RealmSettings) => Effect.Effect<void>
 }
 
 const registerResponseSchema = Schema.Struct({
@@ -273,6 +289,31 @@ const decodeZulipMessageContent = Schema.decodeUnknown(zulipMessageContentSchema
 })
 
 export type ParsedZulipMessage = Schema.Schema.Type<typeof zulipMessageContentSchema>
+
+/**
+ * Zulip reports `allow_message_editing` in a shape of its own, not as the
+ * `realm`/`update` + top-level `value` most settings use. It is special-cased
+ * alongside `message_content_edit_limit_seconds` into `op: 'update_dict'`
+ * with the value nested under `data` (zerver/actions/realm_settings.py, the
+ * `message_edit_settings` branch; typed as `EventRealmUpdateDict` in
+ * zerver/lib/event_types.py). Clients then store it as
+ * `state['realm_' + key]` (zerver/lib/events.py), which is why the same value
+ * arrives from `POST /register` spelled `realm_allow_message_editing` — the
+ * field `editingAvailable` samples at boot.
+ *
+ * `data` carries whichever settings moved, so a realm event for an unrelated
+ * setting parses fine and yields `undefined` here rather than failing.
+ */
+const zulipRealmEditingEventSchema = Schema.Struct({
+  op: Schema.Literal('update_dict'),
+  data: Schema.Struct({
+    allow_message_editing: Schema.optional(Schema.Boolean),
+  }),
+})
+
+const decodeZulipRealmEditingEvent = Schema.decodeUnknownEither(zulipRealmEditingEventSchema, {
+  onExcessProperty: 'ignore',
+})
 
 const zulipReactionEventSchema = Schema.Struct({
   id: Schema.Int,
@@ -452,7 +493,12 @@ export const registerQueue = (
   mode: 'all' | 'mentions',
   idleTimeoutSecs?: number,
 ): Effect.Effect<QueueState, ZulipApiError | ParseResult.ParseError> => {
-  const baseParams = { event_types: JSON.stringify(['message', 'reaction']) }
+  // `realm` carries the realm-wide setting changes that move a consumer's
+  // capability surface (currently `allow_message_editing`). It rides this
+  // queue rather than one of its own so there is a single poll loop against
+  // a rate-limited realm. The mentions narrow below does not suppress it —
+  // Zulip applies a queue narrow to message events only.
+  const baseParams = { event_types: JSON.stringify(['message', 'reaction', 'realm']) }
   const modeParams =
     mode === 'mentions'
       ? { ...baseParams, narrow: JSON.stringify([['is', 'mentioned']]) }
@@ -576,6 +622,20 @@ const processSingleEvent = (
         ),
       ),
     )
+  }
+  if (evt.type === 'realm' && config.onRealmSettings !== undefined) {
+    const onRealmSettings = config.onRealmSettings
+    const parsedRealm = decodeZulipRealmEditingEvent(evt)
+    if (Either.isLeft(parsedRealm)) {
+      // A realm event in some other shape (op: 'update', an icon/logo
+      // update_dict) is not this signal. Nothing to report and nothing
+      // wrong — stay silent rather than logging on every admin change.
+      return Effect.succeed([])
+    }
+    const editingAvailable = parsedRealm.right.data.allow_message_editing
+    return editingAvailable === undefined
+      ? Effect.succeed([])
+      : onRealmSettings({ editingAvailable }).pipe(Effect.as([] as ReadonlyArray<InboundEvent>))
   }
   if (evt.type === 'reaction' && config.messageRefCache !== undefined) {
     const cache = config.messageRefCache

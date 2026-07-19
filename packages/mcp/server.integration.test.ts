@@ -19,6 +19,7 @@ import type {
   InboundEvent,
   MessageInbox,
   MessagePublisher,
+  RealmSettings,
   SubscriptionTarget,
   Timestamp as TimestampType,
 } from '@commy/core/ports'
@@ -2412,5 +2413,66 @@ test('boot feeder is a no-op when CLAUDE_CODE_SESSION_ID is absent — deferred 
     expect(await Effect.runPromise(Deferred.isDone(harness.sessionIdDeferred))).toBe(false)
   } finally {
     await harness.cleanup()
+  }
+})
+
+// ─── Realm settings → tool list ─────────────────────────────────────────────
+
+/**
+ * Production wiring assertion for the whole path: substrate settings signal
+ * → pump → tool-list rebuild → `notifications/tools/list_changed`. Every
+ * layer has its own unit test; this is the one that fails if `server.ts`
+ * stops joining them up.
+ *
+ * The signal is gated on a Deferred rather than emitted at pump start so
+ * the "before" state is observable — otherwise the flip can land before the
+ * first `listTools()` and the test would pass without ever seeing the tool
+ * present.
+ */
+test('an administrator turning message editing off withdraws edit_message from a connected seat', async () => {
+  const flip = Deferred.unsafeMake<RealmSettings>(FiberId.none)
+  const h = await buildHarness({
+    publisherOverrides: { editingAvailable: () => Effect.succeed(true) },
+    inboxOverrides: { settingsChanges: () => Stream.fromEffect(Deferred.await(flip)) },
+  })
+  try {
+    const before = await h.client.listTools()
+    expect(before.tools.map((t) => t.name)).toContain('edit_message')
+
+    await Effect.runPromise(Deferred.succeed(flip, { editingAvailable: false }))
+    await waitFor(
+      () => h.notifications.some((n) => n.method === 'notifications/tools/list_changed'),
+      2000,
+    )
+
+    const after = await h.client.listTools()
+    expect(after.tools.map((t) => t.name)).not.toContain('edit_message')
+    // Only the gated capability moves; the rest of the surface is untouched.
+    expect(after.tools.map((t) => t.name)).toContain('post')
+  } finally {
+    await h.cleanup()
+  }
+})
+
+test('an administrator turning message editing back on restores edit_message', async () => {
+  const flip = Deferred.unsafeMake<RealmSettings>(FiberId.none)
+  const h = await buildHarness({
+    publisherOverrides: { editingAvailable: () => Effect.succeed(false) },
+    inboxOverrides: { settingsChanges: () => Stream.fromEffect(Deferred.await(flip)) },
+  })
+  try {
+    const before = await h.client.listTools()
+    expect(before.tools.map((t) => t.name)).not.toContain('edit_message')
+
+    await Effect.runPromise(Deferred.succeed(flip, { editingAvailable: true }))
+    await waitFor(
+      () => h.notifications.some((n) => n.method === 'notifications/tools/list_changed'),
+      2000,
+    )
+
+    const after = await h.client.listTools()
+    expect(after.tools.map((t) => t.name)).toContain('edit_message')
+  } finally {
+    await h.cleanup()
   }
 })

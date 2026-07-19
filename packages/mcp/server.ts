@@ -424,6 +424,14 @@ export const makeProgram = (
         (label: string) =>
         (cause: Cause.Cause<CatchUpError>): Effect.Effect<void> =>
           Effect.logError(`commy plugin: ${label} catch-up failed: ${Cause.pretty(cause)}`)
+      // A settings signal that cannot be delivered leaves the seat on a stale
+      // tool list until it reconnects — degraded, not broken, because the
+      // `editing-disabled` arm still refuses legibly. Log and carry on rather
+      // than taking the pump down over a notification.
+      const logSettingsFailure =
+        (label: string) =>
+        (cause: Cause.Cause<never>): Effect.Effect<void> =>
+          Effect.logWarning(`commy plugin: ${label} failed: ${Cause.pretty(cause)}`)
       // Per-call project resolver. Operator override (COMMY_PROJECT)
       // is authoritative; otherwise derive from the calling session's cwd
       // at call time — process cwd is irrelevant.
@@ -779,6 +787,28 @@ export const makeProgram = (
           if (id === undefined) return Effect.void
           return cursorStore.write(id, ts).pipe(Effect.catchAllCause(() => Effect.void))
         },
+        // The boot-time `canEditMessages` sample above is only good until an
+        // administrator moves it. Rebuild the tool list against the new value
+        // and tell the client its list changed — without the notification the
+        // seat holds a stale list until it reconnects, which for a persistent
+        // seat can be days.
+        //
+        // This does not replace the `editing-disabled` arm of
+        // `MessageEditRefused`: the two are complements. The arm still covers
+        // the window between the flip and this signal arriving, and the
+        // fail-open path above where the boot probe never answered.
+        onRealmSettings: (settings) =>
+          Effect.sync(() => toolsCache.setEditingAvailable(settings.editingAvailable)).pipe(
+            Effect.zipRight(
+              Effect.promise(() => mcp.sendToolListChanged()).pipe(
+                Effect.catchAllCause(
+                  logSettingsFailure(
+                    `tools/list_changed after editing=${settings.editingAvailable}`,
+                  ),
+                ),
+              ),
+            ),
+          ),
       })
       // The pump is a daemon (forkDaemon) — not scope-tied — so an explicit
       // finalizer interrupts it on scope unwind (signal interrupt under

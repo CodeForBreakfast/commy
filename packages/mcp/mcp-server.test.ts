@@ -52,11 +52,18 @@ test('initialize response declares the logging capability required to emit notif
   }
 })
 
-test('initialize response declares an empty tools capability for later registration', async () => {
+/**
+ * `listChanged` is what makes `notifications/tools/list_changed` mean
+ * anything: clients read it to decide whether to honour the notification
+ * at all. The SDK's own send-path guard only checks that `tools` is
+ * truthy, so omitting it fails silently — the server emits, the client
+ * ignores, and the stale tool list survives.
+ */
+test('initialize response declares a tools capability that supports list changes', async () => {
   const { client, close } = await pairAndConnect()
   try {
     const capabilities = client.getServerCapabilities()
-    expect(capabilities?.tools).toEqual({})
+    expect(capabilities?.tools).toEqual({ listChanged: true })
   } finally {
     await close()
   }

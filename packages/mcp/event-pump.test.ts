@@ -7,6 +7,7 @@ import type {
   Message,
   MessageInbox,
   MessageRef,
+  RealmSettings,
 } from '@commy/core/ports'
 import {
   ChannelPermalinkSchema,
@@ -98,6 +99,7 @@ const queueInbox = (options: QueueInboxOptions = { events: [] }): QueueInboxHand
   const inbox: MessageInbox = {
     subscribe: () => Effect.void,
     unsubscribe: () => Effect.void,
+    settingsChanges: () => Stream.empty,
     events: () =>
       Stream.async<InboundEvent>((emit) => {
         for (const ev of queue) void emit.single(ev)
@@ -164,6 +166,35 @@ const runWithClockSeconds = <A, E>(seconds: number, effect: Effect.Effect<A, E>)
       Effect.provide(TestContext.TestContext),
     ),
   )
+
+/**
+ * The settings signal rides its own stream, so the pump has to consume it
+ * as well as `events()`. It carries no message and is never rendered — the
+ * assertion is that the handler saw it and the notifier did not.
+ */
+test('pump reports realm settings changes without notifying the consumer', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const observed: RealmSettings[] = []
+      const collector = collectingNotifier()
+      const inbox: MessageInbox = {
+        subscribe: () => Effect.void,
+        unsubscribe: () => Effect.void,
+        settingsChanges: () => Stream.make({ editingAvailable: false }),
+        events: () => Stream.empty,
+        replay: () => Effect.succeed([]),
+      }
+      const handle = yield* startEventPump({
+        inbox,
+        notifier: collector.notifier,
+        getBotIdentityId: () => BOT_ID,
+        onRealmSettings: (settings) => Effect.sync(() => void observed.push(settings)),
+      })
+      yield* handle.done
+      expect(observed).toEqual([{ editingAvailable: false }])
+      expect(collector.calls).toHaveLength(0)
+    }),
+  ))
 
 test('pump filters out events that fail the narrow predicate', () =>
   Effect.runPromise(

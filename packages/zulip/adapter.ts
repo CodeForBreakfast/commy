@@ -22,6 +22,7 @@ import type {
   Presence,
   Range,
   Reaction,
+  RealmSettings,
   RecentThread,
   SubscriptionTarget,
   ThreadName,
@@ -62,6 +63,7 @@ import {
   Order,
   type ParseResult,
   Predicate,
+  PubSub,
   Redacted,
   Ref,
   Schema,
@@ -1596,6 +1598,12 @@ export const zulipAdapter = (
     // then backfills the gap on the new iterator's first
     // poll instead of skipping it.
     const watermarkStore = yield* createWatermarkStore()
+    // Realm-settings fan-out. Adapter-scoped and unbounded-dropping: the
+    // producer's hook must never block the event loop waiting on a
+    // subscriber, and a settings signal is a latest-wins fact rather than a
+    // log to preserve. `settingsChanges()` republishes it as a Stream so the
+    // signal reaches consumers without joining `InboundEvent`.
+    const realmSettingsHub = yield* PubSub.dropping<RealmSettings>(16)
 
     // Per-event filter. The new-topics-in-channel narrow is the only
     // narrow that requires adapter-side state (seen topics); every other
@@ -1806,6 +1814,12 @@ export const zulipAdapter = (
                     // events. Late-bound to inbox.replay so the closure picks
                     // up the function defined below in the same object literal.
                     replay: (since) => inbox.replay(since),
+                    // Republish onto the adapter-scoped hub. `PubSub.publish`
+                    // returns whether the value was taken; a dropping hub with
+                    // no subscriber says `false`, which is the designed
+                    // outcome, not a failure to report.
+                    onRealmSettings: (settings) =>
+                      PubSub.publish(realmSettingsHub, settings).pipe(Effect.asVoid),
                     ...Option.match(current, {
                       onNone: () => ({}),
                       onSome: (b) => ({ boundIdentity: b.identity }),
@@ -1827,6 +1841,7 @@ export const zulipAdapter = (
             }),
           ),
         ).pipe(Stream.filterEffect(shouldDeliver)),
+      settingsChanges: () => Stream.fromPubSub(realmSettingsHub),
       replay: (since) => {
         // The port's surface is channel-rooted: PMs are out of scope.
         // Ask Zulip to exclude DMs at source so the replay schema (which

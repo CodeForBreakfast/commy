@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { captureLogger } from '@commy/core/logging'
-import type { Identity, InboundEvent, MessageRef } from '@commy/core/ports'
+import type { Identity, InboundEvent, MessageRef, RealmSettings } from '@commy/core/ports'
 import {
   ChannelPermalinkSchema,
   decodeChannelIdSync,
@@ -339,14 +339,14 @@ test('registerQueue maps the response to a QueueState', async () => {
 test('registerQueue omits idle_queue_timeout when no timeout is supplied', async () => {
   const { http, captured } = captureRegisterBody()
   await Effect.runPromise(registerQueue(http, 'all'))
-  expect(captured()).toEqual({ event_types: JSON.stringify(['message', 'reaction']) })
+  expect(captured()).toEqual({ event_types: JSON.stringify(['message', 'reaction', 'realm']) })
 })
 
 test('registerQueue sends idle_queue_timeout when a timeout is supplied', async () => {
   const { http, captured } = captureRegisterBody()
   await Effect.runPromise(registerQueue(http, 'all', 3600))
   expect(captured()).toEqual({
-    event_types: JSON.stringify(['message', 'reaction']),
+    event_types: JSON.stringify(['message', 'reaction', 'realm']),
     idle_queue_timeout: 3600,
   })
 })
@@ -355,7 +355,7 @@ test('registerQueue in mentions mode keeps the narrow alongside idle_queue_timeo
   const { http, captured } = captureRegisterBody()
   await Effect.runPromise(registerQueue(http, 'mentions', 100))
   expect(captured()).toEqual({
-    event_types: JSON.stringify(['message', 'reaction']),
+    event_types: JSON.stringify(['message', 'reaction', 'realm']),
     narrow: JSON.stringify([['is', 'mentioned']]),
     idle_queue_timeout: 100,
   })
@@ -444,7 +444,7 @@ test(
         }
         yield* drainOne(config)
         expect(registerBody).toEqual({
-          event_types: JSON.stringify(['message', 'reaction']),
+          event_types: JSON.stringify(['message', 'reaction', 'realm']),
           idle_queue_timeout: 3600,
         })
       }),
@@ -475,6 +475,133 @@ test(
         }
         yield* drainOne(config)
         expect(registered).toEqual([{ queueId: 'q-fresh', lastEventId: 3 }])
+      }),
+    ),
+  ITERATOR_TEST_TIMEOUT_MS,
+)
+
+/**
+ * Zulip does NOT report this setting as a plain `realm`/`update` with a
+ * top-level `value`. `allow_message_editing` is special-cased alongside
+ * `message_content_edit_limit_seconds` into `op: 'update_dict'` with the
+ * value nested under `data` (zerver/actions/realm_settings.py — the
+ * `message_edit_settings` branch). A decoder written to the `update`
+ * shape matches nothing on a real realm, so the wire shape is pinned
+ * here rather than left to the implementation's memory of the API.
+ */
+const aRealmEditingEvent = (allowed: boolean, id = 6): Record<string, unknown> => ({
+  id,
+  type: 'realm',
+  op: 'update_dict',
+  property: 'default',
+  data: { allow_message_editing: allowed },
+})
+
+const realmSettingsConfig = (
+  events: ReadonlyArray<Record<string, unknown>>,
+  onRealmSettings: (settings: RealmSettings) => Effect.Effect<void>,
+): EventsConfig => ({
+  permalinkBase: PERMALINK_BASE,
+  http: fakeHttp({
+    onPost: () => ({ result: 'success', queue_id: 'q-realm', last_event_id: 0 }),
+    onGet: () => ({ result: 'success', events }),
+  }),
+  resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
+  mode: 'all',
+  boundIdentity: HERMES,
+  messageRefCache: createMessageRefCache(),
+  onRealmSettings,
+})
+
+test(
+  'producer fires onRealmSettings when the realm turns message editing off',
+  () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const observed: RealmSettings[] = []
+        yield* drainOne(
+          realmSettingsConfig(
+            [aRealmEditingEvent(false), { id: 7, type: 'message', message: aChannelMessage() }],
+            (settings) => Effect.sync(() => void observed.push(settings)),
+          ),
+        )
+        expect(observed).toEqual([{ editingAvailable: false }])
+      }),
+    ),
+  ITERATOR_TEST_TIMEOUT_MS,
+)
+
+test(
+  'producer fires onRealmSettings when the realm turns message editing back on',
+  () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const observed: RealmSettings[] = []
+        yield* drainOne(
+          realmSettingsConfig(
+            [aRealmEditingEvent(true), { id: 7, type: 'message', message: aChannelMessage() }],
+            (settings) => Effect.sync(() => void observed.push(settings)),
+          ),
+        )
+        expect(observed).toEqual([{ editingAvailable: true }])
+      }),
+    ),
+  ITERATOR_TEST_TIMEOUT_MS,
+)
+
+/**
+ * The load-bearing consequence of the settings-signal ruling: a realm
+ * settings change is not conversational and must never reach a consumer
+ * as an `InboundEvent`. Every `InboundEvent` variant carries a message
+ * and an originating identity, and `originatorId` / `identitiesIn` /
+ * `renderEvent` are total over that union — a settings-shaped member
+ * would make all three partial.
+ */
+test(
+  'producer emits no InboundEvent for a realm settings change',
+  () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const events = yield* drainN(
+          realmSettingsConfig(
+            [aRealmEditingEvent(false), { id: 7, type: 'message', message: aChannelMessage() }],
+            () => Effect.void,
+          ),
+          1,
+        )
+        expect(events.map((e) => e.kind)).toEqual(['message-posted'])
+      }),
+    ),
+  ITERATOR_TEST_TIMEOUT_MS,
+)
+
+/**
+ * A realm event for some other setting shares the `update_dict` envelope
+ * but carries no `allow_message_editing` key. Firing the hook for it
+ * would re-drive the tool list on every unrelated admin change.
+ */
+test(
+  'producer ignores a realm event that does not carry the editing setting',
+  () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const observed: RealmSettings[] = []
+        yield* drainOne(
+          realmSettingsConfig(
+            [
+              {
+                id: 6,
+                type: 'realm',
+                op: 'update_dict',
+                property: 'default',
+                data: { message_content_edit_limit_seconds: 600 },
+              },
+              { id: 7, type: 'message', message: aChannelMessage() },
+            ],
+            (settings) => Effect.sync(() => void observed.push(settings)),
+          ),
+        )
+        expect(observed).toEqual([])
       }),
     ),
   ITERATOR_TEST_TIMEOUT_MS,

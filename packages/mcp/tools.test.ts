@@ -202,6 +202,78 @@ test('a gated-off edit_message is not callable through the back door', () =>
     ),
   ))
 
+/**
+ * The boot-time sample is a snapshot, so the tool list has to be able to
+ * move after connect — otherwise a seat that connected while editing was
+ * on carries a tool that cannot work until it restarts, and a seat that
+ * connected while it was off never regains one that now can.
+ */
+test('setEditingAvailable withdraws edit_message from an already-connected session', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const adapter = yield* memoryAdapter()
+        const deps = yield* buildDeps(adapter)
+        const rig = yield* mountAndConnect(adapter, deps, { canEditMessages: true })
+        const before = yield* Effect.promise(() => rig.client.listTools())
+        expect(before.tools.map((t) => t.name)).toContain('edit_message')
+
+        rig.cache.setEditingAvailable(false)
+
+        const after = yield* Effect.promise(() => rig.client.listTools())
+        expect(after.tools.map((t) => t.name)).not.toContain('edit_message')
+        expect(after.tools.map((t) => t.name)).toContain('post')
+      }),
+    ),
+  ))
+
+test('setEditingAvailable restores edit_message when the realm switches it back on', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const adapter = yield* memoryAdapter()
+        const deps = yield* buildDeps(adapter)
+        const rig = yield* mountAndConnect(adapter, deps, { canEditMessages: false })
+        expect(
+          (yield* Effect.promise(() => rig.client.listTools())).tools.map((t) => t.name),
+        ).not.toContain('edit_message')
+
+        rig.cache.setEditingAvailable(true)
+
+        expect(
+          (yield* Effect.promise(() => rig.client.listTools())).tools.map((t) => t.name),
+        ).toContain('edit_message')
+      }),
+    ),
+  ))
+
+/**
+ * Dispatch reads the same source as the list. A tool withdrawn after
+ * connect must stop being callable, or the withdrawal is cosmetic and a
+ * client working from its pre-change list still reaches the adapter.
+ */
+test('a tool withdrawn after connect is no longer callable', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const adapter = yield* memoryAdapter()
+        const deps = yield* buildDeps(adapter)
+        const rig = yield* mountAndConnect(adapter, deps, { canEditMessages: true })
+
+        rig.cache.setEditingAvailable(false)
+
+        const outcome = yield* Effect.promise(() =>
+          rig.client
+            .callTool({ name: 'edit_message', arguments: { message_id: '1', body: 'nope' } })
+            .then(() => 'dispatched' as const)
+            .catch((error: unknown) => (error instanceof Error ? error.message : String(error))),
+        )
+        expect(outcome).not.toBe('dispatched')
+        expect(outcome).toContain('edit_message')
+      }),
+    ),
+  ))
+
 test('current_identity returns the bound identity after ensureBound resolves', () =>
   Effect.runPromise(
     Effect.scoped(

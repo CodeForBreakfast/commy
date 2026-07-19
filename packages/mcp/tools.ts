@@ -117,10 +117,34 @@ const mentionShape = Mention.$match({
   GroupMention: (m): SerializedMention => ({ type: 'group', name: m.name }),
 })
 
-export interface ToolsCache {
+/**
+ * The remembering half of what registration hands back — everything the
+ * pump needs to feed observed identities, channels and messages into the
+ * lookup the tools resolve against.
+ */
+export interface ToolsMemory {
   rememberIdentity(identity: Identity): void
   rememberChannel(channel: ChannelRef): void
   rememberMessage(ref: MessageRef): void
+}
+
+export interface ToolsCache extends ToolsMemory {
+  /**
+   * Rebuild the tool list against a new value of the realm-wide editing
+   * switch. `canEditMessages` on the deps is only the value sampled at
+   * boot; an administrator can move it under a connected seat, and this is
+   * how the seat catches up without reconnecting.
+   *
+   * Rebuilding rather than mutating one entry keeps a single construction
+   * path — the list a caller sees after this is the list `buildToolDefs`
+   * would have produced had the new value been the boot sample. Dispatch
+   * reads the same rebuilt source, so a withdrawn tool stops being callable
+   * rather than merely disappearing from the listing.
+   *
+   * Emitting `notifications/tools/list_changed` is the caller's job (see
+   * `server.ts`): registration owns the list, the server owns the wire.
+   */
+  setEditingAvailable(available: boolean): void
 }
 
 /**
@@ -235,7 +259,7 @@ type CurrentIdentityResult =
     }
   | { readonly state: 'unbound'; readonly identity: null }
 
-interface InternalCache extends ToolsCache {
+interface InternalCache extends ToolsMemory {
   readonly identityById: Map<IdentityId, Identity>
   readonly channelByName: Map<ChannelName, ChannelRef>
   readonly messageById: Map<MessageId, MessageRef>
@@ -1217,11 +1241,21 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
 
 export const registerTools = (server: Server, deps: RegisterToolsDeps): ToolsCache => {
   const cache = createCache()
-  const defs = buildToolDefs(deps, cache)
-  const byName = new Map(defs.map((def) => [def.name, def]))
+  // The handlers below are registered once and live for the connection, so
+  // they read the current list through this holder rather than closing over
+  // the boot-time one. Both handlers read the same holder, which is what
+  // keeps the listing and dispatch from disagreeing after a rebuild.
+  const buildFor = (canEditMessages: boolean | undefined) => {
+    const defs = buildToolDefs(
+      canEditMessages === undefined ? deps : { ...deps, canEditMessages },
+      cache,
+    )
+    return { defs, byName: new Map(defs.map((def) => [def.name, def])) }
+  }
+  let registry = buildFor(deps.canEditMessages)
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: defs.map((def) => ({
+    tools: registry.defs.map((def) => ({
       name: def.name,
       description: def.description,
       inputSchema: def.inputSchema,
@@ -1229,7 +1263,7 @@ export const registerTools = (server: Server, deps: RegisterToolsDeps): ToolsCac
   }))
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const def = byName.get(request.params.name)
+    const def = registry.byName.get(request.params.name)
     if (def === undefined) {
       throw new Error(`unknown tool: ${request.params.name}`)
     }
@@ -1263,5 +1297,8 @@ export const registerTools = (server: Server, deps: RegisterToolsDeps): ToolsCac
     rememberIdentity: cache.rememberIdentity,
     rememberChannel: cache.rememberChannel,
     rememberMessage: cache.rememberMessage,
+    setEditingAvailable: (available) => {
+      registry = buildFor(available)
+    },
   }
 }
