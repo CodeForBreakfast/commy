@@ -332,19 +332,19 @@ const captureRegisterBody = (): {
 
 test('registerQueue maps the response to a QueueState', async () => {
   const { http } = captureRegisterBody()
-  const state = await Effect.runPromise(registerQueue(http, 'all'))
+  const state = await runSilently(registerQueue(http, 'all'))
   expect(state).toEqual({ queueId: 'q-1', lastEventId: 7 })
 })
 
 test('registerQueue omits idle_queue_timeout when no timeout is supplied', async () => {
   const { http, captured } = captureRegisterBody()
-  await Effect.runPromise(registerQueue(http, 'all'))
+  await runSilently(registerQueue(http, 'all'))
   expect(captured()).toEqual({ event_types: JSON.stringify(['message', 'reaction', 'realm']) })
 })
 
 test('registerQueue sends idle_queue_timeout when a timeout is supplied', async () => {
   const { http, captured } = captureRegisterBody()
-  await Effect.runPromise(registerQueue(http, 'all', 3600))
+  await runSilently(registerQueue(http, 'all', 3600))
   expect(captured()).toEqual({
     event_types: JSON.stringify(['message', 'reaction', 'realm']),
     idle_queue_timeout: 3600,
@@ -353,7 +353,7 @@ test('registerQueue sends idle_queue_timeout when a timeout is supplied', async 
 
 test('registerQueue in mentions mode keeps the narrow alongside idle_queue_timeout', async () => {
   const { http, captured } = captureRegisterBody()
-  await Effect.runPromise(registerQueue(http, 'mentions', 100))
+  await runSilently(registerQueue(http, 'mentions', 100))
   expect(captured()).toEqual({
     event_types: JSON.stringify(['message', 'reaction', 'realm']),
     narrow: JSON.stringify([['is', 'mentioned']]),
@@ -414,6 +414,16 @@ const aChannelMessage = (overrides: Partial<ParsedZulipMessage> = {}): Record<st
 // instead of hanging the suite.
 const ITERATOR_TEST_TIMEOUT_MS = 2_000
 
+/**
+ * Runs a producer effect with its diagnostics captured rather than printed.
+ * The producer logs queue registration and every batch arrival at INFO by
+ * design (comms-d51h), so an unwrapped run sprays those through the test
+ * runner's output. Tests asserting on diagnostics provide their own
+ * `captureLogger` inside, which is applied first and wins.
+ */
+const runSilently = <A, E>(effect: Effect.Effect<A, E>): Promise<A> =>
+  Effect.runPromise(effect.pipe(Effect.provide(captureLogger([]))))
+
 // Queue-state write half: the producer threads the idle timeout onto its own
 // register and fires the persistence hooks so a long-idle resume can recover
 // the queue. Register site (queueId) + per-poll advance (lastEventId) are the
@@ -421,7 +431,7 @@ const ITERATOR_TEST_TIMEOUT_MS = 2_000
 test(
   'producer sends queueIdleTimeoutSecs as idle_queue_timeout on its lazy register',
   () =>
-    Effect.runPromise(
+    runSilently(
       Effect.gen(function* () {
         let registerBody: Record<string, unknown> | undefined
         const config: EventsConfig = {
@@ -455,7 +465,7 @@ test(
 test(
   'producer fires onQueueRegister with the freshly registered queue on lazy register',
   () =>
-    Effect.runPromise(
+    runSilently(
       Effect.gen(function* () {
         const registered: QueueState[] = []
         const config: EventsConfig = {
@@ -610,7 +620,7 @@ test(
 test(
   'producer fires onQueueAdvance with the per-poll maximum event id',
   () =>
-    Effect.runPromise(
+    runSilently(
       Effect.gen(function* () {
         const advanced: number[] = []
         const config: EventsConfig = {
@@ -641,7 +651,7 @@ test(
 test(
   'producer does not fire onQueueAdvance when a poll pulls the cursor nowhere',
   () =>
-    Effect.runPromise(
+    runSilently(
       Effect.gen(function* () {
         // A poll that returns no events leaves maxId at the queue's
         // last_event_id — the guard must skip the (best-effort, but not free)
@@ -682,7 +692,7 @@ test(
 test(
   'producer fires onResumeOutcome(true) when the resume-poll succeeds',
   () =>
-    Effect.runPromise(
+    runSilently(
       Effect.gen(function* () {
         const outcomes: boolean[] = []
         const config: EventsConfig = {
@@ -711,7 +721,7 @@ test(
 test(
   'producer fires onResumeOutcome(false) when the resume-poll hits BAD_EVENT_QUEUE_ID',
   () =>
-    Effect.runPromise(
+    runSilently(
       Effect.gen(function* () {
         const outcomes: boolean[] = []
         let getCalls = 0
@@ -753,7 +763,7 @@ test(
 test(
   'producer fires onResumeOutcome at most once — a mid-life BAD_EVENT_QUEUE_ID does not re-report',
   () =>
-    Effect.runPromise(
+    runSilently(
       Effect.gen(function* () {
         const outcomes: boolean[] = []
         let getCalls = 0
@@ -842,7 +852,7 @@ test(
       expect(outcomes).toEqual([false])
       // The pump's never-give-up retry is untouched — it keeps re-polling the
       // wedged queue underneath; the fallback only de-starves the verdict.
-      expect(logLines[0]).toBe('commy zulip events: transient error (attempt 1): gateway blip')
+      expect(logLines).toContain('commy zulip events: transient error (attempt 1): gateway blip')
     }).pipe(Effect.provide(TestContext.TestContext), Effect.runPromise),
   ITERATOR_TEST_TIMEOUT_MS,
 )
@@ -850,7 +860,7 @@ test(
 test(
   'producer re-persists the new queue via onQueueRegister after BAD_EVENT_QUEUE_ID',
   () =>
-    Effect.runPromise(
+    runSilently(
       Effect.gen(function* () {
         // A dead queue forces a fresh register mid-stream — the new queueId must
         // be persisted too, or a resume would replay against the expired queue.
@@ -901,7 +911,7 @@ test(
 test(
   'iterator skips malformed reaction event and yields subsequent valid events',
   () =>
-    Effect.runPromise(
+    runSilently(
       Effect.gen(function* () {
         // Reaction missing required `user_id` field. The strict schema would
         // throw a ZodError that escapes fetchBatch — instead, safeParse + log +
@@ -950,7 +960,7 @@ test(
 test(
   'iterator skips event whose message body fails strict schema',
   () =>
-    Effect.runPromise(
+    runSilently(
       Effect.gen(function* () {
         // Channel-shaped event (stream_id present, passes the DM gate)
         // but with an empty subject — the strict zulipMessageContentSchema
@@ -996,7 +1006,7 @@ test(
 test(
   'iterator skips reaction whose cache-miss lookup returns a malformed message',
   () =>
-    Effect.runPromise(
+    runSilently(
       Effect.gen(function* () {
         // The reaction is well-formed; the cache misses; fetchMessageRef hits
         // /messages and the returned message fails zulipMessageContentSchema
@@ -1051,7 +1061,7 @@ test(
 test(
   'iterator advances queue past a malformed event so it is not re-delivered',
   () =>
-    Effect.runPromise(
+    runSilently(
       Effect.gen(function* () {
         // Queue-advance is the difference between "skip-once" and "stuck loop".
         // After a malformed event id=41 is skipped, the next /events poll must
@@ -1115,7 +1125,7 @@ test(
 test(
   'iterator calls replay() on BAD_EVENT_QUEUE_ID and emits gap events flagged replayed=true',
   () =>
-    Effect.runPromise(
+    runSilently(
       Effect.gen(function* () {
         let registerCalls = 0
         let getCalls = 0
@@ -1384,7 +1394,7 @@ test(
 test(
   'iterator skips replay() when no replay callback configured (back-compat)',
   () =>
-    Effect.runPromise(
+    runSilently(
       Effect.gen(function* () {
         // BAD_EVENT_QUEUE_ID is handled by silent re-register, no replay call
         // attempted.
@@ -1440,7 +1450,7 @@ test(
 test(
   'iterator skips replay() when no live message has been seen yet',
   () =>
-    Effect.runPromise(
+    runSilently(
       Effect.gen(function* () {
         // If the queue dies before any live message lands, there is no
         // last-seen timestamp to anchor the replay window — skip the call
@@ -1501,7 +1511,7 @@ test(
 test(
   'iterator logs gap-replay failure via the InboxError tag and recovers on the next poll',
   () =>
-    Effect.runPromise(
+    runSilently(
       Effect.gen(function* () {
         // The replay callback is typed Effect<…, InboxError>: when it fails,
         // the gap-replay log path renders the error through its `_tag`, not a
@@ -1589,7 +1599,7 @@ test(
 // ---------------------------------------------------------------------------
 
 test('producer retries on transient ZulipApiError and emits transient/reconnect breadcrumbs', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       let getCalls = 0
       const logLines: string[] = []
@@ -1629,7 +1639,14 @@ test('producer retries on transient ZulipApiError and emits transient/reconnect 
       )
       expect(events).toHaveLength(1)
       expect(getCalls).toBeGreaterThanOrEqual(2)
-      expect(logLines).toEqual([
+      // Filtered to the retry breadcrumbs: the producer also emits queue
+      // register and per-batch arrival lines (comms-d51h), and this test is
+      // about the breadcrumb pair and its order, not the whole record.
+      expect(
+        logLines.filter(
+          (line) => line.includes('transient error') || line.includes('reconnected after'),
+        ),
+      ).toEqual([
         'commy zulip events: transient error (attempt 1): The operation timed out.',
         'commy zulip events: reconnected after 1 transient error',
       ])
@@ -1637,7 +1654,7 @@ test('producer retries on transient ZulipApiError and emits transient/reconnect 
   ))
 
 test('producer survives multiple consecutive transient failures before recovery', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       let getCalls = 0
       const logLines: string[] = []
@@ -1689,7 +1706,7 @@ test('producer survives multiple consecutive transient failures before recovery'
   ))
 
 test('default retry schedule is exponential and caps at 30s', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       // The reconnect backoff must be a cap, not a floor: delays grow
       // 1s, 2s, 4s, 8s, 16s then hold at 30s — early transient blips
@@ -1708,7 +1725,7 @@ test('default retry schedule is exponential and caps at 30s', () =>
   ))
 
 test('producer fires each retry only after its capped-exponential backoff elapses', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       // Behavioural proof of the cap through the live producer: after each
       // transient failure the next poll fires only once the virtual clock
@@ -1768,7 +1785,7 @@ test('producer fires each retry only after its capped-exponential backoff elapse
   ))
 
 test('producer surfaces non-Error rejections via the ZulipApiError message in the transient-error log', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       let getCalls = 0
       const logLines: string[] = []
@@ -1804,14 +1821,14 @@ test('producer surfaces non-Error rejections via the ZulipApiError message in th
         messageRefCache: createMessageRefCache(),
       }
       yield* drainOneUnderTestClock(config, 1).pipe(Effect.provide(captureLogger(logLines)))
-      expect(logLines[0]).toBe(
+      expect(logLines).toContain(
         'commy zulip events: transient error (attempt 1): plain string rejection',
       )
     }),
   ))
 
 test('producer logs a rate-limit backoff breadcrumb when /events returns HTTP 429', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       // The 429 branch sleeps for retry_after and returns an empty chunk —
       // it bypasses the transient-error breadcrumb path, so without an
@@ -1855,3 +1872,94 @@ test('producer logs a rate-limit backoff breadcrumb when /events returns HTTP 42
       )
     }),
   ))
+
+test(
+  'producer records queue registration and per-batch arrival, so a missing event is attributable',
+  () =>
+    runSilently(
+      Effect.gen(function* () {
+        // comms-d51h: without these two lines, "the event never reached this
+        // seat" and "the seat received it and dropped it" look identical from
+        // outside — the ambiguity that stalled comms-9iro.
+        const lines: string[] = []
+        const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
+          http: fakeHttp({
+            onPost: () => ({ result: 'success', queue_id: 'q-77', last_event_id: 40 }),
+            onGet: () => ({
+              result: 'success',
+              events: [{ id: 41, type: 'message', message: aChannelMessage() }],
+            }),
+          }),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
+          mode: 'all',
+          boundIdentity: HERMES,
+          messageRefCache: createMessageRefCache(),
+        }
+        yield* drainOne(config).pipe(Effect.provide(captureLogger(lines)))
+
+        const registered = lines.find((line) => line.includes('registered queue_id='))
+        expect(registered).toBeDefined()
+        expect(registered).toContain('queue_id=q-77')
+        expect(registered).toContain('last_event_id=40')
+
+        const batch = lines.find((line) => line.includes('batch queue_id='))
+        expect(batch).toBeDefined()
+        expect(batch).toContain('ids=[41]')
+        expect(batch).toContain('received=1')
+      }),
+    ),
+  ITERATOR_TEST_TIMEOUT_MS,
+)
+
+test(
+  'the register record names the narrow actually registered against, not the construction-time mode',
+  () =>
+    runSilently(
+      Effect.gen(function* () {
+        // comms-d51h + comms-gh88.4 meet here. A re-register after a mode flip
+        // cuts the fresh queue against the inbox's *current* narrow, so a record
+        // reporting `config.mode` would name the stale one — misreporting
+        // precisely the case the re-register exists to fix. A line that reads
+        // authoritative and is wrong where it matters is worse than no line.
+        const lines: string[] = []
+        let getCalls = 0
+        const config: EventsConfig = {
+          permalinkBase: PERMALINK_BASE,
+          http: fakeHttp({
+            onPost: () => ({ result: 'success', queue_id: 'q-wide', last_event_id: 0 }),
+            onGet: () => {
+              getCalls += 1
+              if (getCalls === 1) {
+                throw new ZulipApiError({
+                  message: 'queue expired',
+                  status: 400,
+                  code: 'BAD_EVENT_QUEUE_ID',
+                  retryAfter: undefined,
+                })
+              }
+              return {
+                result: 'success',
+                events: [{ id: 1, type: 'message', message: aChannelMessage({ id: 100 }) }],
+              }
+            },
+          }),
+          resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
+          // Constructed narrow, since superseded by the flip below.
+          mode: 'mentions',
+          currentRegistration: Effect.succeed(
+            Option.some({ queue: { queueId: 'q-stale', lastEventId: 0 }, mode: 'all' as const }),
+          ),
+          boundIdentity: HERMES,
+          messageRefCache: createMessageRefCache(),
+        }
+        yield* drainOne(config).pipe(Effect.provide(captureLogger(lines)))
+
+        const registered = lines.find((line) => line.includes('registered queue_id=q-wide'))
+        expect(registered).toBeDefined()
+        expect(registered).toContain('mode=all')
+        expect(registered).not.toContain('mode=mentions')
+      }),
+    ),
+  ITERATOR_TEST_TIMEOUT_MS,
+)

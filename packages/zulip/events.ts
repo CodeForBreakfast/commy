@@ -853,6 +853,21 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
       ): Effect.Effect<QueueState, ZulipApiError | ParseResult.ParseError> =>
         registerQueue(config.http, mode, config.queueIdleTimeoutSecs).pipe(
           Effect.tap((q) => config.onQueueRegister?.(q) ?? Effect.void),
+          // A (re-)register is the one moment a seat can silently lose its
+          // backlog: the new queue starts at the server's current
+          // last_event_id, so anything that arrived while no queue existed
+          // is gone. Recording it means a gap in the record has a visible
+          // cause rather than looking like a quiet realm.
+          //
+          // The mode recorded is the one this registration was cut against,
+          // not `config.mode` — after a flip those differ, and a register line
+          // naming the stale narrow would misreport exactly the case the
+          // caller re-registers to fix.
+          Effect.tap((q) =>
+            Effect.logInfo(
+              `commy zulip events: registered queue_id=${q.queueId} last_event_id=${q.lastEventId} mode=${mode}`,
+            ),
+          ),
         )
 
       const readRegistration: Effect.Effect<Option.Option<QueueRegistration>> =
@@ -941,6 +956,7 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
           const directory = res.events.length > 0 ? yield* config.resolveDirectory() : undefined
           let maxId = currentQueue.lastEventId
           const mapped: InboundEvent[] = []
+          const receivedIds: number[] = []
           for (const rawEvt of res.events) {
             const envelope = decodeEventEnvelope(rawEvt)
             if (Either.isLeft(envelope)) {
@@ -957,6 +973,7 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
               continue
             }
             const evt = envelope.right as EventEnvelope
+            receivedIds.push(evt.id)
             if (evt.id > maxId) maxId = evt.id
             if (directory === undefined) continue
             const events = yield* processSingleEvent(evt, directory, config)
@@ -969,6 +986,16 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
           }
           if (config.onQueueAdvance !== undefined && maxId > currentQueue.lastEventId) {
             yield* config.onQueueAdvance(maxId)
+          }
+          // The arrival record. Without it, "the event never reached this seat"
+          // and "the seat received it and discarded it" are indistinguishable
+          // from outside — exactly the ambiguity that stalled comms-9iro. The
+          // raw substrate ids are what an investigator correlates against the
+          // realm; `mapped` is what the pump then gets a chance to drop.
+          if (receivedIds.length > 0) {
+            yield* Effect.logInfo(
+              `commy zulip events: batch queue_id=${currentQueue.queueId} last_event_id=${currentQueue.lastEventId}->${maxId} received=${receivedIds.length} mapped=${mapped.length} ids=[${receivedIds.join(',')}]`,
+            )
           }
           return [
             mapped,
