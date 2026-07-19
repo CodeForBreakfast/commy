@@ -37,6 +37,7 @@ import { FetchHttpClient, HttpClient } from '@effect/platform'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import {
+  Array as Arr,
   Deferred,
   Duration,
   Effect,
@@ -44,6 +45,7 @@ import {
   Layer,
   Option,
   Redacted,
+  Ref,
   Schedule,
   Schema,
   type Scope,
@@ -59,7 +61,36 @@ import { SessionIdLive, SessionId as SessionIdService } from './session-id.ts'
 import { FileSubscriptionStoreLive } from './subscription-store.ts'
 import { testPlatformLayer } from './test-platform.ts'
 
-const httpClient = Effect.runSync(HttpClient.HttpClient.pipe(Effect.provide(FetchHttpClient.layer)))
+/**
+ * Realm-call observatory, read by the delivery-fidelity soak.
+ *
+ * Every call this suite makes — the seat's boot and long-poll, and the minter's
+ * own posts — flows through the one module-level client, so wrapping it once
+ * accounts for a run's whole cost against Zulip's per-user budget (GCRA,
+ * `api_by_user` at 60/200: ~3.3 req/s sustained on a burst of 200, draining
+ * continuously rather than resetting).
+ *
+ * `rateLimited` is the soak's exclusion signal rather than a statistic. A 429
+ * means the realm decided when an event arrived, so a trial spanning one is
+ * VOID, not a miss — `http.ts` retries 429s on a wait budget, which turns
+ * saturation into delay, and delay past the fixture's timeout is
+ * indistinguishable from the silent drop being hunted. Counting those as hits
+ * would contaminate the result in the direction that looks like a finding.
+ */
+const realmObservations = Effect.runSync(Ref.make({ requests: 0, rateLimited: 0 }))
+
+const httpClient = Effect.runSync(
+  HttpClient.HttpClient.pipe(Effect.provide(FetchHttpClient.layer)),
+).pipe(
+  HttpClient.tapRequest(() =>
+    Ref.update(realmObservations, (o) => ({ ...o, requests: o.requests + 1 })),
+  ),
+  HttpClient.tap((response) =>
+    response.status === 429
+      ? Ref.update(realmObservations, (o) => ({ ...o, rateLimited: o.rateLimited + 1 }))
+      : Effect.void,
+  ),
+)
 
 interface LiveEnv {
   readonly site: string
@@ -124,6 +155,25 @@ const RESUME_SESSION = 'cccccccc-0000-0000-0000-000000000001'
 // is dead, so boot-2 must resume the surviving queue rather than catch a live
 // post-resume event.
 const DOWNTIME_RESUME_SESSION = 'dddddddd-0000-0000-0000-000000000001'
+
+// Fixed boot session id for the delivery-fidelity soak, distinct from every
+// other so its store and its minted `cc-<8>` bot are never shared.
+const FIDELITY_SESSION = 'eeeeeeee-0000-0000-0000-000000000001'
+
+// How many live events the soak observes. The default is deliberately small:
+// this suite runs against the realm the fleet coordinates on, and the number
+// that makes a null informative is a number worth choosing on purpose. See the
+// soak's own comment for what each N buys.
+const SOAK_EVENTS = Number(process.env['COMMY_FIDELITY_EVENTS'] ?? '5')
+
+// Per-event patience. Generous relative to observed live delivery (sub-second)
+// so a slow realm is not miscounted as a drop.
+const SOAK_EVENT_TIMEOUT = Duration.seconds(30)
+
+const postedMessageSchema = Schema.Struct({
+  result: Schema.Literal('success'),
+  id: Schema.Int,
+})
 
 const usersListSchema = Schema.Struct({
   result: Schema.Literal('success'),
@@ -778,5 +828,172 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
         }),
       ),
     120_000,
+  )
+
+  // Live delivery fidelity — the property message 19803 violated.
+  //
+  // 19803 was a LIVE steady-state event in a correctly-subscribed topic,
+  // bracketed by a delivery before it and a delivery after it. Every hypothesis
+  // that would have explained it is disproved (resume, phantom subscribe, wake,
+  // ts-collision dedup, acquire handover), so nothing establishes what provokes
+  // the drop — which means a single run seeing no drop measures nothing at all.
+  //
+  // Sized instead to make a NULL result informative: N events bound the
+  // per-event drop rate under 3/N at 95% (rule of three). 19803 was one drop
+  // among the couple of dozen events its seat handled — order 5% — so a null at
+  // N=100 puts the rate under 3% and discriminates a random per-event race from
+  // a state-dependent trigger. A null at N=1 discriminates nothing, which is
+  // why the count is explicit rather than implied.
+  //
+  // EXERCISED CONDITIONS, written down so a null is read for what it covers and
+  // no more: runtime subscribe (not a `COMMY_SUBSCRIBE` seed), identity acquire
+  // via a first post, then live steady-state delivery — the incident's own
+  // sequence. Resume, downtime replay, queue re-register and mode flip are
+  // UNTESTED BY THIS RUN, not cleared by it.
+  //
+  // The count comes from the env because the realm is the substrate the fleet
+  // coordinates on: the committed default is cheap, and the diagnostic run
+  // raises it deliberately.
+  test(
+    'delivery fidelity: every live message posted into a subscribed thread reaches the seat',
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const e = liveEnv()
+          const minterHttp = yield* makeZulipHttp({
+            realmUrl: yield* RealmUrl(e.site).pipe(Effect.orDie),
+            email: yield* BotEmail(e.minterEmail).pipe(Effect.orDie),
+            apiKey: yield* ApiKey(e.minterApiKey).pipe(Effect.orDie),
+          }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient))
+
+          const stateHome = mkdtempSync(join(tmpdir(), 'commy-fidelity-'))
+          const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+          const verifyTopic = `fidelity-${suffix}`
+
+          const frames: Array<{ readonly meta: Record<string, string> }> = []
+
+          const report = yield* Effect.scoped(
+            Effect.gen(function* () {
+              yield* Effect.sleep(MINTER_PACE)
+              // No `COMMY_SUBSCRIBE`: the seat that dropped 19803 booted with an
+              // empty seed (measured on its still-live child) and subscribed at
+              // runtime, so the seed path would not be the same experiment.
+              const client = yield* buildHarness({
+                CLAUDE_CODE_SESSION_ID: FIDELITY_SESSION,
+                XDG_STATE_HOME: stateHome,
+                COMMY_SUBSCRIBE: '',
+              })
+              client.fallbackNotificationHandler = (n: {
+                readonly method: string
+                readonly params?: unknown
+              }): Promise<void> => {
+                if (
+                  n.method === 'notifications/claude/channel' &&
+                  typeof n.params === 'object' &&
+                  n.params !== null
+                ) {
+                  const p = n.params as { readonly meta?: Record<string, string> }
+                  if (p.meta !== undefined) frames.push({ meta: p.meta })
+                }
+                return Promise.resolve()
+              }
+
+              yield* Effect.sleep(MINTER_PACE)
+              yield* callTool(client, 'subscribe', {
+                target: `thread:${e.channelName}/${verifyTopic}`,
+                session_id: FIDELITY_SESSION,
+              })
+              // The first post is what forces identity acquire and the
+              // acquire-triggered catch-up — the state 19803 landed 62s after.
+              yield* callTool(client, 'post', {
+                channel_name: e.channelName,
+                thread: verifyTopic,
+                body: `fidelity-anchor-${suffix}`,
+                session_id: FIDELITY_SESSION,
+              })
+
+              const costAfterBoot = yield* Ref.get(realmObservations)
+
+              const trials = yield* Effect.forEach(Arr.range(1, SOAK_EVENTS), (n) =>
+                Effect.gen(function* () {
+                  const before = yield* Ref.get(realmObservations)
+                  yield* Effect.sleep(MINTER_PACE)
+                  const publish = minterHttp
+                    .post('/messages', postedMessageSchema, {
+                      type: 'stream',
+                      to: e.channelName,
+                      topic: verifyTopic,
+                      content: `fidelity-${suffix}-${n}`,
+                    })
+                    .pipe(Effect.orDie)
+                  // Alternating arms, interleaved in ONE boot rather than run as
+                  // two soaks: same seat, same queue, same realm conditions, so
+                  // a difference between them is the arm and not the run. Half
+                  // the realm cost of two runs, and a paired comparison.
+                  //
+                  const posted = yield* publish
+                  const id = String(posted.id)
+                  const arrived = yield* Effect.suspend(() =>
+                    frames.some((f) => f.meta['message_id'] === id)
+                      ? Effect.void
+                      : Effect.fail('not-yet' as const),
+                  ).pipe(
+                    Effect.retry(Schedule.spaced(Duration.millis(500))),
+                    Effect.timeout(SOAK_EVENT_TIMEOUT),
+                    Effect.match({ onFailure: () => false, onSuccess: () => true }),
+                  )
+                  const after = yield* Ref.get(realmObservations)
+                  // A 429 anywhere in this trial's window means the realm, not
+                  // the pump, decided when the event arrived. Void, not a miss.
+                  const rateLimited = after.rateLimited > before.rateLimited
+                  const outcome = rateLimited
+                    ? ('void' as const)
+                    : arrived
+                      ? ('hit' as const)
+                      : ('miss' as const)
+                  // Logged per trial, not only in the final summary: a miss costs
+                  // the full timeout, so a soak sized slightly too tight dies
+                  // mid-loop and a summary-only fixture would report nothing at
+                  // all about the trials it did complete. A run that can only
+                  // speak when it finishes cannot report the runs that don't.
+                  yield* Effect.logInfo(
+                    `commy fidelity trial ${n}/${SOAK_EVENTS}: ${outcome} id=${id} calls=${after.requests - before.requests}`,
+                  )
+                  return { n, id, outcome, calls: after.requests - before.requests }
+                }),
+              )
+
+              return { costAfterBoot, trials }
+            }),
+          )
+
+          const misses = report.trials.filter((t) => t.outcome === 'miss')
+          const voids = report.trials.filter((t) => t.outcome === 'void')
+          const counted = report.trials.length - voids.length
+          const callsPerTrial =
+            report.trials.reduce((sum, t) => sum + t.calls, 0) / Math.max(report.trials.length, 1)
+
+          // The realm-cost figures are the point of a pilot run, so they are
+          // reported on success too — a soak that only speaks when it fails
+          // cannot tell you what the next N would cost.
+          yield* Effect.logInfo(
+            `commy fidelity soak: ${counted} counted (${voids.length} void, ${misses.length} miss) — ` +
+              `boot cost ${report.costAfterBoot.requests} calls, ~${callsPerTrial.toFixed(1)} calls/event, ` +
+              `misses=[${misses.map((t) => t.id).join(',')}]`,
+          )
+
+          expect(misses.map((t) => t.id)).toEqual([])
+          // A run drowned in 429s bounds nothing; fail rather than report a
+          // vacuous null as a clean result.
+          expect(counted).toBeGreaterThan(0)
+
+          rmSync(stateHome, { recursive: true, force: true })
+        }),
+      ),
+    // A miss costs the full per-event timeout, so the worst case is every trial
+    // waiting it out — the budget has to cover that, plus a live boot and the
+    // paced teardown. Sized from an observed run rather than estimated: the
+    // first pilot died on its own deadline with the loop still going.
+    120_000 + SOAK_EVENTS * 35_000,
   )
 })
