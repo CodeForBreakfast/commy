@@ -26,12 +26,32 @@ import {
 } from '@commy/core/ports'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { Effect, Option, Ref, Schema, Stream, TestClock, TestContext } from 'effect'
+import {
+  Effect,
+  Logger,
+  LogLevel,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+  TestClock,
+  TestContext,
+} from 'effect'
 import { channelNotifier, startEventPump } from './event-pump.ts'
 import type { ChannelEventPayload } from './events.ts'
 import { buildMcpServer } from './mcp-server.ts'
 
 const BOT_ID: IdentityIdType = decodeIdentityIdSync('bot-42')
+
+/**
+ * Runs a pump effect with its diagnostics captured rather than printed. The
+ * pump logs every delivery and every drop at INFO by design — that record is
+ * the point of comms-d51h — so an unwrapped run would spray those lines
+ * through the test runner's output. Tests that assert on diagnostics provide
+ * their own `captureLogger` inside, which is applied first and wins.
+ */
+const runSilently = <A, E>(effect: Effect.Effect<A, E>): Promise<A> =>
+  Effect.runPromise(effect.pipe(Effect.provide(captureLogger([]))))
 
 const paymentsThread = Option.some({
   name: decodeThreadNameSync('payments'),
@@ -160,7 +180,7 @@ const collectingNotifier = (): {
  * they assert no timestamp or rely on real `Effect.sleep`.
  */
 const runWithClockSeconds = <A, E>(seconds: number, effect: Effect.Effect<A, E>): Promise<A> =>
-  Effect.runPromise(
+  runSilently(
     TestClock.setTime(seconds * 1000).pipe(
       Effect.zipRight(effect),
       Effect.provide(TestContext.TestContext),
@@ -197,7 +217,7 @@ test('pump reports realm settings changes without notifying the consumer', () =>
   ))
 
 test('pump filters out events that fail the narrow predicate', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const events: InboundEvent[] = [
         { kind: 'message-posted', message: msg({ body: decodeMessageBodySync('kept') }) },
@@ -238,7 +258,7 @@ test('pump filters out events that fail the narrow predicate', () =>
   ))
 
 test('pump drops message-posted whose sender is the bound bot identity (self-echo)', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const selfSender: Identity = {
         id: BOT_ID,
@@ -266,7 +286,7 @@ test('pump drops message-posted whose sender is the bound bot identity (self-ech
   ))
 
 test('pump drops mention-received whose message sender is the bound bot identity', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const selfSender: Identity = {
         id: BOT_ID,
@@ -354,7 +374,7 @@ test('pump drops reaction-removed whose actor is the bound bot identity', () =>
   ))
 
 test('pump delivers self-shaped events when bot identity is unknown (pre-acquire)', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const selfSender: Identity = {
         id: BOT_ID,
@@ -383,7 +403,7 @@ test('pump delivers self-shaped events when bot identity is unknown (pre-acquire
   ))
 
 test('pump sets mentioned="true" when the bound bot is in the mention list', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const bot: Identity = { id: BOT_ID, name: decodeDisplayNameSync('cc-bot'), kind: 'agent' }
       const inbox = queueInbox({
@@ -403,7 +423,7 @@ test('pump sets mentioned="true" when the bound bot is in the mention list', () 
   ))
 
 test('pump omits mentioned (and never surfaces bot_identity_id) when getBotIdentityId returns undefined', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const bot: Identity = { id: BOT_ID, name: decodeDisplayNameSync('cc-bot'), kind: 'agent' }
       const inbox = queueInbox({
@@ -424,7 +444,7 @@ test('pump omits mentioned (and never surfaces bot_identity_id) when getBotIdent
   ))
 
 test('pump dispatches message-posted as a formatMessage payload', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const inbox = queueInbox({
         events: [{ kind: 'message-posted', message: msg() }],
@@ -445,7 +465,7 @@ test('pump dispatches message-posted as a formatMessage payload', () =>
   ))
 
 test('pump dispatches mention-received with mentions meta populated', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const alice: Identity = {
         id: decodeIdentityIdSync('user-11'),
@@ -522,7 +542,7 @@ test('pump dispatches reaction-removed as a formatReaction payload', () =>
   ))
 
 test('pump calls rememberIdentity with the sender of a message-posted event', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const inbox = queueInbox({
         events: [{ kind: 'message-posted', message: msg() }],
@@ -544,7 +564,7 @@ test('pump calls rememberIdentity with the sender of a message-posted event', ()
   ))
 
 test('pump calls rememberIdentity with sender + mentions of a mention-received event', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const alice: Identity = {
         id: decodeIdentityIdSync('user-11'),
@@ -633,7 +653,7 @@ test('pump calls rememberIdentity with the actor of a reaction-removed event', (
   ))
 
 test('pump does NOT call rememberIdentity for events filtered out by the narrow predicate', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const inbox = queueInbox({
         events: [
@@ -677,7 +697,7 @@ test('pump does NOT call rememberIdentity for events filtered out by the narrow 
   ))
 
 test('pump does NOT call rememberIdentity for self-echo events', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const selfSender: Identity = {
         id: BOT_ID,
@@ -704,7 +724,7 @@ test('pump does NOT call rememberIdentity for self-echo events', () =>
   ))
 
 test('pump works without a rememberIdentity dep (optional)', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const inbox = queueInbox({
         events: [{ kind: 'message-posted', message: msg() }],
@@ -722,7 +742,7 @@ test('pump works without a rememberIdentity dep (optional)', () =>
   ))
 
 test('pump calls onMention with the ts of each delivered mention-received event', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const alice: Identity = {
         id: decodeIdentityIdSync('user-11'),
@@ -784,7 +804,7 @@ test('pump calls onMention with the ts of each delivered mention-received event'
   ))
 
 test('pump does NOT call onMention for non-mention events', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const inbox = queueInbox({
         events: [
@@ -810,7 +830,7 @@ test('pump does NOT call onMention for non-mention events', () =>
   ))
 
 test('pump does NOT call onMention for events filtered out by the narrow predicate', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const alice: Identity = {
         id: decodeIdentityIdSync('user-11'),
@@ -846,7 +866,7 @@ test('pump does NOT call onMention for events filtered out by the narrow predica
   ))
 
 test('pump does NOT call onMention for self-echo mentions', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       // Bot mentioning itself shouldn't advance the cursor — already filtered
       // by the self-echo guard, and onMention should respect that.
@@ -887,7 +907,7 @@ test('pump does NOT call onMention for self-echo mentions', () =>
   ))
 
 test('pump dispatches a single notifier call when message-posted and mention-received share the same message.ref.id', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const bot: Identity = { id: BOT_ID, name: decodeDisplayNameSync('cc-bot'), kind: 'agent' }
       const portMessage = msg({ mentions: userMentions([bot]) })
@@ -911,7 +931,7 @@ test('pump dispatches a single notifier call when message-posted and mention-rec
   ))
 
 test('pump still calls onMention when mention-received is the deduped duplicate', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       // The notifier-side dedup must not swallow the mention-cursor advance:
       // even though the consumer sees one block, the bot's seen-up-to mark
@@ -946,7 +966,7 @@ test('pump still calls onMention when mention-received is the deduped duplicate'
   ))
 
 test('pump dedup is keyed per message id — distinct ids each fire', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const inbox = queueInbox({
         events: [
@@ -1015,7 +1035,7 @@ test('pump does not dedup a reaction whose target.id matches a previously delive
   ))
 
 test('pump done resolves when iterator naturally ends', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const inbox = queueInbox({ events: [], closeAfterDrain: true })
       const collector = collectingNotifier()
@@ -1030,7 +1050,7 @@ test('pump done resolves when iterator naturally ends', () =>
   ))
 
 test('pump exits and produces no further notifications after cancel', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.gen(function* () {
       const inbox = queueInbox()
       const collector = collectingNotifier()
@@ -1071,7 +1091,7 @@ test('pump exits and produces no further notifications after cancel', () =>
 
 test('pump still parks on dispatch failure to preserve the fatal-park flow for non-iterator errors', () => {
   const logLines: string[] = []
-  return Effect.runPromise(
+  return runSilently(
     Effect.scoped(
       Effect.gen(function* () {
         // The fatal-park behaviour is the right answer when the failure is
@@ -1129,7 +1149,7 @@ test('pump still parks on dispatch failure to preserve the fatal-park flow for n
 })
 
 test('channelNotifier dual-emits the claude/channel frame and the MCP-standard notifications/message carrier', () =>
-  Effect.runPromise(
+  runSilently(
     Effect.scoped(
       Effect.gen(function* () {
         const server = buildMcpServer()
@@ -1204,3 +1224,78 @@ test('channelNotifier dual-emits the claude/channel frame and the MCP-standard n
       }),
     ),
   ))
+
+/**
+ * A drop that leaves no trace is indistinguishable from an idle substrate —
+ * the failure mode that let comms-9iro's incident go unnoticed until a human
+ * spotted the silence. Every path that discards an event must say so.
+ */
+const dropLogFor = (
+  events: ReadonlyArray<InboundEvent>,
+  overrides: {
+    readonly match?: (event: InboundEvent) => boolean
+    readonly botId?: IdentityIdType
+  } = {},
+): Promise<ReadonlyArray<string>> => {
+  const logLines: string[] = []
+  return runSilently(
+    Effect.gen(function* () {
+      const inbox = queueInbox({ events: [...events], closeAfterDrain: true })
+      const collector = collectingNotifier()
+      const handle = yield* startEventPump({
+        inbox: inbox.inbox,
+        notifier: collector.notifier,
+        getBotIdentityId: () => overrides.botId ?? BOT_ID,
+        ...(overrides.match !== undefined ? { match: overrides.match } : {}),
+      })
+      yield* handle.done
+    }).pipe(Effect.provide(captureLogger(logLines)), Logger.withMinimumLogLevel(LogLevel.Debug)),
+  ).then(() => logLines)
+}
+
+test('pump records a narrow-filter drop with the identifiers needed to trace it', async () => {
+  const lines = await dropLogFor(
+    [{ kind: 'message-posted', message: msg({ body: decodeMessageBodySync('dropped') }) }],
+    { match: () => false },
+  )
+  const drop = lines.find((line) => line.includes('no-narrow-match'))
+  expect(drop).toBeDefined()
+  expect(drop).toContain('id=msg-1')
+  expect(drop).toContain('channel=home')
+  expect(drop).toContain('thread=payments')
+})
+
+test('pump records a self-echo drop naming the originator it matched against', async () => {
+  const lines = await dropLogFor([
+    {
+      kind: 'message-posted',
+      message: msg({ sender: { ...sender, id: BOT_ID } }),
+    },
+  ])
+  const drop = lines.find((line) => line.includes('self-echo'))
+  expect(drop).toBeDefined()
+  expect(drop).toContain('id=msg-1')
+  expect(drop).toContain(`originator=${BOT_ID}`)
+})
+
+test('pump records a duplicate-suppression drop naming the dedup key it collided on', async () => {
+  // A Zulip mention surfaces as both message-posted and mention-received for
+  // one message; the second is suppressed. The key is the message id, NOT the
+  // timestamp — worth asserting, because the ts-collision sharp edge
+  // documented on Capabilities does not apply to this drop.
+  const message = msg()
+  const lines = await dropLogFor([
+    { kind: 'message-posted', message },
+    { kind: 'mention-received', message, mentions: [] },
+  ])
+  const drop = lines.find((line) => line.includes('duplicate'))
+  expect(drop).toBeDefined()
+  expect(drop).toContain('id=msg-1')
+})
+
+test('pump records each delivery, so an arrival with no delivery is legible as a drop', async () => {
+  const lines = await dropLogFor([{ kind: 'message-posted', message: msg() }])
+  const delivered = lines.find((line) => line.includes('delivered'))
+  expect(delivered).toBeDefined()
+  expect(delivered).toContain('id=msg-1')
+})
