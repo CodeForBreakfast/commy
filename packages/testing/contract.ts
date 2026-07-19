@@ -38,6 +38,7 @@ import {
   decodeThreadNameSync,
   decodeTimestampSync,
   MessagePermalinkSchema,
+  mentionedIdentities,
   PublisherError,
   UnknownChannel,
   UnknownIdentity,
@@ -564,7 +565,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
           const messages = yield* env.comms.history.readChannel(channel.name, {})
           const found = messages.find((m) => m.body.includes('wake up'))
           expect(found).toBeDefined()
-          expect(found?.mentions.map((m) => m.id)).toEqual([alice.id])
+          expect(mentionedIdentities(found?.mentions ?? []).map((m) => m.id)).toEqual([alice.id])
         }),
       ))
 
@@ -998,7 +999,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             )
             if (event.kind !== 'mention-received')
               throw new Error(`expected mention-received, got ${event.kind}`)
-            expect(event.mentions.map((m: Identity) => m.id)).toContain(me.id)
+            expect(mentionedIdentities(event.mentions).map((m) => m.id)).toContain(me.id)
           }),
         ),
       ))
@@ -1028,7 +1029,7 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
             )
             if (event.kind !== 'mention-received')
               throw new Error(`expected mention-received, got ${event.kind}`)
-            expect(event.mentions.map((m: Identity) => m.id)).toContain(me.id)
+            expect(mentionedIdentities(event.mentions).map((m) => m.id)).toContain(me.id)
           }),
         ),
       ))

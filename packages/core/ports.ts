@@ -98,6 +98,11 @@ export const DisplayNameSchema = Schema.NonEmptyString.pipe(Schema.brand('Displa
 export type DisplayName = typeof DisplayNameSchema.Type
 export const decodeDisplayName = Schema.decodeUnknown(DisplayNameSchema)
 
+/** Substrate-facing name of a named group of identities. */
+export const GroupNameSchema = Schema.NonEmptyString.pipe(Schema.brand('GroupName'))
+export type GroupName = typeof GroupNameSchema.Type
+export const decodeGroupName = Schema.decodeUnknown(GroupNameSchema)
+
 /**
  * Identity name to acquire on the substrate. Brand carries the invariant
  * "this value came through a known mint point" — either `composeBotName`
@@ -150,6 +155,7 @@ export const decodeChannelDescriptionSync = Schema.decodeSync(ChannelDescription
 export const decodeDisplayNameSync = Schema.decodeSync(DisplayNameSchema)
 export const decodeBotNameSync = Schema.decodeSync(BotNameSchema)
 export const decodeEmojiSync = Schema.decodeSync(EmojiSchema)
+export const decodeGroupNameSync = Schema.decodeSync(GroupNameSchema)
 
 export type IdentityKind = 'human' | 'agent'
 
@@ -229,12 +235,64 @@ export interface Reaction {
   readonly by: ReadonlyArray<Identity>
 }
 
+/**
+ * Who a message notified. Not every mention names a user: substrates also let
+ * a message address a whole audience at once (Zulip's `@**all**` /
+ * `@**channel**` / `@**topic**`, Discord's `@everyone` / `@here`) or a named
+ * group. Those are the highest-consequence mentions on a substrate — they wake
+ * everyone — and an `Identity` cannot represent one, so this is a union rather
+ * than an identity list.
+ *
+ * The audience variants carry no payload because the audience *is* the
+ * information: the four Zulip channel wildcards all address the same set, so
+ * preserving which token was typed would be substrate trivia the port has no
+ * use for. Adapters map their own spellings onto these.
+ */
+export type Mention = Data.TaggedEnum<{
+  UserMention: { readonly identity: Identity }
+  /** Everyone subscribed to the channel the message was posted in. */
+  ChannelWildcardMention: Record<never, never>
+  /** Everyone participating in the thread the message was posted in. */
+  TopicWildcardMention: Record<never, never>
+  GroupMention: { readonly name: GroupName }
+}>
+export const Mention = Data.taggedEnum<Mention>()
+
+/** The mentions of a known set of identities, in order. */
+export const userMentions = (identities: ReadonlyArray<Identity>): ReadonlyArray<Mention> =>
+  identities.map((identity) => Mention.UserMention({ identity }))
+
+/**
+ * Whether `identity` was notified by these mentions.
+ *
+ * A channel or topic wildcard notifies everyone in the audience, so any
+ * recipient observing the message was mentioned by it. A group mention is
+ * deliberately *not* a match: membership is not on the message and commy does
+ * not resolve it, so claiming a match would be a guess — and inventing a
+ * mention nobody made is the failure mode the code-span carve-out exists to
+ * prevent. Reading the substrate's own delivery signal (comms-l1i8) removes
+ * the guess entirely.
+ */
+export const mentionsIdentity = (mentions: ReadonlyArray<Mention>, identity: IdentityId): boolean =>
+  mentions.some(
+    Mention.$match({
+      UserMention: (m) => m.identity.id === identity,
+      ChannelWildcardMention: () => true,
+      TopicWildcardMention: () => true,
+      GroupMention: () => false,
+    }),
+  )
+
+/** The individually-named identities among these mentions, in order. */
+export const mentionedIdentities = (mentions: ReadonlyArray<Mention>): ReadonlyArray<Identity> =>
+  mentions.filter(Mention.$is('UserMention')).map((m) => m.identity)
+
 export interface Message {
   readonly ref: MessageRef
   readonly sender: Identity
   readonly body: MessageBody
   readonly ts: Timestamp
-  readonly mentions: ReadonlyArray<Identity>
+  readonly mentions: ReadonlyArray<Mention>
   readonly reactions: ReadonlyArray<Reaction>
 }
 
@@ -322,7 +380,7 @@ export type InboundEvent =
   | {
       readonly kind: 'mention-received'
       readonly message: Message
-      readonly mentions: ReadonlyArray<Identity>
+      readonly mentions: ReadonlyArray<Mention>
       readonly replayed?: boolean
     }
   | {

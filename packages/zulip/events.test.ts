@@ -13,6 +13,7 @@ import {
   decodeTimestampSync,
   InboxError,
   MessagePermalinkSchema,
+  mentionedIdentities,
   ThreadPermalinkSchema,
 } from '@commy/core/ports'
 import {
@@ -87,7 +88,7 @@ test('fires mention-received when bound identity is in content even if flags lac
 
   expect(mention).toBeDefined()
   if (mention !== undefined && mention.kind === 'mention-received') {
-    expect(mention.mentions.map((m) => m.id)).toContain(HERMES.id)
+    expect(mentionedIdentities(mention.mentions).map((m) => m.id)).toContain(HERMES.id)
   }
 })
 

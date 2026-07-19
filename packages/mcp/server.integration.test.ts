@@ -34,6 +34,7 @@ import {
   decodeTimestampSync,
   InboxError,
   MessagePermalinkSchema,
+  userMentions,
 } from '@commy/core/ports'
 import { memoryAdapter } from '@commy/memory/adapter'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -1395,10 +1396,10 @@ test('persistent boot with a prior cursor: replay fires, mention-received notifi
         sender: senderIdentity,
         body: decodeMessageBodySync('hey concierge, missed you'),
         ts: decodeTimestampSync(PRIOR_CURSOR_TS + 50),
-        mentions: [mentionedIdentity],
+        mentions: userMentions([mentionedIdentity]),
         reactions: [],
       },
-      mentions: [mentionedIdentity],
+      mentions: userMentions([mentionedIdentity]),
     },
     // A non-mention event in the same replay window — proves the catch-up
     // filters to mention-received only.
@@ -1557,10 +1558,10 @@ test('ephemeral lazy acquire with a prior cursor: replay fires, mention dispatch
         sender: senderIdentity,
         body: decodeMessageBodySync('hey ephemeral session, missed you'),
         ts: decodeTimestampSync(PRIOR_CURSOR_TS + 50),
-        mentions: [mentionedIdentity],
+        mentions: userMentions([mentionedIdentity]),
         reactions: [],
       },
-      mentions: [mentionedIdentity],
+      mentions: userMentions([mentionedIdentity]),
     },
   ]
 
@@ -1746,10 +1747,10 @@ test('ephemeral queue-DEAD resume: mentions + channels catch-up run and backfill
         },
         body: decodeMessageBodySync('you were @-mentioned while away'),
         ts: decodeTimestampSync(PRIOR_CURSOR_TS + 50),
-        mentions: [mentionedIdentity],
+        mentions: userMentions([mentionedIdentity]),
         reactions: [],
       },
-      mentions: [mentionedIdentity],
+      mentions: userMentions([mentionedIdentity]),
     },
   ]
   const replayCalls: number[] = []

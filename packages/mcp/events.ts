@@ -1,4 +1,5 @@
 import type { IdentityId, InboundEvent, Timestamp } from '@commy/core/ports'
+import { Mention, mentionsIdentity } from '@commy/core/ports'
 import { Array as Arr, Option, Record as Rec, String as Str } from 'effect'
 
 /**
@@ -21,6 +22,19 @@ export interface ChannelEventPayload {
  * `SessionSource` keying) read them off the data carrier.
  */
 export const IDENTITY_ID_META_KEYS = ['sender_id', 'by_id'] as const
+
+/**
+ * How a mention reads in the `mentions` meta attribute. A person appears under
+ * their own name; the audience forms are prefixed with `@` so a message that
+ * woke the whole channel is never mistaken for a message naming a colleague
+ * who happens to be called "channel".
+ */
+const mentionLabel = Mention.$match({
+  UserMention: (m): string => m.identity.name,
+  ChannelWildcardMention: () => '@channel',
+  TopicWildcardMention: () => '@topic',
+  GroupMention: (m) => `@group:${m.name}`,
+})
 
 const ATTR_STRIP = /[[\]\r\n;]/g
 
@@ -45,9 +59,9 @@ export const formatMessage = (
   // Each name is individually safeAttr'd (which strips ';'), so a name can
   // never contain the join delimiter; the joined value is then merged in
   // WITHOUT a second buildMeta pass, which would strip the delimiters too.
-  const mentionNames = Arr.map(msg.mentions, (m) => safeAttr(m.name))
+  const mentionNames = Arr.map(msg.mentions, (m) => safeAttr(mentionLabel(m)))
   const mentioned =
-    botIdentityId !== undefined && msg.mentions.some((m) => m.id === botIdentityId)
+    botIdentityId !== undefined && mentionsIdentity(msg.mentions, botIdentityId)
       ? 'true'
       : undefined
 

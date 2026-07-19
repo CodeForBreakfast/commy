@@ -24,6 +24,7 @@ import {
   decodeMessageId,
   decodeThreadName,
   decodeTimestamp,
+  Mention,
   MessagePermalinkSchema,
   ObservedThreadSchema,
 } from '@commy/core/ports'
@@ -94,6 +95,26 @@ const identityShape = (identity: Identity): SerializedIdentity => ({
   id: identity.id,
   name: identity.name,
   kind: identity.kind,
+})
+
+/**
+ * Wire shape of a mention. `type` discriminates the three things a mention can
+ * be: a named person, one of the substrate's whole-audience wildcards, or a
+ * named group. A reader that only understands `type: 'user'` still sees that
+ * the other forms happened rather than seeing an empty list — the failure this
+ * shape exists to end.
+ */
+type SerializedMention =
+  | ({ readonly type: 'user' } & SerializedIdentity)
+  | { readonly type: 'channel-wildcard' }
+  | { readonly type: 'topic-wildcard' }
+  | { readonly type: 'group'; readonly name: string }
+
+const mentionShape = Mention.$match({
+  UserMention: (m): SerializedMention => ({ type: 'user', ...identityShape(m.identity) }),
+  ChannelWildcardMention: (): SerializedMention => ({ type: 'channel-wildcard' }),
+  TopicWildcardMention: (): SerializedMention => ({ type: 'topic-wildcard' }),
+  GroupMention: (m): SerializedMention => ({ type: 'group', name: m.name }),
 })
 
 export interface ToolsCache {
@@ -313,7 +334,7 @@ const messageShape = (m: Message): Effect.Effect<Record<string, unknown>, ParseR
       sender: identityShape(m.sender),
       body: m.body,
       ts: m.ts,
-      mentions: m.mentions.map(identityShape),
+      mentions: m.mentions.map(mentionShape),
       reactions: m.reactions.map((r) => ({
         emoji: r.emoji,
         by: r.by.map(identityShape),

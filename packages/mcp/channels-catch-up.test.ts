@@ -18,6 +18,7 @@ import {
   decodeTimestampSync,
   MessagePermalinkSchema,
   ThreadPermalinkSchema,
+  userMentions,
 } from '@commy/core/ports'
 import { Effect, Option, TestClock, TestContext } from 'effect'
 import { type ChannelsCatchUpDeps, catchUpChannels } from './channels-catch-up.ts'
@@ -75,7 +76,7 @@ const buildMessage = (
   sender: human,
   body: decodeMessageBodySync(body),
   ts: decodeTimestampSync(ts),
-  mentions: opts.mentions ?? [],
+  mentions: userMentions(opts.mentions ?? []),
   reactions: [],
 })
 

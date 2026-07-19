@@ -34,6 +34,7 @@ import {
   decodeMessageBodySync,
   decodeTimestampSync,
   type IdentityError,
+  mentionedIdentities,
   type UnknownIdentity,
 } from '@commy/core/ports'
 import { effectTest } from '@commy/testing/effect-test'
@@ -557,7 +558,9 @@ effectTest(
       )
       expect(mention.kind).toBe('mention-received')
       if (mention.kind === 'mention-received') {
-        expect(mention.mentions.map((m) => m.name)).toContain(decodeDisplayNameSync('hermes-agent'))
+        expect(mentionedIdentities(mention.mentions).map((m) => m.name)).toContain(
+          decodeDisplayNameSync('hermes-agent'),
+        )
         expect(mention.message.ref.channel.name).toEqual(decodeChannelNameSync('brewlife'))
       }
       // The wake came via attach, not a rotated key.
