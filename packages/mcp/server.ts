@@ -375,7 +375,7 @@ export const makeProgram = (
         }),
       )
       // Per-tool-call feeder: every PreToolUse-stamped call
-      // (post/edit_message/react/unreact/current_identity) hands its session_id
+      // (every tool declaring session_id in its schema) hands its session_id
       // here. Idempotent — after the first writer the rest return false.
       const feedSessionId = (sessionId: SessionId): Effect.Effect<void> =>
         Deferred.succeed(sessionIdDeferred, sessionId).pipe(Effect.asVoid)

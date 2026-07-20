@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "mcp__plugin_commy_commy__(post|edit_message|react|unreact|current_identity)",
+        "matcher": "mcp__plugin_commy_commy__(post|edit_message|react|unreact|current_identity|subscribe|unsubscribe)",
         "hooks": [
           {
             "type": "command",

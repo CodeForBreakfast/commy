@@ -205,9 +205,11 @@ export interface RegisterToolsDeps {
   readonly persistSessionSubscriptions?: Effect.Effect<void>
   /**
    * Hand a PreToolUse-stamped session_id to the shared session-id `Deferred`
-   * (comms-k7cv). Every hooked tool (post/edit_message/react/unreact/
-   * current_identity) feeds it; the feed is idempotent (first-writer-wins), so
-   * the first hooked call of the MCP child fills the deferred for every awaiter.
+   * (comms-k7cv). Every hooked tool — the set that declares `session_id` in
+   * its input schema, pinned against the matcher by
+   * `clients/claude-code/hooks-manifest.test.ts` — feeds it; the feed is
+   * idempotent (first-writer-wins), so the first hooked call of the MCP child
+   * fills the deferred for every awaiter.
    * The boot feeder in `server.ts` fills it earlier when the host injects
    * `CLAUDE_CODE_SESSION_ID`; this per-call feed covers a host that doesn't.
    * Omitted in tests that don't exercise the session-id latch.

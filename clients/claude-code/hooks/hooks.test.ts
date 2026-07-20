@@ -4,7 +4,15 @@ import hooks from './hooks.json'
 
 const PLUGIN_SLUG = 'commy'
 const EXPECTED_PREFIX = `mcp__plugin_${PLUGIN_SLUG}_${PLUGIN_SLUG}__`
-const ATTRIBUTION_TOOLS = [['post'], ['react'], ['unreact'], ['current_identity']] as const
+const SESSION_ID_TOOLS = [
+  ['post'],
+  ['edit_message'],
+  ['react'],
+  ['unreact'],
+  ['current_identity'],
+  ['subscribe'],
+  ['unsubscribe'],
+] as const
 
 interface HookEntry {
   readonly matcher: string
@@ -42,7 +50,7 @@ test('matcher compiles as a regex', () => {
   expect(() => new RegExp(`^${matcher}$`)).not.toThrow()
 })
 
-test.each(ATTRIBUTION_TOOLS)('matcher matches the actual CC tool name for %s', (tool) => {
+test.each(SESSION_ID_TOOLS)('matcher matches the actual CC tool name for %s', (tool) => {
   const matcher = preToolUse[0]?.matcher ?? ''
   const re = new RegExp(`^${matcher}$`)
   expect(re.test(`${EXPECTED_PREFIX}${tool}`)).toBe(true)
@@ -52,9 +60,9 @@ test('matcher does not match arbitrary other MCP tools (no over-broad capture)',
   const matcher = preToolUse[0]?.matcher ?? ''
   const re = new RegExp(`^${matcher}$`)
   expect(re.test('mcp__plugin_discord_discord__reply')).toBe(false)
-  expect(re.test(`${EXPECTED_PREFIX}subscribe`)).toBe(false)
   expect(re.test(`${EXPECTED_PREFIX}list_agents`)).toBe(false)
   expect(re.test(`${EXPECTED_PREFIX}list_channels`)).toBe(false)
+  expect(re.test(`${EXPECTED_PREFIX}read_thread`)).toBe(false)
 })
 
 test('command invokes node on PATH against the hook entrypoint — no bun, no Nix wrapper', () => {

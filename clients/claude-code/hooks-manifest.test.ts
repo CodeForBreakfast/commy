@@ -5,32 +5,42 @@ import hooksManifest from './hooks/hooks.json'
 /**
  * The PreToolUse hook in `hooks/hooks.json` injects `session_id` (and
  * `cwd`) into MCP tool args before the call reaches the server. Its
- * matcher is a hand-curated alternation over tool names. Every tool
- * whose handler binds an identity for `session_id` must be in the
- * alternation — otherwise the handler sees `session_id` undefined,
- * `readSessionId` falls back to ephemeral binding, and (comms-k7cv) the
- * session-id `Deferred` never gets fed from that call.
+ * matcher is a hand-curated alternation over tool names, and the invariant
+ * is a declaration rather than an inference: **a tool that advertises
+ * `session_id` in its input schema must be in the alternation.** A tool
+ * outside it sees `session_id` undefined on every Claude Code call, so
+ * `readSessionId` yields nothing and (comms-k7cv) the session-id `Deferred`
+ * is never fed from that call — while the schema tells every agent the
+ * argument is honoured.
  *
- * Binding routes through one of two shapes: a direct
- * `identityCache.ensureBoundFor(...)` call, or the `ensureBoundForArgs(...)`
- * wrapper (comms-k7cv), which feeds the session-id deferred and then binds.
- * The parser attributes both to their enclosing tool.
+ * Declaring the field and consuming it are the same thing here: each such
+ * tool either binds (`ensureBoundFor` / the `ensureBoundForArgs` wrapper)
+ * or feeds (`readSessionId` + `feedSession`). Pinning on the schema
+ * declaration covers both, which pinning on the binding call alone did not
+ * — `subscribe` and `unsubscribe` feed without binding, and sat outside the
+ * matcher unnoticed (comms-65nj).
+ *
+ * This is the only pin that can see the break. On our own fleet the boot-env
+ * feeder fills the `Deferred` at boot, so a Claude Code seat mints correctly
+ * whether or not its tool is matched; the failure is only visible to a host
+ * that injects no zero-action id source (comms-4ji2). Nothing behavioural
+ * can catch it here — the matcher set itself is the artefact under test.
  */
 
-const BINDING_CALL_TOKENS = ['ensureBoundFor(', 'ensureBoundForArgs('] as const
+const SESSION_ID_FIELD_TOKEN = 'session_id: sessionIdField'
 
-function mintingToolsFromToolsSource(source: string): ReadonlySet<string> {
-  const minting = new Set<string>()
+function sessionIdToolsFromToolsSource(source: string): ReadonlySet<string> {
+  const declaring = new Set<string>()
   let currentName: string | undefined
   for (const line of source.split('\n')) {
     const named = line.match(/^\s*name:\s*['"]([a-z_]+)['"]/)
     const captured = named?.[1]
     if (captured !== undefined) currentName = captured
-    if (currentName !== undefined && BINDING_CALL_TOKENS.some((token) => line.includes(token))) {
-      minting.add(currentName)
+    if (currentName !== undefined && line.includes(SESSION_ID_FIELD_TOKEN)) {
+      declaring.add(currentName)
     }
   }
-  return minting
+  return declaring
 }
 
 function alternationToolsFromMatcher(matcher: string): ReadonlySet<string> {
@@ -57,13 +67,13 @@ function injectSessionIdMatcher(manifest: typeof hooksManifest): string {
   return found.matcher
 }
 
-test('PreToolUse matcher covers every ensureBoundFor caller in tools.ts', async () => {
+test('PreToolUse matcher covers every tool declaring session_id in tools.ts', async () => {
   const toolsSource = await Bun.file(Bun.resolveSync('@commy/mcp/tools', import.meta.dir)).text()
-  const minting = mintingToolsFromToolsSource(toolsSource)
+  const declaring = sessionIdToolsFromToolsSource(toolsSource)
   const matched = alternationToolsFromMatcher(injectSessionIdMatcher(hooksManifest))
 
-  const missingFromMatcher = [...minting].filter((n) => !matched.has(n)).sort()
-  const matcherHasOrphans = [...matched].filter((n) => !minting.has(n)).sort()
+  const missingFromMatcher = [...declaring].filter((n) => !matched.has(n)).sort()
+  const matcherHasOrphans = [...matched].filter((n) => !declaring.has(n)).sort()
 
   expect({ missingFromMatcher, matcherHasOrphans }).toEqual({
     missingFromMatcher: [],
@@ -71,69 +81,61 @@ test('PreToolUse matcher covers every ensureBoundFor caller in tools.ts', async 
   })
 })
 
-test('mintingToolsFromToolsSource attributes each ensureBoundFor call to the enclosing tool', () => {
+test('sessionIdToolsFromToolsSource attributes each schema declaration to the enclosing tool', () => {
   const synthetic = `
     {
       name: 'alpha',
-      handler: async (args) => {
-        await identityCache.ensureBoundFor(args)()
+      inputSchema: {
+        properties: { session_id: sessionIdField, cwd: cwdField },
       },
     },
     {
       name: 'beta',
-      handler: async () => {
-        return {}
+      inputSchema: {
+        properties: { target: { type: 'string' } },
       },
     },
     {
       name: 'gamma',
-      handler: async (args) => {
-        const result = identityCache.ensureBoundFor(args).current()
-        return result
+      inputSchema: {
+        properties: {
+          target: { type: 'string' },
+          session_id: sessionIdField,
+          cwd: cwdField,
+        },
       },
     },
   `
-  expect(mintingToolsFromToolsSource(synthetic)).toEqual(new Set(['alpha', 'gamma']))
+  expect(sessionIdToolsFromToolsSource(synthetic)).toEqual(new Set(['alpha', 'gamma']))
 })
 
-test('mintingToolsFromToolsSource attributes ensureBoundForArgs wrapper calls to the enclosing tool', () => {
+test('sessionIdToolsFromToolsSource sees a tool that feeds the deferred without binding', () => {
+  // The shape that escaped the old binding-call pin (comms-65nj): the handler
+  // reads and feeds the session id but never calls ensureBoundFor.
   const synthetic = `
-    const ensureBoundForArgs = (args) =>
-      Effect.gen(function* () {
+    {
+      name: 'subscribe',
+      inputSchema: {
+        properties: { target: { type: 'string' }, session_id: sessionIdField },
+      },
+      handler: async (args) => {
         yield* feedSession(readSessionId(args))
-        return yield* identityCache.ensureBoundFor(readSessionId(args), yield* projectForArgs(args))
-      })
-    const coreTools = [
-      {
-        name: 'epsilon',
-        handler: async (args) => {
-          await runEdge(ensureBoundForArgs(args).pipe(Effect.flatMap((b) => b())))
-        },
       },
-      {
-        name: 'zeta',
-        handler: async (args) => {
-          const b = await runEdge(ensureBoundForArgs(args))
-          return b.current()
-        },
-      },
-    ]
+    },
   `
-  // The wrapper definition itself (before any name:) is not attributed; both
-  // callers are — matching the real tools.ts shape.
-  expect(mintingToolsFromToolsSource(synthetic)).toEqual(new Set(['epsilon', 'zeta']))
+  expect(sessionIdToolsFromToolsSource(synthetic)).toEqual(new Set(['subscribe']))
 })
 
-test('mintingToolsFromToolsSource ignores name properties whose value is not a string literal', () => {
+test('sessionIdToolsFromToolsSource ignores name properties whose value is not a string literal', () => {
   const synthetic = `
     const shape = { name: identity.name }
     const schema = { name: { type: 'string' } }
     {
       name: 'delta',
-      handler: async () => { identityCache.ensureBoundFor() },
+      inputSchema: { properties: { session_id: sessionIdField } },
     },
   `
-  expect(mintingToolsFromToolsSource(synthetic)).toEqual(new Set(['delta']))
+  expect(sessionIdToolsFromToolsSource(synthetic)).toEqual(new Set(['delta']))
 })
 
 test('alternationToolsFromMatcher splits the trailing parenthesised group', () => {
