@@ -494,14 +494,14 @@ export const makeProgram = (
       // `restoreSubscriptions` reads the session-bound store, whose `read` awaits
       // the shared session-id `Deferred` internally — so this is forked ONCE into
       // the connected runtime below and parks on that read until any source (the
-      // boot-env feeder, which covers a Claude Code seat whether fresh or resumed,
-      // or the first tool call of an acting seat) fills the id, then rehydrates
-      // with zero agent action. Must be forked, not awaited inline: an inline
-      // await would block boot/serving until the id lands. The store's presence stays a true
-      // resume signal; a corrupt or unreadable store logs and is swallowed rather
-      // than stranding the session. Ephemeral mode only: a persistent
-      // COMMY_BOT_NAME pane gets a new session_id every launch, so its store is
-      // always absent → the fresh path → COMMY_SUBSCRIBE-only.
+      // boot-env feeder, which covers a Claude Code seat whether fresh or
+      // resumed, or the first tool call of an acting seat) fills the id, then
+      // rehydrates with zero agent action. Must be forked, not awaited inline: an
+      // inline await would block boot/serving until the id lands. The store's
+      // presence stays a true resume signal; a corrupt or unreadable store logs
+      // and is swallowed rather than stranding the session. Ephemeral mode only:
+      // a persistent COMMY_BOT_NAME pane gets a new session_id every launch, so
+      // its store is always absent → the fresh path → COMMY_SUBSCRIBE-only.
       const restoreOnResume: Effect.Effect<void> =
         parsed.botName !== undefined
           ? Effect.void
