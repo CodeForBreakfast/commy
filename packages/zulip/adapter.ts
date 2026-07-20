@@ -1,6 +1,9 @@
+import { basename } from 'node:path'
 import type {
   AcquiredIdentity,
   AgentComms,
+  AttachmentRef,
+  AttachmentStore,
   BotName,
   ChannelDescription,
   ChannelId,
@@ -8,6 +11,7 @@ import type {
   ChannelRef,
   Credentials,
   Directory,
+  EventQueueCursor,
   HistoryReader,
   Identity,
   IdentityId,
@@ -29,8 +33,10 @@ import type {
   Timestamp as TimestampType,
 } from '@commy/core/ports'
 import {
+  AttachmentError,
   ChannelDescriptionRejected,
   DirectoryError,
+  decodeAttachmentRef,
   decodeChannelDescription,
   decodeChannelId,
   decodeChannelName,
@@ -73,7 +79,6 @@ import {
 import type { BotHttp, RecipientDirectory } from './bot-dm-guard.ts'
 import { wrapBotHttp } from './bot-dm-guard.ts'
 import { fromWireDescription, rejectionFor, toWireDescription } from './channel-description.ts'
-import type { QueueState } from './events.ts'
 import {
   createMessageRefCache,
   createWatermarkStore,
@@ -86,13 +91,11 @@ import {
 import type {
   ApiKey as ApiKeyType,
   BotEmail as BotEmailType,
-  RawDownload,
   RealmUrl,
   UploadResult,
-  UserUploadPath,
   ZulipHttpConfig,
 } from './http.ts'
-import { ApiKey, BotEmail, makeZulipHttp, ZulipApiError } from './http.ts'
+import { ApiKey, BotEmail, decodeUserUploadPath, makeZulipHttp, ZulipApiError } from './http.ts'
 import {
   type MentionDirectory,
   MentionToken,
@@ -148,7 +151,7 @@ export interface ZulipAdapterConfig {
    * Total by contract (`Effect<void>`); the session gate / swallow / poll
    * discipline lives in the closure.
    */
-  readonly onQueueRegister?: (queue: QueueState) => Effect.Effect<void>
+  readonly onQueueRegister?: (queue: EventQueueCursor) => Effect.Effect<void>
   /**
    * Best-effort hook fired with the per-poll maximum event id whenever a poll
    * moves the cursor. The wiring layer advances the persisted `lastEventId`
@@ -169,7 +172,7 @@ export interface ZulipAdapterConfig {
    * session gate and the store read; total by contract (`Effect<Option>`).
    * Omitted for persistent bots — they never resume-poll.
    */
-  readonly resumeQueue?: () => Effect.Effect<Option.Option<QueueState>>
+  readonly resumeQueue?: () => Effect.Effect<Option.Option<EventQueueCursor>>
   /**
    * Resume-verdict sink for the ephemeral history-catch-up fallback. Fired once
    * per pump lifetime: `false` the instant `resumeQueue` yields `None` (fresh
@@ -184,22 +187,18 @@ export interface ZulipAdapterConfig {
   readonly onResumeOutcome?: (queueReplayed: boolean) => Effect.Effect<void>
 }
 
-export type ZulipAdapter = AgentComms & {
-  /**
-   * Subscribe the minter to every public stream it isn't yet on.
-   * Boot-time backstop so the plugin's event pump observes
-   * events on streams created after the minter's initial subscription
-   * set. Non-throwing: failure is captured in the returned report and
-   * the caller decides whether to log + continue or abort.
-   */
-  reconcileMinterSubscriptions(): Effect.Effect<ReconcileReport, never>
-  downloadFile(urlPath: UserUploadPath): Effect.Effect<RawDownload, ZulipApiError>
-  uploadFile(
-    filename: string,
-    data: Uint8Array,
-  ): Effect.Effect<UploadResult, ZulipApiError | ParseResult.ParseError>
-  close(): Promise<void>
-}
+export type ZulipAdapter = AgentComms &
+  AttachmentStore & {
+    /**
+     * Subscribe the minter to every public stream it isn't yet on.
+     * Boot-time backstop so the plugin's event pump observes
+     * events on streams created after the minter's initial subscription
+     * set. Non-throwing: failure is captured in the returned report and
+     * the caller decides whether to log + continue or abort.
+     */
+    reconcileMinterSubscriptions(): Effect.Effect<ReconcileReport, never>
+    close(): Promise<void>
+  }
 
 /**
  * Raised when re-acquiring a deactivated bot needs the admin-only
@@ -500,7 +499,7 @@ interface InboxState {
   readonly subscribedChannels: HashSet.HashSet<ChannelName>
   readonly newTopicsChannels: HashSet.HashSet<ChannelName>
   readonly seenTopicsByChannel: HashMap.HashMap<ChannelName, HashSet.HashSet<ThreadName>>
-  readonly registration: Option.Option<QueueState>
+  readonly registration: Option.Option<EventQueueCursor>
 }
 
 const streamIsListening = (state: InboxState, channelName: ChannelName): boolean =>
@@ -2027,8 +2026,28 @@ export const zulipAdapter = (
       history,
       directory,
       reconcileMinterSubscriptions: reconcileMinter,
-      downloadFile: (urlPath: UserUploadPath) => minterHttp.downloadRaw(urlPath),
-      uploadFile: (filename: string, data: Uint8Array) => minterHttp.uploadRaw(filename, data),
+      downloadFile: (ref: AttachmentRef) =>
+        decodeUserUploadPath(ref).pipe(
+          Effect.flatMap((urlPath) =>
+            minterHttp
+              .downloadRaw(urlPath)
+              .pipe(Effect.map((raw) => ({ ...raw, filename: basename(urlPath) }))),
+          ),
+          Effect.mapError((cause) => new AttachmentError({ operation: 'download', cause })),
+        ),
+      uploadFile: (filename: string, data: Uint8Array) =>
+        minterHttp.uploadRaw(filename, data).pipe(
+          Effect.flatMap((upload) =>
+            decodeAttachmentRef(upload.url).pipe(
+              Effect.map((ref) => ({
+                ref,
+                filename: upload.filename,
+                reference: attachmentReference(upload),
+              })),
+            ),
+          ),
+          Effect.mapError((cause) => new AttachmentError({ operation: 'upload', cause })),
+        ),
       close: async () => {},
     }
   })

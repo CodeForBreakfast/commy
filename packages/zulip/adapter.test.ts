@@ -3,6 +3,7 @@ import type { ChannelRef, Identity, MessageRef } from '@commy/core/ports'
 import {
   ChannelPermalinkSchema,
   DirectoryError,
+  decodeAttachmentRefSync,
   decodeBotNameSync,
   decodeChannelIdSync,
   decodeChannelNameSync,
@@ -2908,20 +2909,45 @@ test('attachmentReference renders a Zulip markdown link, filename as text and ur
   ).toBe('[chart.png](/user_uploads/1/ab/chart.png)')
 })
 
-test('downloadFile rejects an unbranded urlPath at the type level', () => {
+test('downloadFile rejects an unbranded ref at the type level', () => {
   // Method-param bivariance does not let a bare string through
-  // `downloadFile(urlPath: UserUploadPath)`: bivariance only loosens
-  // function-type assignability, never a direct call-site argument check — so
-  // the UserUploadPath brand bites here even though downloadFile is declared
-  // with method shorthand on the intersection-typed ZulipAdapter. If the
+  // `downloadFile(ref: AttachmentRef)`: bivariance only loosens function-type
+  // assignability, never a direct call-site argument check — so the
+  // AttachmentRef brand bites here even though downloadFile is declared with
+  // method shorthand on the intersection-typed ZulipAdapter. If the
   // suppression below stops firing, the brand has genuinely been weakened.
+  //
+  // The brand is the port's, not Zulip's: what `downloadFile` accepts is an
+  // opaque handle the realm issued, and the /user_uploads/ check now lives
+  // inside the adapter rather than on the caller's side of the port.
   const proof = (adapter: ZulipAdapter): void => {
-    // @ts-expect-error — urlPath must be UserUploadPath, not string
+    // @ts-expect-error — ref must be AttachmentRef, not string
     void adapter.downloadFile('raw-unbranded-path')
-    void adapter.downloadFile(decodeUserUploadPathSync('/user_uploads/1/ab/x.png'))
+    void adapter.downloadFile(decodeAttachmentRefSync('/user_uploads/1/ab/x.png'))
   }
   expect(proof).toBeTypeOf('function')
 })
+
+effectTest('downloadFile fails with AttachmentError on a ref the realm cannot address', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    // An AttachmentRef is opaque above the port, so a handle this realm never
+    // issued gets past the caller and is refused here — the adapter is the
+    // only layer that knows /user_uploads/ is the addressing rule. The failure
+    // is a typed AttachmentError, and the ParseError it carries supplies the
+    // message, so the constraint still names itself to the agent.
+    const error = yield* Effect.flip(
+      adapter.downloadFile(decodeAttachmentRefSync('/api/v1/messages')),
+    )
+    expect(error._tag).toBe('AttachmentError')
+    expect(error.operation).toBe('download')
+    expect(error.message).toContain('user_uploads')
+    // Refused before any request left the process.
+    expect(yield* stub.captured).toEqual([])
+    yield* Effect.promise(() => adapter.close())
+  }),
+)
 
 // --- UserUploadPath brand ---
 

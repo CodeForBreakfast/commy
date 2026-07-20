@@ -24,7 +24,7 @@
  */
 
 import { expect } from 'bun:test'
-import type { ChannelRef, InboundEvent } from '@commy/core/ports'
+import type { ChannelRef, EventQueueCursor, InboundEvent } from '@commy/core/ports'
 import {
   ChannelPermalinkSchema,
   decodeBotNameSync,
@@ -57,7 +57,6 @@ import {
 } from 'effect'
 import type { ZulipAdapter } from './adapter.ts'
 import { zulipAdapter } from './adapter.ts'
-import type { QueueState } from './events.ts'
 import { ApiKey, BotEmail, RealmUrl } from './http.ts'
 
 const HERMES = {
@@ -140,9 +139,9 @@ const buildAdapterWithQueueConfig = (
   stub: StubHttpClient,
   queueConfig: {
     readonly queueIdleTimeoutSecs?: number
-    readonly onQueueRegister?: (queue: QueueState) => Effect.Effect<void>
+    readonly onQueueRegister?: (queue: EventQueueCursor) => Effect.Effect<void>
     readonly onQueueAdvance?: (lastEventId: number) => Effect.Effect<void>
-    readonly resumeQueue?: () => Effect.Effect<Option.Option<QueueState>>
+    readonly resumeQueue?: () => Effect.Effect<Option.Option<EventQueueCursor>>
     readonly onResumeOutcome?: (queueReplayed: boolean) => Effect.Effect<void>
   },
 ): Effect.Effect<ZulipAdapter, IdentityError | UnknownIdentity> =>
@@ -325,7 +324,7 @@ effectTest(
   'eager subscribe-time register carries idle_queue_timeout and fires onQueueRegister',
   () =>
     Effect.gen(function* () {
-      const registered: QueueState[] = []
+      const registered: EventQueueCursor[] = []
       const stub = yield* makeStubHttpClient
       const adapter = yield* buildAdapterWithQueueConfig(stub, {
         queueIdleTimeoutSecs: 3600,

@@ -137,6 +137,24 @@ export type Emoji = typeof EmojiSchema.Type
 export const decodeEmoji = Schema.decodeUnknown(EmojiSchema)
 
 /**
+ * Opaque handle to a file the realm holds. Issued by
+ * {@link AttachmentStore.uploadFile} and accepted back by
+ * {@link AttachmentStore.downloadFile}; nobody above the adapter constructs,
+ * parses, or reasons about one — it is carried verbatim from wherever it was
+ * read (a message body, a prior upload) to wherever it is spent.
+ *
+ * Deliberately unvalidated beyond non-emptiness. Every substrate addresses its
+ * uploads differently — Zulip by a realm-relative `/user_uploads/...` path —
+ * and that shape is the adapter's invariant to mint and check, not the port's
+ * to know. The adapter decodes this handle into its own addressing type on the
+ * way in, so a handle the substrate never issued fails there rather than
+ * being pre-judged by a core that cannot know the rule.
+ */
+export const AttachmentRefSchema = Schema.NonEmptyString.pipe(Schema.brand('AttachmentRef'))
+export type AttachmentRef = typeof AttachmentRefSchema.Type
+export const decodeAttachmentRef = Schema.decodeUnknown(AttachmentRefSchema)
+
+/**
  * Synchronous brand decoders for test fixtures.
  *
  * In test setup a fixed literal that fails to decode is a programmer
@@ -156,6 +174,7 @@ export const decodeDisplayNameSync = Schema.decodeSync(DisplayNameSchema)
 export const decodeBotNameSync = Schema.decodeSync(BotNameSchema)
 export const decodeEmojiSync = Schema.decodeSync(EmojiSchema)
 export const decodeGroupNameSync = Schema.decodeSync(GroupNameSchema)
+export const decodeAttachmentRefSync = Schema.decodeSync(AttachmentRefSchema)
 
 export type IdentityKind = 'human' | 'agent'
 
@@ -989,4 +1008,77 @@ export class HistoryError extends Data.TaggedError('HistoryError')<{
   override get message(): string {
     return messageOf(this.cause)
   }
+}
+
+/**
+ * Failure surface for the Effect-returning `AttachmentStore` methods. The
+ * Zulip adapter mints this when the backing substrate call fails — including
+ * when an {@link AttachmentRef} decodes to nothing the realm can address, the
+ * check the adapter owns because only it knows the addressing rule.
+ *
+ * This is what an agent sees when a download or upload fails, so the class
+ * name is part of the agent-facing surface: it names the operation that
+ * failed, not the substrate it failed on.
+ */
+export class AttachmentError extends Data.TaggedError('AttachmentError')<{
+  readonly operation: 'download' | 'upload'
+  readonly cause: unknown
+}> {
+  override get message(): string {
+    return messageOf(this.cause)
+  }
+}
+
+/**
+ * A file read back out of the realm.
+ *
+ * `filename` comes from the adapter rather than being derived by the caller.
+ * A caller that wants to write these bytes down needs a name for them, and the
+ * only way to get one from an {@link AttachmentRef} is to assume a shape the
+ * handle is not supposed to have.
+ */
+export interface DownloadedAttachment {
+  readonly data: Uint8Array
+  readonly contentType: string
+  readonly filename: string
+}
+
+/** A file the realm now holds, and the two ways to refer to it. */
+export interface UploadedAttachment {
+  /** Opaque handle to spend on a later {@link AttachmentStore.downloadFile}. */
+  readonly ref: AttachmentRef
+  readonly filename: string
+  /**
+   * Ready-to-embed rendering for a message body, in whatever markup the
+   * substrate renders attachments with. The adapter builds it because the
+   * markup is the substrate's convention; a caller drops it into a body
+   * verbatim rather than assembling one from `ref` and `filename`.
+   */
+  readonly reference: string
+}
+
+/**
+ * Reading and writing the files a realm holds. Separate from `AgentComms`
+ * rather than folded into it: not every substrate carries attachments, and an
+ * adapter that cannot should be unable to claim it does.
+ */
+export interface AttachmentStore {
+  downloadFile(ref: AttachmentRef): Effect.Effect<DownloadedAttachment, AttachmentError>
+  uploadFile(filename: string, data: Uint8Array): Effect.Effect<UploadedAttachment, AttachmentError>
+}
+
+/**
+ * Resume point in a substrate's server-side event queue: which queue, and how
+ * far this seat drained it.
+ *
+ * `queueId` is opaque — the substrate issued it, nobody above the adapter
+ * parses it, and it exists because a seat cannot rediscover its own queue by
+ * asking (docs/agent-experience.md principle 3's event-queue exemption). The
+ * ordinal is not opaque, deliberately: the persistence layer enforces that
+ * `lastEventId` only ever walks forward within a queue, and a guard cannot be
+ * written against a value it may not read.
+ */
+export interface EventQueueCursor {
+  readonly queueId: string
+  readonly lastEventId: number
 }

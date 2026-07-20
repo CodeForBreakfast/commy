@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { QueueState } from '@commy/zulip/events'
+import type { EventQueueCursor } from '@commy/core/ports'
 import { FileSystem } from '@effect/platform'
 import type { PlatformError } from '@effect/platform/Error'
 import { Config, Context, Effect, Layer, Option, type ParseResult, Schema } from 'effect'
@@ -19,7 +19,7 @@ import type { SessionIdValue } from './session-id.ts'
  *
  * Distinct from `cursor-store.ts` (a per-`IdentityId` mentions watermark):
  * different key shape, different directory (`<state>/commy/queue-state`), no
- * collision. One file per session holds a single `QueueState`, stored as JSON
+ * collision. One file per session holds a single `EventQueueCursor`, stored as JSON
  * so a human can inspect or wipe it.
  *
  * `read` yields `Option.none` when no state file exists — the "fresh session,
@@ -36,8 +36,8 @@ import type { SessionIdValue } from './session-id.ts'
 export interface QueueStateStore {
   read(
     sessionId: SessionIdValue,
-  ): Effect.Effect<Option.Option<QueueState>, PlatformError | ParseResult.ParseError>
-  write(sessionId: SessionIdValue, state: QueueState): Effect.Effect<void, PlatformError>
+  ): Effect.Effect<Option.Option<EventQueueCursor>, PlatformError | ParseResult.ParseError>
+  write(sessionId: SessionIdValue, state: EventQueueCursor): Effect.Effect<void, PlatformError>
   advance(sessionId: SessionIdValue, lastEventId: number): Effect.Effect<void, PlatformError>
 }
 
@@ -91,18 +91,18 @@ const isNotFound = (error: PlatformError | ParseResult.ParseError): boolean =>
 const readState = (
   fs: FileSystem.FileSystem,
   path: string,
-): Effect.Effect<Option.Option<QueueState>, PlatformError | ParseResult.ParseError> =>
+): Effect.Effect<Option.Option<EventQueueCursor>, PlatformError | ParseResult.ParseError> =>
   fs.readFileString(path).pipe(
     Effect.flatMap(decodeQueueStateFile),
     Effect.map(Option.some),
-    Effect.catchIf(isNotFound, () => Effect.succeed(Option.none<QueueState>())),
+    Effect.catchIf(isNotFound, () => Effect.succeed(Option.none<EventQueueCursor>())),
   )
 
 export const createFileQueueStateStore = (deps: FileQueueStateStoreDeps): QueueStateStore => {
   const { dir, fs } = deps
   const pathFor = (id: SessionIdValue): string => join(dir, stateFilename(id))
 
-  const persist = (path: string, state: QueueState): Effect.Effect<void, PlatformError> =>
+  const persist = (path: string, state: EventQueueCursor): Effect.Effect<void, PlatformError> =>
     encodeQueueStateFile(state).pipe(
       Effect.orDie,
       Effect.flatMap((json) =>
@@ -119,7 +119,7 @@ export const createFileQueueStateStore = (deps: FileQueueStateStoreDeps): QueueS
   const advance: QueueStateStore['advance'] = (id, lastEventId) => {
     const path = pathFor(id)
     return readState(fs, path).pipe(
-      Effect.catchTag('ParseError', () => Effect.succeed(Option.none<QueueState>())),
+      Effect.catchTag('ParseError', () => Effect.succeed(Option.none<EventQueueCursor>())),
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.void,

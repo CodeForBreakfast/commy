@@ -1,4 +1,4 @@
-import type { QueueState } from '@commy/zulip/events'
+import type { EventQueueCursor } from '@commy/core/ports'
 import { Deferred, Effect, Option } from 'effect'
 import type { QueueStateStore } from './queue-state-store.ts'
 import type { SessionIdValue } from './session-id.ts'
@@ -15,7 +15,7 @@ import type { SessionIdValue } from './session-id.ts'
  */
 export interface QueueStateHooks {
   readonly queueIdleTimeoutSecs: number
-  readonly onQueueRegister: (queue: QueueState) => Effect.Effect<void>
+  readonly onQueueRegister: (queue: EventQueueCursor) => Effect.Effect<void>
   readonly onQueueAdvance: (lastEventId: number) => Effect.Effect<void>
   /**
    * Read half: resolves the persisted queue-state a resuming seat should reuse,
@@ -25,7 +25,7 @@ export interface QueueStateHooks {
    * or an unreadable/corrupt store (best-effort: a resume that can't be recovered
    * degrades to a fresh register rather than stranding the seat).
    */
-  readonly resumeQueue: () => Effect.Effect<Option.Option<QueueState>>
+  readonly resumeQueue: () => Effect.Effect<Option.Option<EventQueueCursor>>
   /**
    * Resume-verdict sink handed to the adapter: completes the shared
    * {@link ResumeOutcome} deferred the seat's `onAcquire` awaits. `true` when

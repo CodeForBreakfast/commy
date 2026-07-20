@@ -2,7 +2,6 @@ import { basename, join } from 'node:path'
 import { stderrLoggerLayer } from '@commy/core/logging'
 import type { AcquiredIdentity, AgentComms, InboxError, MessageInbox } from '@commy/core/ports'
 import { decodeChannelName, decodeThreadName } from '@commy/core/ports'
-import { attachmentReference } from '@commy/zulip/adapter'
 import { CommandExecutor, FetchHttpClient, FileSystem, type HttpClient } from '@effect/platform'
 import { NodeContext, NodeRuntime } from '@effect/platform-node'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
@@ -721,9 +720,9 @@ export const makeProgram = (
         persistSessionSubscriptions,
         feedSessionId,
         canEditMessages,
-        downloadFile: (urlPath) =>
+        downloadFile: (ref) =>
           Effect.gen(function* () {
-            const result = yield* adapter.downloadFile(urlPath)
+            const result = yield* adapter.downloadFile(ref)
             // A fresh unique temp dir per download — rooted at the validated
             // COMMY_DOWNLOAD_DIR base when set, else $TMPDIR. Because the dir is
             // created fresh each call, the attachment-derived basename can never
@@ -733,7 +732,7 @@ export const makeProgram = (
                 ? { prefix: 'commy-dl-' }
                 : { directory: parsed.downloadDir, prefix: 'commy-dl-' },
             )
-            const filePath = join(dir, basename(urlPath))
+            const filePath = join(dir, result.filename)
             yield* fs.writeFile(filePath, result.data)
             return { filePath, contentType: result.contentType, size: result.data.byteLength }
           }),
@@ -742,7 +741,7 @@ export const makeProgram = (
             const data = yield* fs.readFile(path)
             const result = yield* adapter.uploadFile(basename(path), data)
             return {
-              reference: attachmentReference(result),
+              reference: result.reference,
               filename: result.filename,
               size: data.byteLength,
             }

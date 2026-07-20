@@ -1,5 +1,7 @@
 import type {
   AgentComms,
+  AttachmentError,
+  AttachmentRef,
   ChannelDescription,
   ChannelName,
   ChannelRef,
@@ -15,6 +17,7 @@ import type {
 import {
   ChannelPermalinkSchema,
   ChannelRefSchema,
+  decodeAttachmentRef,
   decodeChannelDescription,
   decodeChannelId,
   decodeChannelName,
@@ -28,8 +31,6 @@ import {
   MessagePermalinkSchema,
   ObservedThreadSchema,
 } from '@commy/core/ports'
-import type { UserUploadPath, ZulipApiError } from '@commy/zulip/http'
-import { decodeUserUploadPath } from '@commy/zulip/http'
 import type { PlatformError } from '@effect/platform/Error'
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
@@ -214,16 +215,16 @@ export interface RegisterToolsDeps {
    */
   readonly feedSessionId?: (sessionId: SessionId) => Effect.Effect<void>
   readonly downloadFile?: (
-    urlPath: UserUploadPath,
+    ref: AttachmentRef,
   ) => Effect.Effect<
     { filePath: string; contentType: string; size: number },
-    ZulipApiError | PlatformError
+    AttachmentError | PlatformError
   >
   readonly upload?: (
     path: string,
   ) => Effect.Effect<
     { reference: string; filename: string; size: number },
-    ZulipApiError | ParseResult.ParseError | PlatformError
+    AttachmentError | PlatformError
   >
   /**
    * Whether the substrate permitted editing when the caller sampled
@@ -1185,14 +1186,14 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     optionalTools.push({
       name: 'download_file',
       description:
-        'Download a Zulip user upload by its /user_uploads/... path (visible in message bodies). Writes the file into a fresh temp directory and returns {file_path, content_type, size}. The temp directory is created under the operator-set COMMY_DOWNLOAD_DIR when configured (so the file lands in a directory you can Read), otherwise under $TMPDIR. Use the Read tool on the returned file_path to view images.',
+        'Download an attachment by the reference carried in a message body. Writes the file into a fresh temp directory and returns {file_path, content_type, size}. The temp directory is created under the operator-set COMMY_DOWNLOAD_DIR when configured (so the file lands in a directory you can Read), otherwise under $TMPDIR. Use the Read tool on the returned file_path to view images.',
       inputSchema: {
         type: 'object',
         properties: {
           url_path: {
             type: 'string',
             description:
-              'The /user_uploads/... path from the message body (e.g. /user_uploads/2/56/image.png)',
+              'The attachment reference as it appears in the message body — copy it verbatim',
           },
         },
         required: ['url_path'],
@@ -1201,7 +1202,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
       handler: async (args) => {
         const result = await runEdge(
           Schema.decodeUnknown(DownloadFileArgs)(args).pipe(
-            Effect.flatMap(({ url_path }) => decodeUserUploadPath(url_path)),
+            Effect.flatMap(({ url_path }) => decodeAttachmentRef(url_path)),
             Effect.flatMap(download),
           ),
         )
