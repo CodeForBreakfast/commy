@@ -97,6 +97,15 @@ the meantime — and that stand-in is where complexity accumulates. An
 optimisation that avoids minting an identity buys a small saving and pays
 for it with an architecture.
 
+An agent needs its identity from the moment the realm has to hold state on
+its behalf. Posting and reacting leave a message attributed to it;
+subscribing writes a subscription under its principal; receiving registers
+an event queue against it. Reading is none of these — the state a read
+touches belongs to whoever wrote it, so a reader needs no principal of its
+own. This is principle 3 read from the other end: if an agent's state lives
+in the realm under its own principal, then needing state and needing an
+identity are the same moment.
+
 ## What this rules out today
 
 Places the current implementation fails this reference.
@@ -133,10 +142,10 @@ How a small optimisation becomes a large architecture.
 
 An ephemeral session does not mint a bot until its first attribution-
 producing call, so that a session which never uses commy costs the realm
-nothing. But a session that has not yet minted still needs to read and
-manage subscriptions — so something must listen on its behalf. That
-something is the minter, subscribed to every public stream, with the event
-queue registered against it rather than the per-session bot.
+nothing. But a session that has not yet minted still needs to receive — so
+something must listen on its behalf. That something is the minter,
+subscribed to every public stream, with the event queue registered against
+it rather than the per-session bot.
 
 Everything else follows from that one deferral. One shared subscriber means
 per-agent narrowing cannot be a realm subscription, so it becomes a
@@ -150,9 +159,11 @@ Principle 5 catches it at the first step. Principle 3 catches the store.
 Principle 1 catches `session_id` reaching the tool surface.
 
 The optimisation is not worthless — a session that never touches commy
-genuinely should not mint. Identity is the wrong thing to defer. Mint on
-first contact of any kind, including a read or a subscribe, and the saving
-survives while the architecture funding it does not.
+genuinely should not mint. Identity is the wrong thing to defer. Mint when
+the realm first has to hold state for the agent, and the saving survives
+while the architecture funding it does not. What could not be deferred was
+receiving — a queue is state held on the agent's behalf. Reading was never
+the problem.
 
 Two things would remain client-side afterwards, both legitimately:
 topic-level narrows, because the substrate has no per-topic subscription
