@@ -1186,14 +1186,14 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     optionalTools.push({
       name: 'download_file',
       description:
-        'Download a Zulip user upload by its /user_uploads/... path (visible in message bodies). Writes the file into a fresh temp directory and returns {file_path, content_type, size}. The temp directory is created under the operator-set COMMY_DOWNLOAD_DIR when configured (so the file lands in a directory you can Read), otherwise under $TMPDIR. Use the Read tool on the returned file_path to view images.',
+        'Download an attachment by the reference carried in a message body. Writes the file into a fresh temp directory and returns {file_path, content_type, size}. The temp directory is created under the operator-set COMMY_DOWNLOAD_DIR when configured (so the file lands in a directory you can Read), otherwise under $TMPDIR. Use the Read tool on the returned file_path to view images.',
       inputSchema: {
         type: 'object',
         properties: {
           url_path: {
             type: 'string',
             description:
-              'The /user_uploads/... path from the message body (e.g. /user_uploads/2/56/image.png)',
+              'The attachment reference as it appears in the message body — copy it verbatim',
           },
         },
         required: ['url_path'],
