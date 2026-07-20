@@ -1,6 +1,12 @@
 import { expect, test } from 'bun:test'
 import { captureLogger } from '@commy/core/logging'
-import type { Identity, InboundEvent, MessageRef, RealmSettings } from '@commy/core/ports'
+import type {
+  EventQueueCursor,
+  Identity,
+  InboundEvent,
+  MessageRef,
+  RealmSettings,
+} from '@commy/core/ports'
 import {
   ChannelPermalinkSchema,
   decodeChannelIdSync,
@@ -31,7 +37,7 @@ import {
   TestClock,
   TestContext,
 } from 'effect'
-import type { DirectoryLookup, EventsConfig, ParsedZulipMessage, QueueState } from './events.ts'
+import type { DirectoryLookup, EventsConfig, ParsedZulipMessage } from './events.ts'
 import {
   createMessageRefCache,
   defaultRetrySchedule,
@@ -365,7 +371,7 @@ const captureRegisterBody = (): {
   return { http, captured: () => body }
 }
 
-test('registerQueue maps the response to a QueueState', async () => {
+test('registerQueue maps the response to an EventQueueCursor', async () => {
   const { http } = captureRegisterBody()
   const state = await runSilently(registerQueue(http))
   expect(state).toEqual({ queueId: 'q-1', lastEventId: 7 })
@@ -500,7 +506,7 @@ test(
   () =>
     runSilently(
       Effect.gen(function* () {
-        const registered: QueueState[] = []
+        const registered: EventQueueCursor[] = []
         const config: EventsConfig = {
           permalinkBase: PERMALINK_BASE,
           http: fakeHttp({
@@ -889,7 +895,7 @@ test(
       Effect.gen(function* () {
         // A dead queue forces a fresh register mid-stream — the new queueId must
         // be persisted too, or a resume would replay against the expired queue.
-        const registered: QueueState[] = []
+        const registered: EventQueueCursor[] = []
         let registerCalls = 0
         let getCalls = 0
         const config: EventsConfig = {
@@ -1978,7 +1984,7 @@ test(
         // two adjacent observations — the producer knows it happened and should
         // say so.
         const lines: string[] = []
-        let registration: QueueState = { queueId: 'q-producer', lastEventId: 0 }
+        let registration: EventQueueCursor = { queueId: 'q-producer', lastEventId: 0 }
         let getCalls = 0
         const config: EventsConfig = {
           permalinkBase: PERMALINK_BASE,

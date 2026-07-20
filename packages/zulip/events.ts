@@ -15,6 +15,7 @@
 
 import { messageOf } from '@commy/core/messageOf'
 import type {
+  EventQueueCursor,
   Identity,
   InboundEvent,
   InboxError,
@@ -165,7 +166,7 @@ export interface EventsConfig {
    * Omit for a standalone producer with no inbox behind it: `initialQueue`
    * then holds for the life of the stream, as before.
    */
-  readonly currentRegistration?: Effect.Effect<Option.Option<QueueState>>
+  readonly currentRegistration?: Effect.Effect<Option.Option<EventQueueCursor>>
   /**
    * Identity of the bot bound to this inbox. When provided,
    * `mention-received` is synthesised whenever the bound identity
@@ -184,7 +185,7 @@ export interface EventsConfig {
    * register-on-first-poll path, which is fine for consumers
    * that call `events()` without a preceding `subscribe()`.
    */
-  readonly initialQueue?: QueueState
+  readonly initialQueue?: EventQueueCursor
   /**
    * Shared cache for resolving reaction events' target MessageRef.
    * Lives at the adapter so its state survives across producer
@@ -234,7 +235,7 @@ export interface EventsConfig {
    * Total by contract (`Effect<void>` — never fails); the persistence
    * discipline (session gate, swallow, non-blocking) lives in the closure.
    */
-  readonly onQueueRegister?: (queue: QueueState) => Effect.Effect<void>
+  readonly onQueueRegister?: (queue: EventQueueCursor) => Effect.Effect<void>
   /**
    * Best-effort hook fired with the per-poll maximum event id whenever a
    * poll pulls the cursor forward. The adapter advances the persisted
@@ -497,11 +498,6 @@ export const reactionToInboundEvent = (
     }
   })
 
-export interface QueueState {
-  readonly queueId: string
-  readonly lastEventId: number
-}
-
 /**
  * Zulip's server-side ceiling on `idle_queue_timeout` (`MAX_QUEUE_TIMEOUT_SECS`
  * — 7 days). A requested timeout is clamped to this at the config edge, so the
@@ -512,7 +508,7 @@ export const MAX_QUEUE_TIMEOUT_SECS = 604800
 export const registerQueue = (
   http: ZulipHttp,
   idleTimeoutSecs?: number,
-): Effect.Effect<QueueState, ZulipApiError | ParseResult.ParseError> => {
+): Effect.Effect<EventQueueCursor, ZulipApiError | ParseResult.ParseError> => {
   // `realm` carries the realm-wide setting changes that move a consumer's
   // capability surface (currently `allow_message_editing`). It rides this
   // queue rather than one of its own so there is a single poll loop against
@@ -720,7 +716,7 @@ const processSingleEvent = (
  * {@link EventsConfig.currentRegistration}.
  */
 interface ProducerState {
-  readonly queue: QueueState | undefined
+  readonly queue: EventQueueCursor | undefined
   readonly observedRegistrationQueueId: Option.Option<string>
 }
 
@@ -835,22 +831,24 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
         ),
       )
 
-      const registerFreshQueue: Effect.Effect<QueueState, ZulipApiError | ParseResult.ParseError> =
-        registerQueue(config.http, config.queueIdleTimeoutSecs).pipe(
-          Effect.tap((q) => config.onQueueRegister?.(q) ?? Effect.void),
-          // A (re-)register is the one moment a seat can silently lose its
-          // backlog: the new queue starts at the server's current
-          // last_event_id, so anything that arrived while no queue existed
-          // is gone. Recording it means a gap in the record has a visible
-          // cause rather than looking like a quiet realm.
-          Effect.tap((q) =>
-            Effect.logInfo(
-              `commy zulip events: registered queue_id=${q.queueId} last_event_id=${q.lastEventId}`,
-            ),
+      const registerFreshQueue: Effect.Effect<
+        EventQueueCursor,
+        ZulipApiError | ParseResult.ParseError
+      > = registerQueue(config.http, config.queueIdleTimeoutSecs).pipe(
+        Effect.tap((q) => config.onQueueRegister?.(q) ?? Effect.void),
+        // A (re-)register is the one moment a seat can silently lose its
+        // backlog: the new queue starts at the server's current
+        // last_event_id, so anything that arrived while no queue existed
+        // is gone. Recording it means a gap in the record has a visible
+        // cause rather than looking like a quiet realm.
+        Effect.tap((q) =>
+          Effect.logInfo(
+            `commy zulip events: registered queue_id=${q.queueId} last_event_id=${q.lastEventId}`,
           ),
-        )
+        ),
+      )
 
-      const readRegistration: Effect.Effect<Option.Option<QueueState>> =
+      const readRegistration: Effect.Effect<Option.Option<EventQueueCursor>> =
         config.currentRegistration ?? Effect.succeedNone
 
       /**
@@ -903,7 +901,7 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
           // `initialQueue` deliberately prefers the persisted queue over the
           // register-time one — they differ by design, and that difference is
           // not a flip. Do not simplify this back to a difference test.
-          const adoption: Option.Option<QueueState> = Option.filter(
+          const adoption: Option.Option<EventQueueCursor> = Option.filter(
             registration,
             (r) => !Equal.equals(Option.some(r.queueId), state.observedRegistrationQueueId),
           )
@@ -929,7 +927,7 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
                 `commy zulip events: adopted queue_id=${r.queueId} last_event_id=${r.lastEventId} replaced=${Option.getOrElse(Option.fromNullable(state.queue?.queueId), () => 'none')}`,
               ),
           })
-          const currentQueue: QueueState = observed.queue ?? (yield* registerFreshQueue)
+          const currentQueue: EventQueueCursor = observed.queue ?? (yield* registerFreshQueue)
           const res = yield* config.http.get('/events', eventsResponseSchema, {
             queue_id: currentQueue.queueId,
             last_event_id: currentQueue.lastEventId,

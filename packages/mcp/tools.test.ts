@@ -2007,7 +2007,7 @@ test('download_file returns the file path, content type, and size from the callb
     ),
   ))
 
-test('download_file rejects paths not starting with /user_uploads/', () =>
+test('download_file rejects an empty url_path', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -2023,15 +2023,18 @@ test('download_file rejects paths not starting with /user_uploads/', () =>
             try: () =>
               rig.client.callTool({
                 name: 'download_file',
-                arguments: { url_path: '/api/v1/messages' },
+                arguments: { url_path: '' },
               }),
             catch: (e) => e as { message: string },
           }),
         )
-        // The reject is a typed ParseError threaded through runEdge,
-        // not a defect/crash; its message names the user_uploads constraint.
+        // Non-emptiness is the whole of the AttachmentRef invariant, and so
+        // the whole of what this edge can check: the handle is opaque here,
+        // and whether the realm can address it is the adapter's question
+        // (see adapter.test.ts, 'downloadFile fails with AttachmentError on a
+        // ref the realm cannot address'). A typed ParseError through runEdge,
+        // not a defect.
         expect(error.message).toContain('ParseError')
-        expect(error.message).toContain('user_uploads')
       }),
     ),
   ))

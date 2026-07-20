@@ -1,5 +1,7 @@
 import type {
   AgentComms,
+  AttachmentError,
+  AttachmentRef,
   ChannelDescription,
   ChannelName,
   ChannelRef,
@@ -15,6 +17,7 @@ import type {
 import {
   ChannelPermalinkSchema,
   ChannelRefSchema,
+  decodeAttachmentRef,
   decodeChannelDescription,
   decodeChannelId,
   decodeChannelName,
@@ -28,8 +31,6 @@ import {
   MessagePermalinkSchema,
   ObservedThreadSchema,
 } from '@commy/core/ports'
-import type { UserUploadPath, ZulipApiError } from '@commy/zulip/http'
-import { decodeUserUploadPath } from '@commy/zulip/http'
 import type { PlatformError } from '@effect/platform/Error'
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
@@ -214,16 +215,16 @@ export interface RegisterToolsDeps {
    */
   readonly feedSessionId?: (sessionId: SessionId) => Effect.Effect<void>
   readonly downloadFile?: (
-    urlPath: UserUploadPath,
+    ref: AttachmentRef,
   ) => Effect.Effect<
     { filePath: string; contentType: string; size: number },
-    ZulipApiError | PlatformError
+    AttachmentError | PlatformError
   >
   readonly upload?: (
     path: string,
   ) => Effect.Effect<
     { reference: string; filename: string; size: number },
-    ZulipApiError | ParseResult.ParseError | PlatformError
+    AttachmentError | PlatformError
   >
   /**
    * Whether the substrate permitted editing when the caller sampled
@@ -1201,7 +1202,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
       handler: async (args) => {
         const result = await runEdge(
           Schema.decodeUnknown(DownloadFileArgs)(args).pipe(
-            Effect.flatMap(({ url_path }) => decodeUserUploadPath(url_path)),
+            Effect.flatMap(({ url_path }) => decodeAttachmentRef(url_path)),
             Effect.flatMap(download),
           ),
         )
