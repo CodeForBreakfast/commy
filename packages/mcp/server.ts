@@ -16,6 +16,7 @@ import {
   Deferred,
   Duration,
   Effect,
+  Fiber,
   Layer,
   Option,
   Predicate,
@@ -584,6 +585,42 @@ export const makeProgram = (
       // channels/threads (window-bounded) over the seat's restored runtime
       // intents. Reactions are unrecoverable via history — the accepted
       // >24h-downtime limit.
+      // The channel/thread half, hoisted so BOTH the acquire path and the
+      // late-binding path below can reach it, and memoised with `Effect.once` so
+      // whichever gets there first is the only one that dispatches. Without that
+      // latch a seat that catches up late and then posts would double-deliver
+      // every recovered message.
+      //
+      // `botIdentityId` is read at call time and is legitimately `undefined`
+      // before acquire — `catchUpChannels` declares it optional and uses it only
+      // to render self-authored messages. That is what makes this half runnable
+      // with no identity at all; the mentions half genuinely cannot (comms-v9va).
+      const channelsCatchUpOnce = yield* Effect.once(
+        Effect.suspend(() => {
+          const windowSeconds = parsed.catchupWindowSeconds ?? DEFAULT_CATCHUP_WINDOW_SECONDS
+          const catchUpIntents = narrowSet.intents()
+          if (windowSeconds <= 0 || catchUpIntents.length === 0) return Effect.void
+          return catchUpChannels({
+            intents: catchUpIntents,
+            history: adapter.history,
+            notifier,
+            botIdentityId: getBotIdentityId(),
+            windowSeconds,
+          }).pipe(
+            // Positive signal: a recovery that reports only by not erroring is
+            // indistinguishable from one that never ran (comms-9iro). Delivery
+            // logs at INFO, so this does too — logDebug would be invisible
+            // beside it.
+            Effect.tap((recovered) =>
+              Effect.logInfo(
+                `commy catch-up: channels recovered=${recovered} intents=${catchUpIntents.length} window=${windowSeconds}s`,
+              ),
+            ),
+            Effect.catchAllCause(logCatchUpFailure('ephemeral channels')),
+          )
+        }),
+      )
+
       const ephemeralOnAcquire =
         parsed.botName === undefined
           ? (
@@ -596,9 +633,6 @@ export const makeProgram = (
                 Effect.flatMap((queueReplayed) => {
                   if (queueReplayed) return Effect.void
                   const identityId = acquired.identity.id
-                  const windowSeconds =
-                    parsed.catchupWindowSeconds ?? DEFAULT_CATCHUP_WINDOW_SECONDS
-                  const catchUpIntents = narrowSet.intents()
                   return catchUpMentions({
                     cursorStore,
                     inbox: adapter.inbox,
@@ -606,17 +640,7 @@ export const makeProgram = (
                     notifier,
                   }).pipe(
                     Effect.catchAllCause(logCatchUpFailure('ephemeral mentions')),
-                    Effect.zipRight(
-                      windowSeconds > 0 && catchUpIntents.length > 0
-                        ? catchUpChannels({
-                            intents: catchUpIntents,
-                            history: adapter.history,
-                            notifier,
-                            botIdentityId: identityId,
-                            windowSeconds,
-                          }).pipe(Effect.catchAllCause(logCatchUpFailure('ephemeral channels')))
-                        : Effect.void,
-                    ),
+                    Effect.zipRight(channelsCatchUpOnce),
                   )
                 }),
                 Effect.provide(loggerLayer),
@@ -846,7 +870,43 @@ export const makeProgram = (
       // `beginBuffering`, so a subscribe racing the load is never lost. A no-op
       // Effect in persistent mode. Never awaited inline: an unfilled id on a
       // listen-only seat would otherwise block the scope forever.
-      yield* Effect.forkScoped(restoreOnResume)
+      const restoreFiber = yield* Effect.forkScoped(restoreOnResume)
+
+      // Late-binding backlog recovery for a LISTEN-ONLY ephemeral seat
+      // (comms-9iro). The acquire path is the only other route to catch-up and
+      // it fires on the first post/react/edit_message/unreact — so a seat that
+      // only listens reaches neither it nor, once the resume verdict has latched
+      // false, native queue replay. Waiting for a message could not recover the
+      // message you were waiting for.
+      //
+      // SEQUENCED ON THE RESTORE, not merely on the session id. The narrow set
+      // is what supplies the catch-up intents, and `restoreOnResume` is what
+      // populates it — so joining the restore fiber is load-bearing, not tidiness.
+      // Reading intents before it completes yields an EMPTY set, and because the
+      // catch-up is memoised (`Effect.once`) that empty run would latch and
+      // permanently suppress the acquire path's catch-up too — turning a missed
+      // recovery into a regression of the route that already worked.
+      //
+      // Forked, so the unbounded awaits park THIS fibre and nothing else: the
+      // session id may arrive long after boot, or never.
+      //
+      // Subscription restore is already late-binding-safe for exactly this
+      // reason (it parks on the store's own deferred), which is why a late id
+      // used to hand a seat its subscriptions back while its backlog was already
+      // gone — "subscribed but deaf". This closes that asymmetry.
+      //
+      // Recovers MESSAGES ONLY. Reactions are unrecoverable via history and are
+      // recovered solely by native queue replay, which the bounded resume wait in
+      // queue-state-hooks.ts exists to preserve.
+      if (parsed.botName === undefined) {
+        yield* Effect.forkScoped(
+          Fiber.join(restoreFiber).pipe(
+            Effect.zipRight(Deferred.await(resumeOutcome)),
+            Effect.flatMap((queueReplayed) => (queueReplayed ? Effect.void : channelsCatchUpOnce)),
+            Effect.provide(loggerLayer),
+          ),
+        )
+      }
 
       // Block until either the event stream ends / the pump fatally parks
       // and is interrupted (the SIGINT/SIGTERM path), OR the MCP client

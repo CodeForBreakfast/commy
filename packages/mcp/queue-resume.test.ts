@@ -22,7 +22,18 @@ import { zulipAdapter } from '@commy/zulip/adapter'
 import { ApiKey, BotEmail, RealmUrl } from '@commy/zulip/http'
 import { FileSystem, HttpClient } from '@effect/platform'
 import { NodeFileSystem } from '@effect/platform-node'
-import { Deferred, Effect, Option, Queue, Redacted, type Scope, Stream, TestContext } from 'effect'
+import {
+  Deferred,
+  Effect,
+  Fiber,
+  Option,
+  Queue,
+  Redacted,
+  type Scope,
+  Stream,
+  TestClock,
+  TestContext,
+} from 'effect'
 import { parseSessionId, type SessionId } from './bootstrap.ts'
 import { buildQueueStateHooks } from './queue-state-hooks.ts'
 import { createFileQueueStateStore, type QueueStateStore } from './queue-state-store.ts'
@@ -206,6 +217,33 @@ effectTest(
   { layer: TestContext.TestContext },
 )
 
+// The advance-hook half of the same hot-path guarantee. Added with comms-9iro:
+// `onQueueRegister` was covered above and `onQueueAdvance` was not, so when
+// `resumeQueue` stopped being non-blocking the only remaining assertion holding
+// the hot path would have been a single hook's. `onQueueAdvance` fires on EVERY
+// cursor-moving poll — the hottest of the three — so it is the one that least
+// tolerates parking.
+effectTest(
+  'onQueueAdvance with an unfed session deferred no-ops without parking or writing',
+  () =>
+    Effect.gen(function* () {
+      const store = yield* tmpQueueStore()
+      const session = yield* Deferred.make<SessionId>()
+      const hooks = buildQueueStateHooks({
+        store,
+        session,
+        idleTimeoutSecs: 3600,
+        resumeOutcome: yield* Deferred.make<boolean>(),
+      })
+
+      const outcome = yield* hooks.onQueueAdvance(7).pipe(Effect.timeoutOption('2 seconds'))
+
+      expect(Option.isSome(outcome)).toBe(true)
+      expect(Option.isNone(yield* store.read(sid(SID)))).toBe(true)
+    }),
+  { layer: TestContext.TestContext },
+)
+
 // ─── Queue-resume READ half ──────────────────────────────────────
 // The payoff: a resumed ephemeral seat whose surviving queue-state is on disk
 // resume-polls that queue from the stored cursor — skipping its own register —
@@ -281,6 +319,116 @@ effectTest(
       expect(registers).toHaveLength(0)
       // The backlog replays: message first, then the reaction that no history
       // catch-up could have recovered — all with zero tool calls.
+      expect(first.kind).toBe('message-posted')
+      expect(second.kind).toBe('reaction-added')
+    }),
+  { layer: TestContext.TestContext },
+)
+
+// ─── The LATE session id: a listen-only seat's backlog (comms-9iro) ──────────
+// The population defect (1) actually reaches: a client with NO boot session id,
+// i.e. a non-CC MCP client supplying its own UUID through a tool call. (Fleet CC
+// seats carry CLAUDE_CODE_SESSION_ID, measured present 6/6, so the resume poll
+// wins for them and this never fires — the blast radius is narrower than the
+// bead's description reads.)
+//
+// The shape: the pump materialises BEFORE any source has delivered the id, so
+// `resumeQueue` resolves against an unfed deferred. The id then arrives — but a
+// one-shot poll has already reported 'no candidate', latched the verdict, and
+// registered a fresh empty queue. The surviving queue-state sits on disk, valid
+// and never read again for the pump's lifetime.
+//
+// Why this is the reaction-losing path specifically, and why REST catch-up is
+// not a substitute: only NATIVE QUEUE REPLAY reconstructs reactions
+// (server.ts:585-586 — reactions are the accepted >24h-downtime limit of the
+// history fallback). A seat that loses its queue loses every reaction sent
+// during downtime with no second route to them, which is exactly the payload
+// class that motivated this bead.
+effectTest(
+  'a session id arriving after pump materialisation still resumes the surviving queue instead of abandoning it for a fresh register',
+  () =>
+    Effect.gen(function* () {
+      const store = yield* tmpQueueStore()
+      const session = yield* Deferred.make<SessionId>()
+      // A prior life left the queue-state on disk — but NOTHING has fed the id:
+      // no boot env var, and a listen-only seat fires no hook-matched tool call.
+      yield* store.write(sid(SID), { queueId: 'resumed-q', lastEventId: 41 })
+      const hooks = buildQueueStateHooks({
+        store,
+        session,
+        idleTimeoutSecs: 3600,
+        resumeOutcome: yield* Deferred.make<boolean>(),
+      })
+
+      const stub = yield* makeStubHttpClient
+      yield* seedUsers(stub)
+      yield* seedRegenerate(stub)
+      const adapter = yield* zulipAdapter({
+        realmUrl: yield* RealmUrl(REALM_URL).pipe(Effect.orDie),
+        minterEmail: yield* BotEmail('minter@example.com').pipe(Effect.orDie),
+        minterApiKey: Redacted.make(yield* ApiKey('minter-key').pipe(Effect.orDie)),
+        queueIdleTimeoutSecs: hooks.queueIdleTimeoutSecs,
+        onQueueRegister: hooks.onQueueRegister,
+        onQueueAdvance: hooks.onQueueAdvance,
+        resumeQueue: hooks.resumeQueue,
+        onResumeOutcome: hooks.onResumeOutcome,
+      }).pipe(Effect.provideService(HttpClient.HttpClient, stub.client))
+      yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+
+      // Seeded so the BROKEN path fails on its assertions rather than erroring:
+      // a fresh register is what today's code does, and it must be answerable.
+      yield* seedRegister(stub)
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        {
+          body: {
+            result: 'success',
+            events: [
+              messageEvent(42),
+              reactionEvent(43, 'add', 142, 'thumbs_up', MAINTAINER.user_id),
+            ],
+          },
+        },
+        { hang: true },
+      ])
+
+      const queue = yield* Queue.unbounded<InboundEvent>()
+      yield* Effect.forkScoped(
+        adapter.inbox.events().pipe(
+          Stream.tap((event) => Queue.offer(queue, event)),
+          Stream.runDrain,
+        ),
+      )
+      // Let the forked pump reach its resume decision on an unfed deferred
+      // before the id lands — this ordering IS the defect under test.
+      yield* Effect.yieldNow()
+      yield* Effect.yieldNow()
+      yield* Deferred.succeed(session, sid(SID))
+
+      const first = yield* Queue.take(queue)
+      const second = yield* Queue.take(queue)
+
+      // WHICH ASSERTIONS DISCRIMINATE, stated because it is not obvious and the
+      // difference is the whole point of the test. The stub keys responses on
+      // METHOD + PATH ONLY — not on the queue_id query param — so it serves the
+      // same canned backlog to a fresh queue as to the resumed one. The event
+      // assertions below therefore pass in BOTH the fixed and the broken world:
+      // they document intent, they do not detect the defect. Against a real
+      // realm a fresh queue starts empty and those events are simply gone.
+      //
+      // The load-bearing assertions are these three, which fail today: the seat
+      // must poll the SURVIVING queue at its STORED cursor and must NOT register
+      // a fresh one. Abandoning the queue is the mechanism by which reactions
+      // become unrecoverable, since no history catch-up can reconstruct them.
+      const polls = (yield* stub.captured).filter(
+        (r) => r.method === 'GET' && r.url.pathname === '/api/v1/events',
+      )
+      expect(polls[0]?.url.searchParams.get('queue_id')).toBe('resumed-q')
+      expect(polls[0]?.url.searchParams.get('last_event_id')).toBe('41')
+      const registers = (yield* stub.captured).filter(
+        (r) => r.method === 'POST' && r.url.pathname === '/api/v1/register',
+      )
+      expect(registers).toHaveLength(0)
+      // Corroborative only, per the note above — the backlog shape replays.
       expect(first.kind).toBe('message-posted')
       expect(second.kind).toBe('reaction-added')
     }),
@@ -470,13 +618,51 @@ effectTest(
   { layer: TestContext.TestContext },
 )
 
+// This pair replaces an earlier test that asserted `resumeQueue` returns
+// PROMPTLY on an unfed deferred and never parks, justified as "mirrors the
+// write-half hooks". That justification was the comms-9iro defect written into
+// a test: `resumeQueue` does NOT mirror the write-half hooks — they fire on the
+// producer's hot poll path (where parking would stall live delivery), it fires
+// once at pump materialisation. Returning promptly there is what abandoned the
+// surviving queue when an id was merely late rather than absent.
+//
+// The constraint that was REALLY being protected is that the pump must never
+// park forever on an id that never comes. That is still true, and these two
+// tests pin it precisely: waits for a late id, gives up bounded.
 effectTest(
-  'resumeQueue yields None promptly on an unfed session deferred without parking',
+  'resumeQueue waits past pump materialisation for a late session id and resumes off it',
   () =>
     Effect.gen(function* () {
-      // Mirrors the write-half hooks: the read-half resolver must poll the
-      // deferred and return promptly on None — never park on await — when no
-      // source has delivered the id yet.
+      const store = yield* tmpQueueStore()
+      const session = yield* Deferred.make<SessionId>()
+      yield* store.write(sid(SID), { queueId: 'resumed-q', lastEventId: 41 })
+      const hooks = buildQueueStateHooks({
+        store,
+        session,
+        idleTimeoutSecs: 3600,
+        resumeOutcome: yield* Deferred.make<boolean>(),
+      })
+
+      // Nothing has fed the id when the resume is asked for.
+      const fiber = yield* Effect.fork(hooks.resumeQueue())
+      yield* TestClock.adjust('1 second')
+      // The id lands late — but inside the bound, so it is still honoured.
+      yield* Deferred.succeed(session, sid(SID))
+
+      expect(yield* Fiber.join(fiber)).toEqual(
+        Option.some({ queueId: 'resumed-q', lastEventId: 41 }),
+      )
+    }),
+  { layer: TestContext.TestContext },
+)
+
+effectTest(
+  'resumeQueue gives up BOUNDED on a session id that never arrives — it must not park the pump forever',
+  () =>
+    Effect.gen(function* () {
+      // The listen-only client with no boot session id and no tool calls: the
+      // deferred is never fed. Waiting outright would trade a lost backlog for
+      // total deafness, so the wait has a ceiling.
       const store = yield* tmpQueueStore()
       const session = yield* Deferred.make<SessionId>()
       const hooks = buildQueueStateHooks({
@@ -486,11 +672,16 @@ effectTest(
         resumeOutcome: yield* Deferred.make<boolean>(),
       })
 
-      const outcome = yield* hooks.resumeQueue().pipe(Effect.timeoutOption('2 seconds'))
+      const fiber = yield* Effect.fork(hooks.resumeQueue())
 
-      // Completed within the timeout (Some) and resolved to no-resume (inner None).
-      expect(Option.isSome(outcome)).toBe(true)
-      expect(Option.isNone(Option.getOrThrow(outcome))).toBe(true)
+      // Inside the bound it is still waiting — this is the half the old test got
+      // wrong, and returning here is what cost the backlog.
+      yield* TestClock.adjust('4 seconds')
+      expect(Option.isNone(yield* Fiber.poll(fiber))).toBe(true)
+
+      // Past the bound it gives up and the pump proceeds with a fresh register.
+      yield* TestClock.adjust('2 seconds')
+      expect(Option.isNone(yield* Fiber.join(fiber))).toBe(true)
     }),
   { layer: TestContext.TestContext },
 )

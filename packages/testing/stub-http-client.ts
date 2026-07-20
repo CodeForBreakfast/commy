@@ -56,6 +56,22 @@ export type CapturedHttpRequest = {
   readonly body: string
 }
 
+/**
+ * ROUTING KEYS ON METHOD + PATH ONLY — never on query params or body. A request
+ * gets the same canned response whatever it asks for, so any assertion that
+ * depends on WHICH resource was requested cannot discriminate here.
+ *
+ * The trap this has already sprung (comms-9iro): a `GET /api/v1/events` poll
+ * against a FRESH queue is served the identical backlog as one against a
+ * RESUMED queue. A test asserting "the buffered events arrived" therefore passes
+ * whether or not the code resumed the right queue — it looks like payload-level
+ * proof and is nothing of the kind. Against a real realm the fresh queue returns
+ * empty. Assert on `captured` (the query params actually sent) for anything
+ * resource-identity-dependent; keep payload assertions as corroboration only.
+ *
+ * comms-5h8u tracks making the stub predicate-matchable so this class of
+ * assertion can be written honestly.
+ */
 export type StubHttpClient = {
   /** Drop-in for the `HttpClient.HttpClient` service. */
   readonly client: HttpClient.HttpClient

@@ -107,9 +107,14 @@ const fetchForIntent = (
     }),
   )
 
-export const catchUpChannels = (deps: ChannelsCatchUpDeps): Effect.Effect<void, CatchUpError> =>
+/**
+ * Returns the number of messages dispatched, so a caller can report a recovery
+ * positively rather than leaving success visible only as an absence of errors
+ * (comms-9iro). Existing callers may discard it.
+ */
+export const catchUpChannels = (deps: ChannelsCatchUpDeps): Effect.Effect<number, CatchUpError> =>
   Effect.gen(function* () {
-    if (deps.intents.length === 0) return
+    if (deps.intents.length === 0) return 0
     const ms = yield* Clock.currentTimeMillis
     const now = yield* decodeTimestamp(Math.floor(ms / 1000)).pipe(Effect.orDie)
     const since = yield* clampedSince(now, deps.windowSeconds)
@@ -137,4 +142,5 @@ export const catchUpChannels = (deps: ChannelsCatchUpDeps): Effect.Effect<void, 
         }),
       { discard: true },
     )
+    return messages.length
   })

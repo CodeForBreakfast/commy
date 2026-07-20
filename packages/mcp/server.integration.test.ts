@@ -1604,6 +1604,85 @@ test('ephemeral lazy acquire with a prior cursor: replay fires, mention dispatch
   }
 })
 
+// ─── listen-only backlog recovery, no tool call ever (comms-9iro) ────────────
+// The population the bead is about: an ephemeral seat that boots with a session
+// id (env-fed, so the deferred completes with no tool call), finds no surviving
+// queue to resume, and then only LISTENS. Catch-up used to live exclusively
+// inside `onAcquire`, which fires on the first post/react/edit_message/unreact —
+// so this seat reached neither route and stayed silently deaf while blocked on
+// an answer that had already been sent.
+//
+// Asserts on the channel notification arriving with ZERO tool calls made.
+test('listen-only ephemeral seat recovers its channel backlog without ever making a tool call', async () => {
+  const sessionIdDeferred = await Effect.runPromise(Deferred.make<SessionIdValue>())
+  // Env-fed at boot (readBootSessionId's job in production) — no tool call.
+  await Effect.runPromise(
+    Deferred.succeed(
+      sessionIdDeferred,
+      Option.getOrThrow(parseSessionId('11510e11-0000-4000-8000-000000000009')),
+    ),
+  )
+
+  const historyOverrides: Partial<HistoryReader> = {
+    readChannel: () =>
+      Effect.succeed([
+        {
+          ref: {
+            id: decodeMessageIdSync('msg-listen-only-1'),
+            channel: {
+              id: decodeChannelIdSync('chan-home'),
+              name: decodeChannelNameSync('home'),
+              permalink: ChannelPermalinkSchema.make(
+                'https://zulip.example.com/#narrow/channel/chan-home-home',
+              ),
+            },
+            thread: Option.none(),
+            permalink: MessagePermalinkSchema.make(
+              'https://zulip.example.com/#narrow/channel/chan-home-home/near/msg-listen-only-1',
+            ),
+          },
+          sender: {
+            id: decodeIdentityIdSync('user-42'),
+            name: decodeDisplayNameSync('Robin Reyes'),
+            kind: 'human' as const,
+          },
+          body: decodeMessageBodySync('the decision you were waiting on'),
+          ts: decodeTimestampSync(1715450000),
+          mentions: [],
+          reactions: [],
+        },
+      ]),
+  }
+
+  const h = await buildHarness({
+    ephemeral: true,
+    sessionIdDeferred,
+    historyOverrides,
+    seedChannels: ['home'],
+    subscribe: 'home',
+    // No surviving queue → native replay cannot cover the backlog → history
+    // catch-up is the only remaining route.
+    resumeQueueReplayed: false,
+  })
+  try {
+    await waitFor(
+      () => h.notifications.some((n) => n.method === 'notifications/claude/channel'),
+      2000,
+    )
+    const channelNotifications = h.notifications.filter(
+      (n) => n.method === 'notifications/claude/channel',
+    )
+    expect(channelNotifications.length).toBeGreaterThan(0)
+    const params = channelNotifications[0]?.params as {
+      content: string
+      meta: Record<string, string>
+    }
+    expect(params.content).toBe('the decision you were waiting on')
+  } finally {
+    await h.cleanup()
+  }
+})
+
 test('ephemeral catch-up failure is non-fatal: tool call succeeds, failure is logged', async () => {
   const cursorStore: CursorStore = {
     read: () => Effect.succeed(Option.some(decodeTimestampSync(1000))),
