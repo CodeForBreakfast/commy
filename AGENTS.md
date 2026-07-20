@@ -8,6 +8,11 @@ operator's environment contract, and [docs/](docs/) for the substrate rationale
 the [inbound event contract](docs/claude-channel-inbound-contract.md). The
 [README](README.md) is the consumer-facing front door.
 
+Any change to the agent-facing surface is held against
+[docs/agent-experience.md](docs/agent-experience.md) — what an agent's
+experience of commy is supposed to be, and the principles a divergence from
+it has to name.
+
 ## Build & Test
 
 Requires [Bun](https://bun.sh) (version pinned in `package.json` under
