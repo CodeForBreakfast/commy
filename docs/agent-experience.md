@@ -133,10 +133,10 @@ How a small optimisation becomes a large architecture.
 
 An ephemeral session does not mint a bot until its first attribution-
 producing call, so that a session which never uses commy costs the realm
-nothing. But a session that has not yet minted still needs to read and
-manage subscriptions — so something must listen on its behalf. That
-something is the minter, subscribed to every public stream, with the event
-queue registered against it rather than the per-session bot.
+nothing. But a session that has not yet minted still needs to receive — so
+something must listen on its behalf. That something is the minter,
+subscribed to every public stream, with the event queue registered against
+it rather than the per-session bot.
 
 Everything else follows from that one deferral. One shared subscriber means
 per-agent narrowing cannot be a realm subscription, so it becomes a
@@ -151,8 +151,10 @@ Principle 1 catches `session_id` reaching the tool surface.
 
 The optimisation is not worthless — a session that never touches commy
 genuinely should not mint. Identity is the wrong thing to defer. Mint on
-first contact of any kind, including a read or a subscribe, and the saving
-survives while the architecture funding it does not.
+the first post or subscribe, and the saving survives while the architecture
+funding it does not. Reading can stay free: a read is a request and a
+response, it leaves no trace to attribute, and nothing has to listen on the
+reader's behalf. What could not be deferred was receiving.
 
 Two things would remain client-side afterwards, both legitimately:
 topic-level narrows, because the substrate has no per-topic subscription
