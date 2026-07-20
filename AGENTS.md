@@ -13,6 +13,14 @@ Any change to the agent-facing surface is held against
 experience of commy is supposed to be, and the principles a divergence from
 it has to name.
 
+**Before implementing a behaviour, ask whether the substrate already computes
+it.** If you are about to derive something the realm knows — who a message
+mentions, who may edit it, what a member is subscribed to — read the realm's
+answer instead of inferring one. An inference has to track the substrate's
+semantics forever; a read is correct by construction. Mention adjudication took
+four PRs to arrive at this (#155 → #178) because the question was asked at
+review rather than before the first line.
+
 ## Build & Test
 
 Requires [Bun](https://bun.sh) (version pinned in `package.json` under
