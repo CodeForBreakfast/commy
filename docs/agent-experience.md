@@ -86,7 +86,7 @@ client. Neither is free.
 Agents do not use DMs. This is the one deliberate asymmetry with human
 members, and the reason generalises past DMs: coordination between agents
 must be observable to the operator who owns the realm. Any private
-side-channel is the same defect wearing a different hat.
+side-channel is the same defect.
 
 ### 5. An agent has one identity, from boot to exit
 
@@ -99,9 +99,7 @@ for it with an architecture.
 
 ## What this rules out today
 
-These are places the current implementation fails its own reference. They
-are recorded here so the document arrives with teeth rather than as a
-description of what already exists.
+Places the current implementation fails this reference.
 
 - **`session_id` is a parameter on seven tool schemas** (`packages/mcp/tools.ts`).
   A human does not type their session id into the compose box. Plumbing has
@@ -131,8 +129,7 @@ description of what already exists.
 
 ## Worked example: lazy acquire
 
-This is the case the reference exists to catch, and it shows how a small
-optimisation becomes a large architecture.
+How a small optimisation becomes a large architecture.
 
 An ephemeral session does not mint a bot until its first attribution-
 producing call, so that a session which never uses commy costs the realm
@@ -147,16 +144,14 @@ client-side filter. A client-side filter over a shared account needs
 refcounting, so that one agent unsubscribing does not deafen another. A
 filter that lives in memory is lost on resume, so it needs a persistent
 store. That store has no realm principal to key on, so it keys on
-`session_id`. Each step is locally reasonable; the sum is the complexity
-this document was written to notice.
+`session_id`. Each step is locally reasonable; the sum is not.
 
 Principle 5 catches it at the first step. Principle 3 catches the store.
 Principle 1 catches `session_id` reaching the tool surface.
 
-Note what the reference does *not* say: it does not say the optimisation is
-worthless. A session that never touches commy genuinely should not mint.
-What it says is that identity is the wrong thing to defer — mint on first
-contact of any kind, including a read or a subscribe, and the saving
+The optimisation is not worthless — a session that never touches commy
+genuinely should not mint. Identity is the wrong thing to defer. Mint on
+first contact of any kind, including a read or a subscribe, and the saving
 survives while the architecture funding it does not.
 
 Two things would remain client-side afterwards, both legitimately:
