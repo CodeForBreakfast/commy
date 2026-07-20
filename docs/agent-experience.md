@@ -150,10 +150,23 @@ it rather than the per-session bot.
 Everything else follows from that one deferral. One shared subscriber means
 per-agent narrowing cannot be a realm subscription, so it becomes a
 client-side filter. A client-side filter over a shared account needs
-refcounting, so that one agent unsubscribing does not deafen another. A
-filter that lives in memory is lost on resume, so it needs a persistent
-store. That store has no realm principal to key on, so it keys on
-`session_id`. Each step is locally reasonable; the sum is not.
+refcounting across every seat, so that one agent unsubscribing does not
+deafen another. A filter that lives in memory is lost on resume, so it needs
+a persistent store. That store has no realm principal to key on, so it keys
+on `session_id`. Each step is locally reasonable; the sum is not.
+
+The refcounting step is the one the architecture never took, and its absence
+is live today. `streamIsListening` (`packages/zulip/adapter.ts:506-508`) does
+refcount — but over the narrow *kinds* one seat holds on a channel
+(`channel:X` against `new-topics:X`), within a single `InboxState`. That
+state lives behind an `inboxRef` constructed inside the adapter
+(`adapter.ts:1576`), so its scope is one adapter instance: one process, one
+seat. Nothing counts seats. So `unsubscribe` reaches "nobody is listening"
+on the strength of one seat's own narrows and issues
+`DELETE /users/me/subscriptions` (`adapter.ts:1712-1730`) — where "me" is
+the shared minter. One agent unsubscribing from a channel deafens every
+other agent on it, until some unrelated seat's boot reconciler happens to
+resubscribe.
 
 Principle 5 catches it at the first step. Principle 3 catches the store.
 Principle 1 catches `session_id` reaching the tool surface.
@@ -166,8 +179,23 @@ receiving — a queue is state held on the agent's behalf. Reading was never
 the problem.
 
 Two things would remain client-side afterwards, both legitimately:
-topic-level narrows, because the substrate has no per-topic subscription
-primitive (principle 2), and the event-queue handle, because the substrate
-offers no way to rediscover your own queue (principle 3's second
-exemption). The difference is that they would filter the agent's own queue
-rather than a shared one — local, small, and interfering with nobody.
+topic-level narrows and the event-queue handle. The difference is that they
+would filter the agent's own queue rather than a shared one — local, small,
+and interfering with nobody.
+
+They are legitimate for different reasons, and only one of them is an
+exemption. The event-queue handle is principle 3's second: the substrate
+offers no way to rediscover your own queue, so the pointer has to be held.
+Topic narrows are not exempt at all. It is tempting to say the substrate has
+no per-topic subscription primitive — it does. Zulip persists a
+per-`(user, stream, topic)` row via `POST /user_topics` with
+`visibility_policy: FOLLOWED`
+(`zerver/models/user_topics.py:24-35`). What it does not do is *deliver*
+against it: the source marks `FOLLOWED`'s notification behaviour as not yet
+implemented, so a client still has to filter its own queue. The claim is
+true for delivery and false for state, and the distinction is the whole
+point. An agent's intent to follow a thread can be recorded in the realm
+under its own principal, which makes the client-side narrow a cache of realm
+truth — which principle 3 permits outright — rather than client-side
+authority that dies with the seat. Told the other way round, the false
+version licenses exactly the state principle 3 exists to question.
