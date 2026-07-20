@@ -1,6 +1,6 @@
 <!--
 Changes to the agent-facing surface answer the parity question below.
-Everything else can delete it. See docs/agent-experience.md.
+Everything else can delete it.
 -->
 
 ## What
@@ -8,5 +8,5 @@ Everything else can delete it. See docs/agent-experience.md.
 ## Parity
 
 Would a human member of this realm have this? If no, name the principle from
-[docs/agent-experience.md](../docs/agent-experience.md) that licenses the
+[docs/agent-experience.md](docs/agent-experience.md) that licenses the
 divergence.
