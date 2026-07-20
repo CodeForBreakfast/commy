@@ -488,14 +488,16 @@ export const makeProgram = (
           : undefined
 
       // Reactive subscription restore. Restore is a reaction to the
-      // session_id becoming known, not a thing a specific action triggers: a
-      // resumed MCP child boots session-blind. `restoreSubscriptions` reads the
-      // session-bound store, whose `read` awaits the shared session-id `Deferred`
-      // internally — so this is forked ONCE into the connected runtime below and
-      // parks on that read until any source (the boot-env feeder for a listen-only
-      // seat, or the first tool call) fills the id, then rehydrates with zero
-      // agent action. Must be forked, not awaited inline: an inline await would
-      // block boot/serving until the id lands. The store's presence stays a true
+      // session_id becoming known, not a thing a specific action triggers: a host
+      // that does not inject the session id into the MCP child's env boots
+      // session-blind, and there the id cannot arrive until the seat itself acts.
+      // `restoreSubscriptions` reads the session-bound store, whose `read` awaits
+      // the shared session-id `Deferred` internally — so this is forked ONCE into
+      // the connected runtime below and parks on that read until any source (the
+      // boot-env feeder, which covers a Claude Code seat whether fresh or resumed,
+      // or the first tool call of an acting seat) fills the id, then rehydrates
+      // with zero agent action. Must be forked, not awaited inline: an inline
+      // await would block boot/serving until the id lands. The store's presence stays a true
       // resume signal; a corrupt or unreadable store logs and is swallowed rather
       // than stranding the session. Ephemeral mode only: a persistent
       // COMMY_BOT_NAME pane gets a new session_id every launch, so its store is
