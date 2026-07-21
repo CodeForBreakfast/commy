@@ -29,7 +29,7 @@
     "@effect/platform": "0.96.2",
     "@effect/platform-node": "0.107.0",
     "@modelcontextprotocol/sdk": "1.29.0",
-    "effect": "3.21.4"
+    "effect": "3.22.0"
   },
   "overrides": {
     "undici": "^7.28.0",
