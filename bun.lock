@@ -82,7 +82,7 @@
     "fast-uri": "^4.1.0",
     "hono": "^4.12.30",
     "undici": "^7.28.0",
-    "ws": "^8.21.0",
+    "ws": "^8.21.1",
   },
   "packages": {
     "@biomejs/biome": ["@biomejs/biome@2.5.2", "", { "optionalDependencies": { "@biomejs/cli-darwin-arm64": "2.5.2", "@biomejs/cli-darwin-x64": "2.5.2", "@biomejs/cli-linux-arm64": "2.5.2", "@biomejs/cli-linux-arm64-musl": "2.5.2", "@biomejs/cli-linux-x64": "2.5.2", "@biomejs/cli-linux-x64-musl": "2.5.2", "@biomejs/cli-win32-arm64": "2.5.2", "@biomejs/cli-win32-x64": "2.5.2" }, "bin": { "biome": "bin/biome" } }, "sha512-VQ3RCqr7JmDIX+w6stWYl+g/3bYofN3q2wDBHUKKc/c7i5QWrFKFBZYCYPWTE6agsUPMIZZe6/CMmVUfUAhkKA=="],
@@ -409,7 +409,7 @@
 
     "wrappy": ["wrappy@1.0.2", "", {}, "sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ=="],
 
-    "ws": ["ws@8.21.0", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g=="],
+    "ws": ["ws@8.21.1", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-+0NTnW77fFN/DjQi6k/Sq/Yvk4Sgajw7urW8V+asjXnRgDs9gyGkdb7EzgfhA4goXsRIZKE28fzIXBHEzhuiWw=="],
 
     "zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
 
