@@ -55,6 +55,7 @@ import { buildQueueStateHooks } from './queue-state-hooks.ts'
 import { FileQueueStateStoreLive, QueueStateStoreTag } from './queue-state-store.ts'
 import { ResumeOutcomeLive, ResumeOutcome as ResumeOutcomeService } from './resume-outcome.ts'
 import { makeProgram } from './server.ts'
+import { SessionBinderLive } from './session-binder.ts'
 import { SessionIdLive, SessionId as SessionIdService } from './session-id.ts'
 import { FileSubscriptionStoreLive } from './subscription-store.ts'
 import { testPlatformLayer } from './test-platform.ts'
@@ -247,6 +248,7 @@ const buildHarness = (
               // awaits it — mergeAll won't wire a sibling's output to a sibling's
               // input, so a plain merge leaves the store's SessionId unsatisfied.
               Layer.provideMerge(FileSubscriptionStoreLive, SessionIdLive),
+              SessionBinderLive,
               ResumeOutcomeLive,
               stderrLoggerLayer,
             ),
@@ -321,7 +323,12 @@ const buildResumeHarness = (
               stderrLoggerLayer,
             ).pipe(
               Layer.provideMerge(
-                Layer.mergeAll(SessionIdLive, ResumeOutcomeLive, FileQueueStateStoreLive),
+                Layer.mergeAll(
+                  SessionIdLive,
+                  SessionBinderLive,
+                  ResumeOutcomeLive,
+                  FileQueueStateStoreLive,
+                ),
               ),
             ),
             testPlatformLayer(mainEnv),

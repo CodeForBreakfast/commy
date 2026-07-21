@@ -28,6 +28,7 @@ import type { NarrowSet } from './narrow-set.ts'
 import { buildQueueStateHooks } from './queue-state-hooks.ts'
 import { QueueStateStoreTag } from './queue-state-store.ts'
 import { ResumeOutcome as ResumeOutcomeTag } from './resume-outcome.ts'
+import { bindThrough, SessionBinder as SessionBinderTag } from './session-binder.ts'
 import { SessionId as SessionIdTag } from './session-id.ts'
 import type { SubscribeIntent, SubscribeTokenError } from './subscribe-parser.ts'
 import { intentToTarget, parseSubscribeTarget } from './subscribe-parser.ts'
@@ -667,7 +668,7 @@ export const substrateAdapterLayer = <E, R>(
 export const ZulipAdapterLive: Layer.Layer<
   SubstrateAdapter,
   EnvConfigError,
-  HttpClient.HttpClient | QueueStateStoreTag | SessionIdTag | ResumeOutcomeTag
+  HttpClient.HttpClient | QueueStateStoreTag | SessionIdTag | ResumeOutcomeTag | SessionBinderTag
 > = substrateAdapterLayer(
   Effect.gen(function* () {
     const parsed = yield* parseEnv
@@ -690,6 +691,9 @@ export const ZulipAdapterLive: Layer.Layer<
       realmUrl: parsed.realmUrl,
       minterEmail: parsed.minterEmail,
       minterApiKey: parsed.minterApiKey,
+      // The mint seam. A write reaching for a bound credential resolves this;
+      // nothing else decides whether this seat needs an identity.
+      bindOnDemand: bindThrough(yield* SessionBinderTag),
       ...(parsed.attachIdentity === undefined ? {} : { attachIdentity: parsed.attachIdentity }),
       ...(queueHooks === undefined
         ? {}

@@ -18,6 +18,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import type {
   AgentComms,
+  BindError,
   ChannelName,
   ChannelRef,
   Identity,
@@ -196,7 +197,7 @@ const postSpaced = (
   comms: AgentComms,
   channel: ChannelName,
   bodies: ReadonlyArray<MessageBody>,
-): Effect.Effect<void, UnknownChannel | UnresolvedMention | PublisherError> =>
+): Effect.Effect<void, BindError | UnknownChannel | UnresolvedMention | PublisherError> =>
   Effect.forEach(
     bodies,
     (body, index) =>

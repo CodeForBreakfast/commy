@@ -548,7 +548,7 @@ export interface MessagePublisher {
     channel: ChannelName,
     body: MessageBody,
     opts?: PostOpts,
-  ): Effect.Effect<MessageRef, UnknownChannel | UnresolvedMention | PublisherError>
+  ): Effect.Effect<MessageRef, BindError | UnknownChannel | UnresolvedMention | PublisherError>
   /**
    * Replace the body of an existing message attributed to the bound
    * identity. Adapters target the substrate's in-place edit primitive
@@ -565,7 +565,7 @@ export interface MessagePublisher {
   edit(
     message: MessageRef,
     body: MessageBody,
-  ): Effect.Effect<void, UnresolvedMention | MessageEditRefused | PublisherError>
+  ): Effect.Effect<void, BindError | UnresolvedMention | MessageEditRefused | PublisherError>
   /**
    * Whether the substrate permits `edit` at all *right now*, for anyone —
    * the realm-wide switch behind `MessageEditRefused`'s `editing-disabled`
@@ -585,8 +585,8 @@ export interface MessagePublisher {
    * deliberately rather than per-operation.
    */
   editingAvailable(): Effect.Effect<boolean, PublisherError>
-  react(message: MessageRef, emoji: Emoji): Effect.Effect<void, PublisherError>
-  unreact(message: MessageRef, emoji: Emoji): Effect.Effect<void, PublisherError>
+  react(message: MessageRef, emoji: Emoji): Effect.Effect<void, BindError | PublisherError>
+  unreact(message: MessageRef, emoji: Emoji): Effect.Effect<void, BindError | PublisherError>
   /**
    * Mark a thread resolved / clear its resolved status across the whole thread,
    * addressed by `channel` + plain thread `name` (never a resolution-encoded
@@ -617,8 +617,14 @@ export interface MessagePublisher {
    * A substrate that instead errored, refused, or clobbered on an occupied name
    * would fail that assertion, which is the point of pinning it.)
    */
-  resolveThread(channel: ChannelName, thread: ThreadName): Effect.Effect<void, PublisherError>
-  unresolveThread(channel: ChannelName, thread: ThreadName): Effect.Effect<void, PublisherError>
+  resolveThread(
+    channel: ChannelName,
+    thread: ThreadName,
+  ): Effect.Effect<void, BindError | PublisherError>
+  unresolveThread(
+    channel: ChannelName,
+    thread: ThreadName,
+  ): Effect.Effect<void, BindError | PublisherError>
   /**
    * Set a channel's standing description, or clear it with `Option.none()`.
    * Addressed by `ChannelName` like every other write. Idempotent: writing the
@@ -639,7 +645,7 @@ export interface MessagePublisher {
   setChannelDescription(
     channel: ChannelName,
     description: Option.Option<ChannelDescription>,
-  ): Effect.Effect<void, PublisherError | UnknownChannel | ChannelDescriptionRejected>
+  ): Effect.Effect<void, BindError | PublisherError | UnknownChannel | ChannelDescriptionRejected>
 }
 
 export interface MessageInbox {
@@ -980,6 +986,43 @@ export class IdentityError extends Data.TaggedError('IdentityError')<{
     return messageOf(this.cause)
   }
 }
+
+/**
+ * Refusal of a write whose seat has no principal and cannot obtain one — the
+ * caller reached for a bound credential, which IS the declaration that the
+ * realm is about to hold state on its behalf, and the binding could not be
+ * made. Raised when an ephemeral session arrives with no usable `session_id`
+ * (the driving adapter's only inbound binding for a host that injects
+ * nothing), and when no bind-on-demand strategy was wired at all.
+ *
+ * Tagged rather than a bare `Error` so the MCP edge surfaces the
+ * `UnboundEphemeralSession:` discriminator instead of the naked message, and
+ * so callers can `Effect.catchTag` it off the write's typed `E` channel. It
+ * lives on the port because the write verbs declare it: an untyped die here
+ * gave the one host class that can hit it no way to recover.
+ */
+export class UnboundEphemeralSession extends Data.TaggedError('UnboundEphemeralSession')<{
+  readonly message: string
+}> {}
+
+/**
+ * Failure surface of the bind-on-demand seam every attribution-producing
+ * write reaches through. `UnknownIdentity` / `IdentityError` are the binding
+ * round-trip's own failures; `UnboundEphemeralSession` is the refusal raised
+ * before any round-trip is attempted.
+ */
+export type BindError = UnknownIdentity | IdentityError | UnboundEphemeralSession
+
+/**
+ * Whether a failure came from the bind seam rather than the operation the
+ * caller asked for. Adapters that catch broadly on the way out use this to let
+ * a bind refusal through untouched: flattening it into a `PublisherError`
+ * would hide the one failure the caller can actually act on.
+ */
+export const isBindError = (cause: unknown): cause is BindError =>
+  cause instanceof UnknownIdentity ||
+  cause instanceof IdentityError ||
+  cause instanceof UnboundEphemeralSession
 
 /**
  * Failure surface for the Effect-returning `MessageInbox` methods other
