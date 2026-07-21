@@ -11,10 +11,11 @@ import {
   type IdentityError,
   type UnknownIdentity,
 } from '@commy/core/ports'
+import type { MemoryAdapterConfig } from '@commy/memory/adapter'
 import { type MemoryAdapter, memoryAdapter } from '@commy/memory/adapter'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { Effect, type Scope } from 'effect'
+import { Effect, Option, Ref, type Scope } from 'effect'
 import type { EnsureBound } from './ensure-bound.ts'
 import { createEnsureBound } from './ensure-bound.ts'
 import type { IdentityCache } from './identity-cache.ts'
@@ -22,10 +23,27 @@ import { createSingleIdentityCache } from './identity-cache.ts'
 import { buildMcpServer } from './mcp-server.ts'
 import type { NarrowSet } from './narrow-set.ts'
 import { createNarrowSet } from './narrow-set.ts'
+import type { BindOnDemand } from './session-binder.ts'
+import { binderFor, bindThrough, installBinder } from './session-binder.ts'
 import type { ToolsCache } from './tools.ts'
 import { registerTools } from './tools.ts'
 
-type MemoryAdapterRig = MemoryAdapter
+type MemoryAdapterRig = MemoryAdapter & { readonly binderRef: Ref.Ref<Option.Option<BindOnDemand>> }
+
+/**
+ * A memory adapter with the mint seam wired as production wires it: the
+ * adapter reads its binder through a holder, and `buildDeps` installs into
+ * that holder once the identity cache exists. Tests must exercise the same
+ * seam that ships, so no rig here builds an adapter that cannot bind.
+ */
+const rigAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<MemoryAdapterRig> =>
+  Ref.make<Option.Option<BindOnDemand>>(Option.none()).pipe(
+    Effect.flatMap((binderRef) =>
+      memoryAdapter({ ...config, bindOnDemand: bindThrough(binderRef) }).pipe(
+        Effect.map((adapter) => ({ ...adapter, binderRef })),
+      ),
+    ),
+  )
 
 const buildDeps = (
   adapter: MemoryAdapterRig,
@@ -38,11 +56,12 @@ const buildDeps = (
     acquire: adapter.identity.acquire,
     name: decodeBotNameSync('test-bot'),
   }).pipe(
-    Effect.map((ensureBound) => ({
-      ensureBound,
-      identityCache: createSingleIdentityCache({ ensureBound }),
-      narrowSet: createNarrowSet(),
-    })),
+    Effect.flatMap((ensureBound) => {
+      const identityCache = createSingleIdentityCache({ ensureBound })
+      return installBinder(adapter.binderRef, binderFor(identityCache)).pipe(
+        Effect.as({ ensureBound, identityCache, narrowSet: createNarrowSet() }),
+      )
+    }),
   )
 
 interface ConnectedRig {
@@ -110,7 +129,7 @@ const withRig = <E>(
   ) => Effect.Effect<void, E>,
 ): Effect.Effect<ConnectedRig, E, Scope.Scope> =>
   Effect.gen(function* () {
-    const adapter = yield* memoryAdapter()
+    const adapter = yield* rigAdapter()
     const deps = yield* buildDeps(adapter)
     yield* setup(adapter, deps.ensureBound)
     return yield* mountAndConnect(adapter, deps)
@@ -124,7 +143,7 @@ const withRigAndCache = <E>(
   ) => Effect.Effect<void, E>,
 ): Effect.Effect<ConnectedRig, E, Scope.Scope> =>
   Effect.gen(function* () {
-    const adapter = yield* memoryAdapter()
+    const adapter = yield* rigAdapter()
     const deps = yield* buildDeps(adapter)
     const rig = yield* mountAndConnect(adapter, deps)
     yield* setup(adapter, rig.cache, deps.ensureBound)
@@ -169,7 +188,7 @@ test('tools/list omits edit_message when the substrate has editing disabled', ()
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const adapter = yield* memoryAdapter()
+        const adapter = yield* rigAdapter()
         const deps = yield* buildDeps(adapter)
         const rig = yield* mountAndConnect(adapter, deps, { canEditMessages: false })
         const result = yield* Effect.promise(() => rig.client.listTools())
@@ -184,7 +203,7 @@ test('a gated-off edit_message is not callable through the back door', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const adapter = yield* memoryAdapter()
+        const adapter = yield* rigAdapter()
         const deps = yield* buildDeps(adapter)
         const rig = yield* mountAndConnect(adapter, deps, { canEditMessages: false })
         // Withheld from the list means withheld from dispatch too: a client
@@ -212,7 +231,7 @@ test('setEditingAvailable withdraws edit_message from an already-connected sessi
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const adapter = yield* memoryAdapter()
+        const adapter = yield* rigAdapter()
         const deps = yield* buildDeps(adapter)
         const rig = yield* mountAndConnect(adapter, deps, { canEditMessages: true })
         const before = yield* Effect.promise(() => rig.client.listTools())
@@ -231,7 +250,7 @@ test('setEditingAvailable restores edit_message when the realm switches it back 
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const adapter = yield* memoryAdapter()
+        const adapter = yield* rigAdapter()
         const deps = yield* buildDeps(adapter)
         const rig = yield* mountAndConnect(adapter, deps, { canEditMessages: false })
         expect(
@@ -256,7 +275,7 @@ test('a tool withdrawn after connect is no longer callable', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const adapter = yield* memoryAdapter()
+        const adapter = yield* rigAdapter()
         const deps = yield* buildDeps(adapter)
         const rig = yield* mountAndConnect(adapter, deps, { canEditMessages: true })
 
@@ -397,7 +416,7 @@ test('current_identity fails soft when the recent_threads enrichment throws — 
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const base = yield* memoryAdapter()
+        const base = yield* rigAdapter()
         const adapter: MemoryAdapterRig = {
           ...base,
           history: {
@@ -1010,7 +1029,7 @@ test('subscribe with a bare channel name calls inbox.subscribe with a matching C
     Effect.scoped(
       Effect.gen(function* () {
         const subscribed: Array<unknown> = []
-        const adapter = yield* memoryAdapter()
+        const adapter = yield* rigAdapter()
         // wrap inbox.subscribe to capture targets
         const originalSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
         adapter.inbox.subscribe = (target) =>
@@ -1085,7 +1104,7 @@ test('unsubscribe routes through inbox.unsubscribe with the parsed target', () =
     Effect.scoped(
       Effect.gen(function* () {
         const unsubscribed: Array<unknown> = []
-        const adapter = yield* memoryAdapter()
+        const adapter = yield* rigAdapter()
         const originalUnsubscribe = adapter.inbox.unsubscribe.bind(adapter.inbox)
         adapter.inbox.unsubscribe = (target) =>
           Effect.sync(() => {
@@ -1167,7 +1186,7 @@ test('post to a thread auto-subscribes the poster to that thread', () =>
     Effect.scoped(
       Effect.gen(function* () {
         const subscribed: Array<unknown> = []
-        const adapter = yield* memoryAdapter()
+        const adapter = yield* rigAdapter()
         const originalSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
         adapter.inbox.subscribe = (target) =>
           Effect.sync(() => {
@@ -1201,7 +1220,7 @@ test('post without a thread does NOT auto-subscribe', () =>
     Effect.scoped(
       Effect.gen(function* () {
         const subscribed: Array<unknown> = []
-        const adapter = yield* memoryAdapter()
+        const adapter = yield* rigAdapter()
         const originalSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
         adapter.inbox.subscribe = (target) =>
           Effect.sync(() => {
@@ -1230,7 +1249,7 @@ test('posting to the same thread twice subscribes only once (idempotency)', () =
     Effect.scoped(
       Effect.gen(function* () {
         const subscribed: Array<unknown> = []
-        const adapter = yield* memoryAdapter()
+        const adapter = yield* rigAdapter()
         const originalSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
         adapter.inbox.subscribe = (target) =>
           Effect.sync(() => {
@@ -1495,7 +1514,7 @@ test('post into an existing thread (other agent posted first) auto-subscribes th
     Effect.scoped(
       Effect.gen(function* () {
         const subscribed: Array<unknown> = []
-        const adapter = yield* memoryAdapter()
+        const adapter = yield* rigAdapter()
         const originalSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
         adapter.inbox.subscribe = (target) =>
           Effect.sync(() => {
@@ -1505,7 +1524,14 @@ test('post into an existing thread (other agent posted first) auto-subscribes th
         // Seed the thread with a prior message from a different bot so the topic
         // exists before our agent participates. ensureBound below acquires a
         // separate name ("test-bot") — we acquire-then-release a peer first.
-        yield* adapter.identity.acquire(decodeBotNameSync('peer-bot'))
+        // The fixture writes below are a PEER's, not this seat's. Every write
+        // now goes through the bind seam, so the fixture declares who it is
+        // binding as rather than reaching past it; `buildDeps` re-installs the
+        // seat's own binder afterwards.
+        yield* installBinder(
+          adapter.binderRef,
+          adapter.identity.acquire(decodeBotNameSync('peer-bot')),
+        )
         yield* adapter.publisher.post(
           channelRef.name,
           decodeMessageBodySync('opening line from peer'),
@@ -1546,7 +1572,7 @@ test('react to a message in a thread auto-subscribes the reactor', () =>
     Effect.scoped(
       Effect.gen(function* () {
         const subscribed: Array<unknown> = []
-        const adapter = yield* memoryAdapter()
+        const adapter = yield* rigAdapter()
         const originalSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
         adapter.inbox.subscribe = (target) =>
           Effect.sync(() => {
@@ -1555,7 +1581,14 @@ test('react to a message in a thread auto-subscribes the reactor', () =>
         const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
         // Pre-existing thread message authored by a peer — bypasses the tool so
         // no post-side auto-sub fires before the react under test.
-        yield* adapter.identity.acquire(decodeBotNameSync('peer-bot'))
+        // The fixture writes below are a PEER's, not this seat's. Every write
+        // now goes through the bind seam, so the fixture declares who it is
+        // binding as rather than reaching past it; `buildDeps` re-installs the
+        // seat's own binder afterwards.
+        yield* installBinder(
+          adapter.binderRef,
+          adapter.identity.acquire(decodeBotNameSync('peer-bot')),
+        )
         const targetRef = yield* adapter.publisher.post(
           channelRef.name,
           decodeMessageBodySync('reactable in thread'),
@@ -1597,14 +1630,21 @@ test('react to a top-level (no-thread) message does NOT auto-subscribe', () =>
     Effect.scoped(
       Effect.gen(function* () {
         const subscribed: Array<unknown> = []
-        const adapter = yield* memoryAdapter()
+        const adapter = yield* rigAdapter()
         const originalSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
         adapter.inbox.subscribe = (target) =>
           Effect.sync(() => {
             subscribed.push(target)
           }).pipe(Effect.flatMap(() => originalSubscribe(target)))
         const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
-        yield* adapter.identity.acquire(decodeBotNameSync('peer-bot'))
+        // The fixture writes below are a PEER's, not this seat's. Every write
+        // now goes through the bind seam, so the fixture declares who it is
+        // binding as rather than reaching past it; `buildDeps` re-installs the
+        // seat's own binder afterwards.
+        yield* installBinder(
+          adapter.binderRef,
+          adapter.identity.acquire(decodeBotNameSync('peer-bot')),
+        )
         const targetRef = yield* adapter.publisher.post(
           channelRef.name,
           decodeMessageBodySync('top-level reactable'),
@@ -1637,14 +1677,21 @@ test('reacting to the same thread twice subscribes only once (idempotency)', () 
     Effect.scoped(
       Effect.gen(function* () {
         const subscribed: Array<unknown> = []
-        const adapter = yield* memoryAdapter()
+        const adapter = yield* rigAdapter()
         const originalSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
         adapter.inbox.subscribe = (target) =>
           Effect.sync(() => {
             subscribed.push(target)
           }).pipe(Effect.flatMap(() => originalSubscribe(target)))
         const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
-        yield* adapter.identity.acquire(decodeBotNameSync('peer-bot'))
+        // The fixture writes below are a PEER's, not this seat's. Every write
+        // now goes through the bind seam, so the fixture declares who it is
+        // binding as rather than reaching past it; `buildDeps` re-installs the
+        // seat's own binder afterwards.
+        yield* installBinder(
+          adapter.binderRef,
+          adapter.identity.acquire(decodeBotNameSync('peer-bot')),
+        )
         const a = yield* adapter.publisher.post(channelRef.name, decodeMessageBodySync('one'), {
           thread: decodeThreadNameSync('payments'),
         })
@@ -1691,7 +1738,7 @@ test('unreact does not change subscription state (no unsub-on-disengage)', () =>
       Effect.gen(function* () {
         const subscribed: Array<unknown> = []
         const unsubscribed: Array<unknown> = []
-        const adapter = yield* memoryAdapter()
+        const adapter = yield* rigAdapter()
         const originalSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
         const originalUnsubscribe = adapter.inbox.unsubscribe.bind(adapter.inbox)
         adapter.inbox.subscribe = (target) =>
@@ -1703,7 +1750,14 @@ test('unreact does not change subscription state (no unsub-on-disengage)', () =>
             unsubscribed.push(target)
           }).pipe(Effect.flatMap(() => originalUnsubscribe(target)))
         const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
-        yield* adapter.identity.acquire(decodeBotNameSync('peer-bot'))
+        // The fixture writes below are a PEER's, not this seat's. Every write
+        // now goes through the bind seam, so the fixture declares who it is
+        // binding as rather than reaching past it; `buildDeps` re-installs the
+        // seat's own binder afterwards.
+        yield* installBinder(
+          adapter.binderRef,
+          adapter.identity.acquire(decodeBotNameSync('peer-bot')),
+        )
         const targetRef = yield* adapter.publisher.post(
           channelRef.name,
           decodeMessageBodySync('reactable'),
@@ -1929,7 +1983,7 @@ const withDownloadRig = (
   ) => Effect.Effect<{ filePath: string; contentType: string; size: number }>,
 ): Effect.Effect<DownloadRig, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const adapter = yield* memoryAdapter()
+    const adapter = yield* rigAdapter()
     const deps = yield* buildDeps(adapter)
     yield* deps.ensureBound().pipe(Effect.orDie)
     const rig = yield* mountAndConnect(adapter, deps, { downloadFile })
@@ -2049,7 +2103,7 @@ const withUploadRig = (
   upload: (path: string) => Effect.Effect<{ reference: string; filename: string; size: number }>,
 ): Effect.Effect<UploadRig, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const adapter = yield* memoryAdapter()
+    const adapter = yield* rigAdapter()
     const deps = yield* buildDeps(adapter)
     yield* deps.ensureBound().pipe(Effect.orDie)
     const rig = yield* mountAndConnect(adapter, deps, { upload })

@@ -32,6 +32,7 @@ import {
   Exit,
   Layer,
   Option,
+  Ref,
   Scope,
   Stream,
   TestClock,
@@ -50,6 +51,12 @@ import type { IdentityCache } from './identity-cache.ts'
 import { completeAsSubstrate, type ZulipAdapter } from './memory-substrate.ts'
 import { ResumeOutcomeLive } from './resume-outcome.ts'
 import { clientDisconnect, forkIdleSweep, makeProgram, type ProgramParams } from './server.ts'
+import type { BindOnDemand } from './session-binder.ts'
+import {
+  bindThrough,
+  SessionBinderLive,
+  SessionBinder as SessionBinderTag,
+} from './session-binder.ts'
 import { SessionIdLive } from './session-id.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 import type { SubscriptionStore } from './subscription-store.ts'
@@ -102,6 +109,10 @@ const runProgram = (
   env: Record<string, string | undefined>,
   adapter: ZulipAdapter,
   params: ProgramParams = {},
+  // The holder the program installs its bind strategy into. Tests whose
+  // adapter actually needs to bind pass the same ref they built it around;
+  // the rest get a fresh one nobody reads.
+  binderRef?: Ref.Ref<Option.Option<BindOnDemand>>,
 ) => {
   // Default to a discarding capture, not the stderr logger: boot emits real
   // diagnostics (the applied subscribe set among them) and a test run's output
@@ -117,6 +128,9 @@ const runProgram = (
             Layer.succeed(CursorStoreTag, inMemoryCursorStore()),
             Layer.succeed(SubscriptionStoreTag, inMemorySubscriptionStore()),
             SessionIdLive,
+            binderRef === undefined
+              ? SessionBinderLive
+              : Layer.succeed(SessionBinderTag, binderRef),
             ResumeOutcomeLive,
             loggerLayer,
           ),
@@ -362,7 +376,10 @@ test('main subscribes nothing when COMMY_SUBSCRIBE is unset and no project is se
 })
 
 test('main drives a real memory adapter through acquire + env subscribe + close', async () => {
-  const adapter = await Effect.runPromise(memoryAdapter())
+  // `runProgram` provides SessionBinderLive and the program installs into it,
+  // so the adapter must read its binder through that same holder.
+  const binderRef = await Effect.runPromise(Ref.make<Option.Option<BindOnDemand>>(Option.none()))
+  const adapter = await Effect.runPromise(memoryAdapter({ bindOnDemand: bindThrough(binderRef) }))
   const subscribed: SubscriptionTarget[] = []
   const realSubscribe = adapter.inbox.subscribe.bind(adapter.inbox)
   const spy: typeof adapter.inbox.subscribe = (target) =>
@@ -390,10 +407,15 @@ test('main drives a real memory adapter through acquire + env subscribe + close'
   // The catch-up failure is non-fatal, and this test asserts only the
   // subscribe wiring — catch-up integration is covered by the
   // integration harness via its name-lenient history wrapper.
-  await runProgram(env, memoryAdapterAsZulipShape, {
-    loggerLayer: captureLogger(logs),
-    readGitContext: () => Effect.succeed(NotInRepo()),
-  })
+  await runProgram(
+    env,
+    memoryAdapterAsZulipShape,
+    {
+      loggerLayer: captureLogger(logs),
+      readGitContext: () => Effect.succeed(NotInRepo()),
+    },
+    binderRef,
+  )
   // No project → no Type-1 defaults; only the env tokens.
   expect(subscribed).toEqual([
     decodeChannelNameSync('home'),
