@@ -85,13 +85,14 @@ export const seedDefaultsIfFresh = (
  * loading, so a subscribe/unsubscribe that raced the load is never lost.
  *
  * Restore is a reaction to the session_id becoming known, not a thing a specific
- * action triggers: a resumed MCP child boots session-blind (the id is not in its
- * env). The store's `read` awaits the shared session-id `Deferred` internally, so
- * this is forked once at boot (server.ts) and parks on that read until any
- * source — the boot-env feeder for a listen-only seat, or the first tool call —
- * fills the id, then rehydrates. The `Deferred`'s single completion is the
- * once-guard; no session_id threads through this signature and no per-session
- * memo is needed.
+ * action triggers: a host that does not inject the session id into the MCP
+ * child's env boots session-blind, and there the id cannot arrive until the seat
+ * itself acts. The store's `read` awaits the shared session-id `Deferred`
+ * internally, so this is forked once at boot (server.ts) and parks on that read
+ * until any source — the boot-env feeder, which covers a Claude Code seat whether
+ * fresh or resumed, or the first tool call of an acting seat — fills the id, then
+ * rehydrates. The `Deferred`'s single completion is the once-guard; no session_id
+ * threads through this signature and no per-session memo is needed.
  */
 export const restoreSubscriptions = (
   deps: Pick<SubscriptionRestoreDeps, 'subscriptionStore' | 'narrowSet' | 'inbox'>,
