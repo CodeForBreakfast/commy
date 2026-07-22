@@ -47,6 +47,9 @@ test('assembles a dependency-free @codeforbreakfast/commy-mcp whose version trac
     // The bundle inlines every dependency — the published package has none.
     expect(onDisk['dependencies']).toBeUndefined()
     expect(onDisk['devDependencies']).toBeUndefined()
+    // A lenient, ceiling-free Node floor: the artifact runs on 20+ and an open
+    // upper bound keeps it running on newer runtimes. Advisory (npm warns).
+    expect(onDisk['engines']).toEqual({ node: '>=20' })
   } finally {
     rmSync(out, { recursive: true, force: true })
   }

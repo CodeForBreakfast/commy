@@ -19,6 +19,7 @@ export interface PublishManifest {
   readonly type: 'module'
   readonly bin: string
   readonly files: ReadonlyArray<string>
+  readonly engines: { readonly node: string }
   readonly publishConfig: { readonly access: 'public' }
   readonly author: { readonly name: string; readonly email: string }
   readonly repository: { readonly type: 'git'; readonly url: string }
@@ -45,6 +46,11 @@ function publishManifest(version: string): PublishManifest {
     type: 'module',
     bin: './server.js',
     files: ['server.js'],
+    // The shipped bundle's true floor is Node 18 (every node: builtin it
+    // imports has existed since 18; undici is not bundled), but 20 is the
+    // lenient, honest floor — a large installed base without claiming support
+    // for long-EOL 18. No upper bound, so newer runtimes keep working.
+    engines: { node: '>=20' },
     publishConfig: { access: 'public' },
     author: { name: 'Code For Breakfast', email: 'info@codeforbreakfast.co' },
     repository: { type: 'git', url: 'https://github.com/CodeForBreakfast/commy.git' },
