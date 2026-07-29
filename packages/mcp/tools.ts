@@ -49,6 +49,7 @@ import type { ProjectSlug, SessionId } from './bootstrap.ts'
 import { parseSessionId } from './bootstrap.ts'
 import type { IdentityCache } from './identity-cache.ts'
 import type { NarrowSet } from './narrow-set.ts'
+import { currentSessionContext, withSessionContext } from './session-context.ts'
 import { intentToTarget, parseSubscribeTarget } from './subscribe-parser.ts'
 
 interface ToolInputSchema {
@@ -519,16 +520,32 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
   const projectForArgs = (
     args: Readonly<Record<string, unknown>>,
   ): Effect.Effect<ProjectSlug | undefined> => projectForCwd(readCwd(args))
-  // The single binding choke-point every PreToolUse-stamped tool routes
-  // through: feed the session_id, then resolve the ephemeral identity for it.
-  // The returned `ensureBound` thunk IS the acquire — the attribution tools
-  // invoke it, `current_identity` leaves it (a passive read that still feeds).
-  const ensureBoundForArgs = (args: Readonly<Record<string, unknown>>) =>
-    Effect.gen(function* () {
+  // Every tool call that carries arguments supplies its calling session's
+  // context, uniformly. This DECIDES NOTHING about identity: it feeds the
+  // shared session-id deferred (comms-k7cv) and puts the naming inputs where
+  // the bind seam can read them for the duration of the call.
+  //
+  // What replaced the old per-tool `ensureBoundForArgs` invocations is not a
+  // shorter list — it is the absence of one. Whether a call needs an identity
+  // is decided at the adapter port, by whether it reaches for a bound
+  // credential (`boundHttp`), so there is no table here that has to agree with
+  // that one forever. The three handlers taking no `args` at all supply
+  // nothing because they have nothing to supply, not because a list excuses
+  // them; they are directory reads, and a read never binds.
+  const runFor =
+    (args: Readonly<Record<string, unknown>>) =>
+    <A, E>(effect: Effect.Effect<A, E>): Promise<A> => {
       const sessionId = readSessionId(args)
-      yield* feedSession(sessionId)
-      return yield* identityCache.ensureBoundFor(sessionId, yield* projectForArgs(args))
-    })
+      return runEdge(
+        projectForArgs(args).pipe(
+          Effect.flatMap((project) =>
+            feedSession(sessionId).pipe(
+              Effect.zipRight(withSessionContext(effect, { sessionId, project })),
+            ),
+          ),
+        ),
+      )
+    }
   // Sticky engagement: active participation in a thread —
   // posting or reacting — implies interest in its replies. Idempotent;
   // narrow-set add is set-backed and inbox.subscribe mirrors the explicit
@@ -572,7 +589,15 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args): Promise<CurrentIdentityResult> => {
-        const ensureBound = await runEdge(ensureBoundForArgs(args))
+        const run = runFor(args)
+        // Passive: reads whether this session is bound, never binds. The
+        // context supplied by `runFor` has already fed the session-id
+        // deferred, so a listen-only seat still contributes its id by asking.
+        const ensureBound = await run(
+          currentSessionContext.pipe(
+            Effect.flatMap((ctx) => identityCache.ensureBoundFor(ctx.sessionId, ctx.project)),
+          ),
+        )
         const current = ensureBound.current()
         if (current === undefined) {
           return { state: 'unbound', identity: null }
@@ -580,7 +605,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         cache.rememberIdentity(current.identity)
         const bound = { state: 'bound' as const, identity: identityShape(current.identity) }
         try {
-          const threads = await runEdge(adapter.history.recentThreads(current.identity.id))
+          const threads = await run(adapter.history.recentThreads(current.identity.id))
           return {
             ...bound,
             recent_threads: threads.map((t) => ({
@@ -611,7 +636,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        const resolved = await runEdge(
+        const run = runFor(args)
+        const resolved = await run(
           Schema.decodeUnknown(ResolveArgs)(args).pipe(
             Effect.flatMap(({ name }) => adapter.identity.resolve(name)),
           ),
@@ -687,8 +713,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        await runEdge(ensureBoundForArgs(args).pipe(Effect.flatMap((ensureBound) => ensureBound())))
-        const ref = await runEdge(
+        const run = runFor(args)
+        const ref = await run(
           Effect.gen(function* () {
             const { channel_name, body, thread, mentions, reply_to } =
               yield* Schema.decodeUnknown(PostArgs)(args)
@@ -749,8 +775,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        await runEdge(ensureBoundForArgs(args).pipe(Effect.flatMap((ensureBound) => ensureBound())))
-        const ref = await runEdge(
+        const run = runFor(args)
+        const ref = await run(
           Effect.gen(function* () {
             const { message_id, body, channel_name } =
               yield* Schema.decodeUnknown(EditMessageArgs)(args)
@@ -787,8 +813,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        await runEdge(ensureBoundForArgs(args).pipe(Effect.flatMap((ensureBound) => ensureBound())))
-        const { ref, threadName } = await runEdge(
+        const run = runFor(args)
+        const { ref, threadName } = await run(
           Effect.gen(function* () {
             const { message_id, emoji, channel_name, thread } =
               yield* Schema.decodeUnknown(ReactArgs)(args)
@@ -829,8 +855,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        await runEdge(ensureBoundForArgs(args).pipe(Effect.flatMap((ensureBound) => ensureBound())))
-        await runEdge(
+        const run = runFor(args)
+        await run(
           Effect.gen(function* () {
             const { message_id, emoji, channel_name } = yield* Schema.decodeUnknown(ReactArgs)(args)
             const ref = yield* reconstructMessageRef(cache, message_id, channel_name)
@@ -859,17 +885,16 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        await runEdge(
+        const run = runFor(args)
+        await run(
           Effect.gen(function* () {
             const { target: raw } = yield* Schema.decodeUnknown(SubscribeArgs)(args)
             const intent = yield* parseSubscribeTarget(raw)
+            // The shared session-id deferred is already fed by `runFor`, which
+            // runs before this effect — subscribe is a feeder like every other
+            // argument-carrying call now, so a subscribe-first resumed seat (no
+            // boot-env id) still never parks the store's id-keyed await.
             const sessionId = readSessionId(args)
-            // Feed the shared session-id deferred first: subscribe is a feeder,
-            // and the session-bound store's restore/persist below await this
-            // deferred to resolve their id-keyed path. Without this a
-            // subscribe-first resumed seat (no boot-env id) would park on the
-            // await — the deaf-resume case this reactive core exists to close.
-            yield* feedSession(sessionId)
             // Restore (or seed) this session's set before the first mutation, so
             // the snapshot persisted below captures the full live set and the
             // store's presence stays a true resume signal.
@@ -912,14 +937,13 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        await runEdge(
+        const run = runFor(args)
+        await run(
           Effect.gen(function* () {
             const { target: raw } = yield* Schema.decodeUnknown(SubscribeArgs)(args)
             const intent = yield* parseSubscribeTarget(raw)
+            // Fed by `runFor` before this effect runs (see subscribe).
             const sessionId = readSessionId(args)
-            // Feed the shared session-id deferred first (see subscribe): the
-            // session-bound store's restore/persist below await it.
-            yield* feedSession(sessionId)
             if (sessionId !== undefined && deps.ensureSessionSubscriptions !== undefined) {
               yield* deps.ensureSessionSubscriptions(sessionId, yield* projectForArgs(args))
             }
@@ -950,7 +974,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        const messages = await runEdge(
+        const run = runFor(args)
+        const messages = await run(
           Effect.gen(function* () {
             const parsed = yield* Schema.decodeUnknown(ReadChannelArgs)(args)
             const channel = yield* decodeChannelName(parsed.channel_name)
@@ -961,7 +986,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           cache.rememberChannel(m.ref.channel)
           cache.rememberIdentity(m.sender)
         }
-        return { messages: await runEdge(Effect.forEach(messages, messageShape)) }
+        return { messages: await run(Effect.forEach(messages, messageShape)) }
       },
     },
     {
@@ -979,7 +1004,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        const messages = await runEdge(
+        const run = runFor(args)
+        const messages = await run(
           Effect.gen(function* () {
             const parsed = yield* Schema.decodeUnknown(ReadThreadArgs)(args)
             const channel = yield* decodeChannelName(parsed.channel_name)
@@ -994,7 +1020,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           cache.rememberChannel(m.ref.channel)
           cache.rememberIdentity(m.sender)
         }
-        return { messages: await runEdge(Effect.forEach(messages, messageShape)) }
+        return { messages: await run(Effect.forEach(messages, messageShape)) }
       },
     },
     {
@@ -1011,7 +1037,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        await runEdge(
+        const run = runFor(args)
+        await run(
           Effect.gen(function* () {
             const parsed = yield* Schema.decodeUnknown(ThreadResolutionArgs)(args)
             yield* adapter.publisher.resolveThread(
@@ -1037,7 +1064,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        await runEdge(
+        const run = runFor(args)
+        await run(
           Effect.gen(function* () {
             const parsed = yield* Schema.decodeUnknown(ThreadResolutionArgs)(args)
             yield* adapter.publisher.unresolveThread(
@@ -1062,7 +1090,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        const description = await runEdge(
+        const run = runFor(args)
+        const description = await run(
           Effect.gen(function* () {
             const parsed = yield* Schema.decodeUnknown(ChannelDescriptionArgs)(args)
             return yield* adapter.directory.channelDescription(
@@ -1090,7 +1119,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        await runEdge(
+        const run = runFor(args)
+        await run(
           Effect.gen(function* () {
             const parsed = yield* Schema.decodeUnknown(SetChannelDescriptionArgs)(args)
             // An empty string is how a caller clears a description over a wire
@@ -1129,7 +1159,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        const permalink = await runEdge(
+        const run = runFor(args)
+        const permalink = await run(
           Effect.gen(function* () {
             const parsed = yield* Schema.decodeUnknown(MessageLinkArgs)(args)
             const id = yield* decodeMessageId(parsed.message_id)
@@ -1166,7 +1197,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        const presence = await runEdge(
+        const run = runFor(args)
+        const presence = await run(
           Effect.gen(function* () {
             const { identity_id } = yield* Schema.decodeUnknown(PresenceArgs)(args)
             const identity = cache.identityById.get(yield* decodeIdentityId(identity_id))
@@ -1200,7 +1232,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        const result = await runEdge(
+        const run = runFor(args)
+        const result = await run(
           Schema.decodeUnknown(DownloadFileArgs)(args).pipe(
             Effect.flatMap(({ url_path }) => decodeAttachmentRef(url_path)),
             Effect.flatMap(download),
@@ -1232,11 +1265,12 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         additionalProperties: false,
       },
       handler: async (args) => {
-        const { path } = await runEdge(Schema.decodeUnknown(UploadFileArgs)(args))
+        const run = runFor(args)
+        const { path } = await run(Schema.decodeUnknown(UploadFileArgs)(args))
         if (!path.startsWith('/')) {
           throw new Error(`upload_file: path must be absolute — received: ${path}`)
         }
-        const result = await runEdge(upload(path))
+        const result = await run(upload(path))
         return {
           reference: result.reference,
           filename: result.filename,

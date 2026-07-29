@@ -1,5 +1,11 @@
 import { expect, test } from 'bun:test'
-import type { ChannelRef, Identity, MessageRef } from '@commy/core/ports'
+import type {
+  AcquiredIdentity,
+  BindError,
+  ChannelRef,
+  Identity,
+  MessageRef,
+} from '@commy/core/ports'
 import {
   ChannelPermalinkSchema,
   DirectoryError,
@@ -20,6 +26,7 @@ import {
   mentionedIdentities,
   PublisherError,
   ThreadPermalinkSchema,
+  UnboundEphemeralSession,
   UnknownChannel,
   type UnknownIdentity,
   UnresolvedMention,
@@ -31,7 +38,7 @@ import {
   type StubHttpClient,
 } from '@commy/testing/stub-http-client'
 import { HttpClient } from '@effect/platform'
-import { Cause, Effect, Exit, Fiber, Option, Redacted, TestClock, TestContext } from 'effect'
+import { Cause, Effect, Exit, Fiber, Option, Redacted, Ref, TestClock, TestContext } from 'effect'
 import type { ZulipAdapter, ZulipAdapterConfig } from './adapter.ts'
 import { attachmentReference, zulipAdapter as zulipAdapterRaw } from './adapter.ts'
 import { ApiKey, BotEmail, decodeUserUploadPathSync, RealmUrl, ZulipApiError } from './http.ts'
@@ -801,6 +808,139 @@ effectTest('publisher.post returns a MessageRef built from the response id', () 
     expect(ref.id).toEqual(decodeMessageIdSync('99'))
     expect(ref.channel).toMatchObject(generalChannel)
     expect(ref.thread).toEqual(Option.none())
+  }),
+)
+
+/**
+ * A `bindOnDemand` that counts its invocations and binds through the very
+ * adapter it is configured on. The adapter cannot be referenced inside its own
+ * construction, so the binder is wired immediately afterwards — `bind` is
+ * suspended, and no write can reach it before construction returns.
+ */
+const makeCountingBinder = (
+  name = decodeBotNameSync('hermes-agent'),
+): Effect.Effect<{
+  readonly bind: Effect.Effect<AcquiredIdentity, BindError>
+  readonly calls: Effect.Effect<number>
+  readonly wire: (adapter: ZulipAdapter) => Effect.Effect<void>
+}> =>
+  Effect.gen(function* () {
+    const callsRef = yield* Ref.make(0)
+    const targetRef = yield* Ref.make<Option.Option<ZulipAdapter>>(Option.none())
+    return {
+      bind: Ref.update(callsRef, (n) => n + 1).pipe(
+        Effect.zipRight(Ref.get(targetRef)),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.dieMessage('binder ran before the adapter was wired'),
+            onSome: (adapter: ZulipAdapter) => adapter.identity.acquire(name),
+          }),
+        ),
+      ),
+      calls: Ref.get(callsRef),
+      wire: (adapter) => Ref.set(targetRef, Option.some(adapter)),
+    }
+  })
+
+// The mint seam (comms-g5zh.1). Needing a bound credential IS the declaration
+// that the realm is about to hold state, so a write that reaches `boundHttp`
+// on an unbound seat binds through the injected binder rather than asserting
+// a prior `identity.acquire`. There is no second list of which verbs need an
+// identity: the port declares its own need by reaching for the credential.
+effectTest('publisher.post binds on demand when the seat has never acquired', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedUsers(stub, [HERMES])
+    yield* seedRegenerate(stub, HERMES.user_id)
+    yield* seedSendMessage(stub, 42)
+    const binder = yield* makeCountingBinder()
+    const adapter = yield* zulipAdapter(stub, {
+      ...(yield* makeConfig()),
+      bindOnDemand: binder.bind,
+    })
+    yield* binder.wire(adapter)
+    yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hello world'))
+    expect(yield* binder.calls).toBe(1)
+    // Bound, not minter — the message carries the seat's own principal.
+    expect(
+      (yield* findRequest(stub, 'POST', '/api/v1/messages')).headers.get('authorization'),
+    ).toBe(`Basic ${btoa('hermes-agent-bot@example.com:fresh-key')}`)
+  }),
+)
+
+// The binder is asked on EVERY write — "is something bound?" and "may THIS
+// caller use it?" are different questions, and only the binder knows the
+// second. What must not repeat is the MINT: asking again is a Ref read, not a
+// round-trip.
+effectTest('publisher.post asks the binder per write but mints only once', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedUsers(stub, [HERMES])
+    yield* seedRegenerate(stub, HERMES.user_id)
+    yield* seedSendMessage(stub, 42)
+    const binder = yield* makeCountingBinder()
+    const adapter = yield* zulipAdapter(stub, {
+      ...(yield* makeConfig()),
+      bindOnDemand: binder.bind,
+    })
+    yield* binder.wire(adapter)
+    yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('one'))
+    yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('two'))
+    expect(yield* binder.calls).toBe(2)
+    const mints = yield* stub.captured.pipe(
+      Effect.map(
+        (rs) =>
+          rs.filter((r) => r.url.pathname === `/api/v1/bots/${HERMES.user_id}/api_key/regenerate`)
+            .length,
+      ),
+    )
+    expect(mints).toBe(1)
+  }),
+)
+
+// The old `requireBound` DIED here with a bare untyped Error. A seat whose host
+// supplies no session_id feeder must instead get a typed, catchable refusal
+// naming the fix — so assert the tag, not merely that the call failed.
+effectTest('publisher.post refuses with a typed UnboundEphemeralSession when binding fails', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 42)
+    const config = yield* makeConfig()
+    const adapter = yield* zulipAdapter(stub, {
+      ...config,
+      bindOnDemand: Effect.fail(
+        new UnboundEphemeralSession({ message: 'commy: ephemeral mode requires a session_id' }),
+      ),
+    })
+    const exit = yield* Effect.exit(
+      adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hello world')),
+    )
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) {
+      // A typed failure, not a defect: the old behaviour squashed into the
+      // die channel and could not be caught by tag.
+      expect(Cause.isDie(exit.cause)).toBe(false)
+      const failure = Cause.failureOption(exit.cause)
+      expect(Option.map(failure, (e) => e._tag)).toEqual(Option.some('UnboundEphemeralSession'))
+    }
+  }),
+)
+
+effectTest('publisher.post refuses with a typed error when no binder is configured', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 42)
+    const config = yield* makeConfig()
+    const adapter = yield* zulipAdapter(stub, config)
+    const exit = yield* Effect.exit(
+      adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hello world')),
+    )
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) {
+      expect(Cause.isDie(exit.cause)).toBe(false)
+      const failure = Cause.failureOption(exit.cause)
+      expect(Option.map(failure, (e) => e._tag)).toEqual(Option.some('UnboundEphemeralSession'))
+    }
   }),
 )
 
@@ -2708,21 +2848,38 @@ effectTest(
     }),
 )
 
+// Was: "pre-acquire call dies on the 'not acquired' invariant". The invariant
+// it guards — a seat that could not bind never falls back to publishing as the
+// MINTER — is unchanged and asserted below. What changed with the mint seam
+// (comms-g5zh.1) is the SHAPE of the refusal: a typed, catchable
+// UnboundEphemeralSession in place of an untyped die. The die is asserted
+// against in the mint-seam tests above.
 effectTest(
-  'publisher.post still requires acquire — pre-acquire call dies on the "not acquired" invariant',
+  'publisher.post refuses rather than falling back to minter creds when it cannot bind',
   () =>
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
       yield* seedUsers(stub, [])
-      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+      const adapter = yield* zulipAdapter(stub, {
+        ...(yield* makeConfig()),
+        bindOnDemand: Effect.fail(
+          new UnboundEphemeralSession({ message: 'commy: ephemeral mode requires a session_id' }),
+        ),
+      })
       const exit = yield* Effect.exit(
         adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hello')),
       )
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isFailure(exit)) {
-        expect(Cause.isDie(exit.cause)).toBe(true)
-        expect(String(Cause.squash(exit.cause))).toMatch(/not acquired/)
+        expect(Option.map(Cause.failureOption(exit.cause), (e) => e._tag)).toEqual(
+          Option.some('UnboundEphemeralSession'),
+        )
       }
+      // The refusal is raised BEFORE the write, so nothing reached the wire —
+      // in particular no message went out under the minter's principal.
+      expect(
+        yield* stub.captured.pipe(Effect.map((rs) => rs.map((r) => r.url.pathname))),
+      ).not.toContain('/api/v1/messages')
     }),
 )
 

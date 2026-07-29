@@ -3,12 +3,14 @@ import { decodeDisplayNameSync } from '@commy/core/ports'
 import { type MemoryAdapter, memoryAdapter } from '@commy/memory/adapter'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { Effect, Option, type Scope } from 'effect'
+import { Effect, Option, Ref, type Scope } from 'effect'
 import type { ProjectSlug, SessionId } from './bootstrap.ts'
 import { parseSessionId, sanitiseProjectSlug } from './bootstrap.ts'
 import { createEphemeralIdentityCache } from './identity-cache.ts'
 import { buildMcpServer } from './mcp-server.ts'
 import { createNarrowSet } from './narrow-set.ts'
+import type { BindOnDemand } from './session-binder.ts'
+import { binderFor, bindThrough, installBinder } from './session-binder.ts'
 import { registerTools } from './tools.ts'
 
 const slug = (raw: string): ProjectSlug => {
@@ -31,12 +33,18 @@ const buildSessionRig = (
 ): Effect.Effect<SessionRig, never, Scope.Scope> =>
   Effect.gen(function* () {
     const idleReleaseMs = options.idleReleaseMs ?? 60 * 60 * 1000
-    const adapter = yield* memoryAdapter()
+    // The mint seam, wired as `server.ts` wires it. The adapter reads through a
+    // holder; the binder is installed once the cache exists, because the cache
+    // is built FROM the adapter's acquire. Nothing in the tool layer decides
+    // whether a call binds — reaching for a bound identity is the decision.
+    const binderRef = yield* Ref.make<Option.Option<BindOnDemand>>(Option.none())
+    const adapter = yield* memoryAdapter({ bindOnDemand: bindThrough(binderRef) })
     const identityCache = yield* createEphemeralIdentityCache({
       acquire: adapter.identity.acquire,
       release: adapter.identity.release,
       idleReleaseMs,
     })
+    yield* installBinder(binderRef, binderFor(identityCache))
     const narrowSet = createNarrowSet()
     const server = buildMcpServer()
     const toolsCache = registerTools(server, {

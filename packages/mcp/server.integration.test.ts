@@ -40,7 +40,7 @@ import {
 import { memoryAdapter } from '@commy/memory/adapter'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { Deferred, Effect, FiberId, Layer, Option, Stream } from 'effect'
+import { Deferred, Effect, FiberId, Layer, Option, Ref, Stream } from 'effect'
 import { parseEnv, parseSessionId, substrateAdapterLayer } from './bootstrap.ts'
 import type { CursorStore } from './cursor-store.ts'
 import { CursorStoreTag } from './cursor-store.ts'
@@ -51,6 +51,8 @@ import { CursorStoreTag } from './cursor-store.ts'
 import { completeAsSubstrate } from './memory-substrate.ts'
 import { ResumeOutcome as ResumeOutcomeTag } from './resume-outcome.ts'
 import { makeProgram } from './server.ts'
+import type { BindOnDemand } from './session-binder.ts'
+import { bindThrough, SessionBinder as SessionBinderTag } from './session-binder.ts'
 import { SessionId as SessionIdTag, type SessionIdValue } from './session-id.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 import type { SubscriptionStore } from './subscription-store.ts'
@@ -220,7 +222,12 @@ interface Harness {
 }
 
 const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> => {
-  const base = await Effect.runPromise(memoryAdapter())
+  // The mint seam, wired exactly as production wires it: the adapter is built
+  // reading through a holder the program installs into once the identity cache
+  // exists. Without this the memory adapter has no way to bind and every write
+  // refuses — which is the correct refusal, just not what these tests exercise.
+  const binderRef = await Effect.runPromise(Ref.make<Option.Option<BindOnDemand>>(Option.none()))
+  const base = await Effect.runPromise(memoryAdapter({ bindOnDemand: bindThrough(binderRef) }))
 
   // Seed the channels/agents/humans the test asked for. Channels are addressed
   // by name end-to-end, so the memory adapter resolves a bare ChannelName to its
@@ -373,6 +380,7 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
             Layer.succeed(SubscriptionStoreTag, subscriptionStore),
             Layer.succeed(SessionIdTag, sessionIdDeferred),
             Layer.succeed(ResumeOutcomeTag, resumeOutcomeDeferred),
+            Layer.succeed(SessionBinderTag, binderRef),
             loggerLayer,
           ),
           testPlatformLayer(env),

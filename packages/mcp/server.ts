@@ -46,6 +46,12 @@ import { createNarrowSet } from './narrow-set.ts'
 import { FileQueueStateStoreLive, type QueueStateStoreTag } from './queue-state-store.ts'
 import { raceReleaseAgainstTimeout } from './release-shutdown.ts'
 import { ResumeOutcomeLive, ResumeOutcome as ResumeOutcomeTag } from './resume-outcome.ts'
+import {
+  binderFor,
+  installBinder,
+  SessionBinderLive,
+  SessionBinder as SessionBinderTag,
+} from './session-binder.ts'
 import { SessionIdLive, SessionId as SessionIdTag } from './session-id.ts'
 import type { SubscribeIntent, SubscribeTokenError } from './subscribe-parser.ts'
 import { intentToTarget, intentToToken } from './subscribe-parser.ts'
@@ -340,6 +346,7 @@ export const makeProgram = (
   | SubscriptionStoreTag
   | SessionIdTag
   | ResumeOutcomeTag
+  | SessionBinderTag
   | FileSystem.FileSystem
   | CommandExecutor.CommandExecutor
 > =>
@@ -626,6 +633,18 @@ export const makeProgram = (
 
       const identityCache = yield* buildIdentityCache(adapter, parsed.botName, ephemeralOnAcquire)
 
+      // Close the mint seam. From here a write that reaches `boundHttp` on an
+      // unbound seat binds through the cache, under the calling session's own
+      // context — the same `ensureBound` the tool layer used to invoke by
+      // name, now reached because the port asked rather than because a list
+      // said so.
+      //
+      // `currentSessionContext` is read, never awaited: a call with no session
+      // id resolves to the cache's unbound stub, which fails immediately with
+      // UnboundEphemeralSession. Nothing here can park a caller waiting for an
+      // identity to arrive.
+      yield* installBinder(yield* SessionBinderTag, binderFor(identityCache))
+
       // Persistent mode (COMMY_BOT_NAME set): eager acquire so a
       // misconfigured concierge dies at boot rather than on first message.
       // The single-identity cache ignores the session_id.
@@ -879,7 +898,8 @@ export const makeProgram = (
  * program and every setter/awaiter reference it. Providing it separately to
  * each requirer would mint distinct deferreds — a setter would complete one
  * while awaiters block on another. `FileQueueStateStoreLive` is likewise
- * provided once (feeding the adapter's ephemeral persistence hooks).
+ * provided once (feeding the adapter's ephemeral persistence hooks), as is
+ * `SessionBinderLive` (feeding the adapter's bind-on-demand seam).
  */
 const AppLayer: Layer.Layer<
   | SubstrateAdapter
@@ -887,7 +907,8 @@ const AppLayer: Layer.Layer<
   | SubscriptionStoreTag
   | SessionIdTag
   | QueueStateStoreTag
-  | ResumeOutcomeTag,
+  | ResumeOutcomeTag
+  | SessionBinderTag,
   EnvConfigError,
   HttpClient.HttpClient | FileSystem.FileSystem
 > = Layer.mergeAll(
@@ -899,6 +920,11 @@ const AppLayer: Layer.Layer<
   Layer.provideMerge(FileQueueStateStoreLive),
   Layer.provideMerge(SessionIdLive),
   Layer.provideMerge(ResumeOutcomeLive),
+  // Same one-shared-instance rule as SessionIdLive: the adapter captures this
+  // holder during its layer build and the program installs into it later. Two
+  // instances would leave the adapter reading a holder nobody ever fills, and
+  // every write refusing as unbound.
+  Layer.provideMerge(SessionBinderLive),
 )
 
 /**
@@ -936,6 +962,7 @@ export const MainLive: Layer.Layer<
   | SubscriptionStoreTag
   | SessionIdTag
   | ResumeOutcomeTag
+  | SessionBinderTag
   | HttpClient.HttpClient
   | FileSystem.FileSystem
   | CommandExecutor.CommandExecutor,

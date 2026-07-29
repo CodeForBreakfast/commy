@@ -4,6 +4,7 @@ import type {
   AgentComms,
   AttachmentRef,
   AttachmentStore,
+  BindError,
   BotName,
   ChannelDescription,
   ChannelId,
@@ -50,9 +51,11 @@ import {
   HistoryError,
   IdentityError,
   InboxError,
+  isBindError,
   MessageEditRefused,
   mentionsIdentity,
   PublisherError,
+  UnboundEphemeralSession,
   UnknownChannel,
   UnresolvedMention,
 } from '@commy/core/ports'
@@ -136,6 +139,33 @@ export interface ZulipAdapterConfig {
     readonly name: BotName
     readonly apiKey: Redacted.Redacted<ApiKeyType>
   }
+  /**
+   * Bind this seat to an identity, for a write that has reached
+   * {@link boundHttp} with nothing bound yet. Reaching for a bound credential
+   * IS the declaration that the realm is about to hold state on this seat's
+   * behalf, so the mint decision lives here at the port rather than in a
+   * hand-maintained list of which operations need an identity — there is no
+   * second table to drift out of sync with this one.
+   *
+   * Supplied by the wiring layer, which owns the naming inputs the adapter
+   * cannot see: the calling session's id and project. The wiring closure runs
+   * the round-trip through its own single-flight and then calls
+   * `identity.acquire`, so this hook resolves only after `boundRef` is filled.
+   *
+   * Deliberately a config-injected callback rather than a `Context.Tag` in
+   * `R`, against the general preference in AGENTS.md. `boundHttp` is reached
+   * from {@link MessagePublisher}, whose signatures are the shared port every
+   * adapter implements — putting the binder in `R` would push a requirement
+   * only this adapter has onto the in-memory adapter and every consumer of the
+   * port. Construction-time DI keeps it where the dependency actually is, and
+   * matches the surrounding `onQueueRegister` / `onQueueAdvance` / `resumeQueue`
+   * hooks.
+   *
+   * Omitted, every write that needs a principal refuses with
+   * `UnboundEphemeralSession` — the same typed refusal an ephemeral seat with
+   * no usable `session_id` gets, never an untyped die.
+   */
+  readonly bindOnDemand?: Effect.Effect<AcquiredIdentity, BindError>
   /**
    * Idle timeout (seconds) sent as `idle_queue_timeout` on every events-queue
    * register — both the eager subscribe-time register here and the producer's
@@ -567,15 +597,64 @@ export const zulipAdapter = (
         ),
       )
 
-    // boundHttp is reserved for publisher operations — the three
-    // attribution-producing verbs (post / react / unreact) that leave a
-    // persistent signal on the substrate attributed to this session's
-    // bot. Everything else (inbox / history / directory) flows through
-    // `minterHttp` so the plugin can run pre-acquire.
+    // boundHttp is the mint seam. It is reached by the attribution-producing
+    // verbs — the ones that leave a persistent signal on the substrate
+    // attributed to this session's bot. Everything else (inbox / history /
+    // directory) flows through `minterHttp`, so a seat that only ever reads
+    // never binds: the state a read touches belongs to whoever wrote it.
+    //
+    // Reaching here on an unbound seat BINDS rather than asserting a prior
+    // `identity.acquire`. The credential requirement is the declaration; no
+    // caller-side list decides it. `boundRef` is read through
+    // `SynchronizedRef.get` BEFORE the binder is invoked, so the bind
+    // round-trip enters `acquire`'s `modifyEffect` region from outside it —
+    // the double-mint guard and its acquire timeout are untouched.
+    //
     // The bound HTTP is wrapped by bot-dm-guard so any future code that
     // constructs a `POST /messages` with `type=private` and an all-bot
     // recipient list is rejected before reaching the wire.
-    const boundHttp = (): Effect.Effect<BotHttp> => requireBound().pipe(Effect.map((b) => b.http))
+    // With no strategy wired, an explicit `identity.acquire` is the only way to
+    // bind: use whatever is already bound, and refuse otherwise. The refusal is
+    // typed like every other, so a caller never sees a bare defect.
+    const bindOnDemand: Effect.Effect<AcquiredIdentity, BindError> =
+      config.bindOnDemand ??
+      SynchronizedRef.get(boundRef).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: (): Effect.Effect<AcquiredIdentity, BindError> =>
+              Effect.fail(
+                new UnboundEphemeralSession({
+                  message:
+                    'commy: this seat has no identity and no way to obtain one — the ' +
+                    'adapter was built without a bind-on-demand strategy.',
+                }),
+              ),
+            onSome: (bound: BoundState) =>
+              Effect.succeed({ identity: bound.identity, credentials: bound.credentials }),
+          }),
+        ),
+      )
+
+    const boundHttp = (): Effect.Effect<BotHttp, BindError> =>
+      // The binder is consulted on EVERY write, not only when `boundRef` is
+      // empty. A short-circuit on `boundRef` would make "is something bound?"
+      // the question, when the question is "may THIS CALLER use it?" — and
+      // those differ exactly when they matter. A seat whose session_id is
+      // absent (post-`/clear`, or a host that injects nothing) would otherwise
+      // inherit whatever identity an earlier conversation left bound and post
+      // under it. The identity cache is the authority on that; asking it every
+      // time is what keeps the answer honest.
+      //
+      // Cheap to ask: the cache's `ensureBound` is an idempotent single-flight
+      // that returns the acquired identity with no round-trip once bound, so
+      // this costs a Ref read on the warm path, not a mint.
+      bindOnDemand.pipe(
+        // Re-read `boundRef` rather than building a client from the returned
+        // credentials, so the write goes out through the bot-dm-guard-wrapped
+        // client `acquire` installed.
+        Effect.zipRight(requireBound()),
+        Effect.map((b) => b.http),
+      )
 
     const fetchMembers = (): Effect.Effect<
       ReadonlyArray<ZulipUser>,
@@ -1240,14 +1319,17 @@ export const zulipAdapter = (
     const setChannelDescription = (
       channel: ChannelName,
       description: Option.Option<ChannelDescription>,
-    ): Effect.Effect<void, PublisherError | UnknownChannel | ChannelDescriptionRejected> =>
+    ): Effect.Effect<
+      void,
+      BindError | PublisherError | UnknownChannel | ChannelDescriptionRejected
+    > =>
       resolvePublishChannel(channel).pipe(
         Effect.flatMap(
           (
             channelRef,
           ): Effect.Effect<
             void,
-            ChannelDescriptionRejected | ZulipApiError | ParseResult.ParseError
+            BindError | ChannelDescriptionRejected | ZulipApiError | ParseResult.ParseError
           > =>
             Option.match(
               Option.flatMap(description, (text) => rejectionFor(channelRef.name, text)),
@@ -1273,8 +1355,13 @@ export const zulipAdapter = (
               },
             ),
         ),
+        // `boundHttp` sits inside a conditional branch here rather than at the
+        // head of the pipe, so the bind failure is let through by predicate
+        // instead of by scoping the mapper (see post/react for the latter).
         Effect.mapError((cause) =>
-          cause instanceof UnknownChannel || cause instanceof ChannelDescriptionRejected
+          isBindError(cause) ||
+          cause instanceof UnknownChannel ||
+          cause instanceof ChannelDescriptionRejected
             ? cause
             : new PublisherError({ operation: 'setChannelDescription', cause }),
         ),
@@ -1349,7 +1436,7 @@ export const zulipAdapter = (
       channel: ChannelName,
       thread: ThreadName,
       resolved: boolean,
-    ): Effect.Effect<void, PublisherError> => {
+    ): Effect.Effect<void, BindError | PublisherError> => {
       const operation = resolved ? 'resolveThread' : 'unresolveThread'
       const sourceTopic = applyResolvedPrefix(thread, !resolved)
       const targetTopic = applyResolvedPrefix(thread, resolved)
@@ -1389,7 +1476,9 @@ export const zulipAdapter = (
           ),
         ),
         Effect.mapError((cause) =>
-          cause instanceof PublisherError ? cause : new PublisherError({ operation, cause }),
+          isBindError(cause) || cause instanceof PublisherError
+            ? cause
+            : new PublisherError({ operation, cause }),
         ),
       )
     }
@@ -1488,12 +1577,16 @@ export const zulipAdapter = (
                   ),
                 ),
               ),
+              // Scoped to the publish itself. A bind failure is not a publish
+              // failure — it is raised before the write is attempted — so it
+              // flows out untouched rather than being flattened into a
+              // PublisherError the caller cannot act on.
+              Effect.mapError((cause) =>
+                cause instanceof UnknownChannel || cause instanceof UnresolvedMention
+                  ? cause
+                  : new PublisherError({ operation: 'post', cause }),
+              ),
             ),
-          ),
-          Effect.mapError((cause) =>
-            cause instanceof UnknownChannel || cause instanceof UnresolvedMention
-              ? cause
-              : new PublisherError({ operation: 'post', cause }),
           ),
         )
       },
@@ -1506,11 +1599,11 @@ export const zulipAdapter = (
                   content: body,
                 }),
               ),
+              Effect.asVoid,
+              Effect.mapError((cause) =>
+                cause instanceof UnresolvedMention ? cause : classifyEditFailure(cause),
+              ),
             ),
-          ),
-          Effect.asVoid,
-          Effect.mapError((cause) =>
-            cause instanceof UnresolvedMention ? cause : classifyEditFailure(cause),
           ),
         ),
       // Read through the MINTER, never `boundHttp()`: this is sampled at
@@ -1545,22 +1638,28 @@ export const zulipAdapter = (
       react: (message, emoji) =>
         boundHttp().pipe(
           Effect.flatMap((http) =>
-            http.post(`/messages/${encodeURIComponent(message.id)}/reactions`, successSchema, {
-              emoji_name: emoji,
-            }),
+            http
+              .post(`/messages/${encodeURIComponent(message.id)}/reactions`, successSchema, {
+                emoji_name: emoji,
+              })
+              .pipe(
+                Effect.asVoid,
+                Effect.mapError((cause) => new PublisherError({ operation: 'react', cause })),
+              ),
           ),
-          Effect.asVoid,
-          Effect.mapError((cause) => new PublisherError({ operation: 'react', cause })),
         ),
       unreact: (message, emoji) =>
         boundHttp().pipe(
           Effect.flatMap((http) =>
-            http.delete(`/messages/${encodeURIComponent(message.id)}/reactions`, successSchema, {
-              emoji_name: emoji,
-            }),
+            http
+              .delete(`/messages/${encodeURIComponent(message.id)}/reactions`, successSchema, {
+                emoji_name: emoji,
+              })
+              .pipe(
+                Effect.asVoid,
+                Effect.mapError((cause) => new PublisherError({ operation: 'unreact', cause })),
+              ),
           ),
-          Effect.asVoid,
-          Effect.mapError((cause) => new PublisherError({ operation: 'unreact', cause })),
         ),
       resolveThread: (channel, thread) => setThreadResolved(channel, thread, true),
       unresolveThread: (channel, thread) => setThreadResolved(channel, thread, false),

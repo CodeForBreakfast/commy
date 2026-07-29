@@ -15,11 +15,13 @@ import {
 import { memoryAdapter } from '@commy/memory/adapter'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { Deferred, Effect, Fiber, Option, Predicate, type Scope } from 'effect'
+import { Deferred, Effect, Fiber, Option, Predicate, Ref, type Scope } from 'effect'
 import type { SessionId } from './bootstrap.ts'
 import { createEphemeralIdentityCache } from './identity-cache.ts'
 import { buildMcpServer } from './mcp-server.ts'
 import { createNarrowSet } from './narrow-set.ts'
+import type { BindOnDemand } from './session-binder.ts'
+import { binderFor, bindThrough, installBinder } from './session-binder.ts'
 import { intentToTarget, type SubscribeIntent } from './subscribe-parser.ts'
 import { restoreSubscriptions } from './subscription-restore.ts'
 import type { SubscriptionStore } from './subscription-store.ts'
@@ -282,7 +284,11 @@ interface PersistRig {
 
 const buildPersistRig = (): Effect.Effect<PersistRig, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const adapter = yield* memoryAdapter()
+    // The mint seam, wired as server.ts wires it: the adapter reads its binder
+    // through a holder, installed once the cache (built from the adapter's own
+    // acquire) exists.
+    const binderRef = yield* Ref.make<Option.Option<BindOnDemand>>(Option.none())
+    const adapter = yield* memoryAdapter({ bindOnDemand: bindThrough(binderRef) })
     // The sticky-engagement tests below post into this channel; the subscribe
     // tests never touch it.
     yield* adapter.seedChannel(DECISIONS_CHANNEL).pipe(Effect.orDie)
@@ -291,6 +297,7 @@ const buildPersistRig = (): Effect.Effect<PersistRig, never, Scope.Scope> =>
       release: adapter.identity.release,
       idleReleaseMs: 60 * 60 * 1000,
     })
+    yield* installBinder(binderRef, binderFor(identityCache))
     const narrowSet = createNarrowSet()
     const session = yield* Deferred.make<SessionId>()
     const store = inMemorySubscriptionStore(session)

@@ -6,6 +6,7 @@ import {
   decodeDisplayNameSync,
   decodeIdentityIdSync,
   IdentityError,
+  UnboundEphemeralSession,
 } from '@commy/core/ports'
 import {
   Cause,
@@ -22,11 +23,7 @@ import {
 import type { ProjectSlug, SessionId } from './bootstrap.ts'
 import { parseSessionId, sanitiseProjectSlug } from './bootstrap.ts'
 import { createEnsureBound } from './ensure-bound.ts'
-import {
-  createEphemeralIdentityCache,
-  createSingleIdentityCache,
-  UnboundEphemeralSession,
-} from './identity-cache.ts'
+import { createEphemeralIdentityCache, createSingleIdentityCache } from './identity-cache.ts'
 
 /**
  * Test helper. Constructs a `SessionId` from an 8-char hex prefix so the

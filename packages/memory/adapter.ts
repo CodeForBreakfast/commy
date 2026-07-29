@@ -24,6 +24,7 @@
 import type {
   AcquiredIdentity,
   AgentComms,
+  BindError,
   ChannelDescription,
   ChannelId,
   ChannelName,
@@ -70,6 +71,7 @@ import {
   mentionsIdentity,
   PublisherError,
   ThreadPermalinkSchema,
+  UnboundEphemeralSession,
   UnknownChannel,
   UnknownIdentity,
   userMentions,
@@ -136,6 +138,18 @@ export interface MemoryAdapterConfig {
    * default Zulip-shaped "always succeeds" behaviour.
    */
   readonly acquirableNames?: ReadonlyArray<string>
+  /**
+   * Bind this seat to an identity when a write reaches for a bound identity
+   * with nothing bound yet — the same mint seam the Zulip adapter exposes,
+   * so a driving adapter wires one strategy and both substrates honour it.
+   *
+   * Omitted, a write on an unbound seat refuses with
+   * `UnboundEphemeralSession` rather than dying. That is a change from this
+   * adapter's older "calling before acquire is a defect" contract: the port
+   * now declares the failure, so a caller that could not bind gets something
+   * it can catch and act on instead of a defect it cannot.
+   */
+  readonly bindOnDemand?: Effect.Effect<AcquiredIdentity, BindError>
   /**
    * Identity kind bound on acquire. Defaults to `agent` — pass `human`
    * to model a human-facing client.
@@ -274,7 +288,30 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         return identity
       })
 
-    const requireBound = (): Effect.Effect<Identity> =>
+    // With no strategy wired, an explicit `acquire` is the only way to bind:
+    // use whatever is already bound, and refuse otherwise.
+    const bindOnDemand: Effect.Effect<AcquiredIdentity, BindError> =
+      config.bindOnDemand ??
+      Ref.get(bound).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: (): Effect.Effect<AcquiredIdentity, BindError> =>
+              Effect.fail(
+                new UnboundEphemeralSession({
+                  message:
+                    'memoryAdapter: this seat has no identity and no way to obtain one — ' +
+                    'the adapter was built without a bind-on-demand strategy.',
+                }),
+              ),
+            onSome: (b) => Effect.succeed({ identity: b.identity, credentials: b.credentials }),
+          }),
+        ),
+      )
+
+    // The passive read, for `currentIdentity`. Asking who you are is not a
+    // declaration that the realm is about to hold state, so this never binds;
+    // asking before acquiring stays the caller defect it always was.
+    const readBound = (): Effect.Effect<Identity> =>
       Ref.get(bound).pipe(
         Effect.flatMap(
           Option.match({
@@ -286,6 +323,17 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
           }),
         ),
       )
+
+    // Reading the bound identity for a write. Mirrors the Zulip adapter's
+    // `boundHttp`: reaching for it IS the declaration that state is about to
+    // be held on this seat's behalf, so an unbound seat binds rather than
+    // asserting a prior acquire.
+    // Consulted on EVERY write, not only when nothing is bound — see the Zulip
+    // adapter's `boundHttp` for why. "Is something bound?" and "may THIS caller
+    // use it?" differ exactly when it matters, and only the binder knows the
+    // second.
+    const requireBound = (): Effect.Effect<Identity, BindError> =>
+      bindOnDemand.pipe(Effect.map((acquired) => acquired.identity))
 
     const registerChannel = (name: string): Effect.Effect<ChannelRef, ParseResult.ParseError> =>
       Effect.gen(function* () {
@@ -325,7 +373,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       resolveChannel(name).pipe(Effect.flatMap(bucketOf))
 
     const identity: IdentityPort = {
-      currentIdentity: () => requireBound(),
+      currentIdentity: () => readBound(),
       acquire: (name) =>
         Ref.get(bound).pipe(
           Effect.flatMap(
@@ -451,7 +499,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       channel: ChannelName,
       thread: ThreadName,
       resolved: boolean,
-    ): Effect.Effect<void, PublisherError> => {
+    ): Effect.Effect<void, BindError | PublisherError> => {
       const operation = resolved ? 'resolveThread' : 'unresolveThread'
       return requireBound().pipe(
         Effect.flatMap(() =>
@@ -498,7 +546,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     const setChannelDescription = (
       channel: ChannelName,
       description: Option.Option<ChannelDescription>,
-    ): Effect.Effect<void, UnknownChannel | ChannelDescriptionRejected> =>
+    ): Effect.Effect<void, BindError | UnknownChannel | ChannelDescriptionRejected> =>
       requireBound().pipe(
         Effect.flatMap(() => resolveChannel(channel)),
         Effect.flatMap((channelRef) =>
@@ -763,8 +811,10 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
        * nothing and keeps the state it sampled at boot.
        */
       settingsChanges: () => Stream.empty,
+      // A read, so it never binds — the state a read touches belongs to
+      // whoever wrote it. Reaching here unbound stays a caller defect.
       replay: (since: TimestampType) =>
-        requireBound().pipe(
+        readBound().pipe(
           Effect.map((me) => {
             const ordered: StoredMessage[] = []
             for (const bucket of messagesByChannel.values()) {

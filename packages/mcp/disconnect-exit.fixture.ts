@@ -27,6 +27,7 @@ import { CursorStoreTag } from './cursor-store.ts'
 import { completeAsSubstrate } from './memory-substrate.ts'
 import { ResumeOutcomeLive } from './resume-outcome.ts'
 import { clientDisconnect, makeProgram } from './server.ts'
+import { SessionBinderLive } from './session-binder.ts'
 import { SessionIdLive } from './session-id.ts'
 import { SubscriptionStoreTag } from './subscription-store.ts'
 
@@ -80,6 +81,7 @@ NodeRuntime.runMain(
           Layer.succeed(CursorStoreTag, inMemoryCursorStore),
           Layer.succeed(SubscriptionStoreTag, inMemorySubscriptionStore),
           SessionIdLive,
+          SessionBinderLive,
           ResumeOutcomeLive,
           stderrLoggerLayer,
         ),

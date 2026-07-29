@@ -5,7 +5,8 @@ import type {
   IdentityId,
   UnknownIdentity,
 } from '@commy/core/ports'
-import { Clock, Data, Effect, SynchronizedRef } from 'effect'
+import { UnboundEphemeralSession } from '@commy/core/ports'
+import { Clock, Effect, SynchronizedRef } from 'effect'
 import type { ProjectSlug, SessionId } from './bootstrap.ts'
 import { composeBotName } from './bootstrap.ts'
 import type { EnsureBound } from './ensure-bound.ts'
@@ -169,18 +170,6 @@ interface Slot {
   readonly ensureBound: EnsureBound<UnknownIdentity | IdentityError>
   readonly lastUsedMs: number
 }
-
-/**
- * Refusal raised when an ephemeral tool call arrives without a usable
- * `session_id`. A tagged error (not a bare `Error`) so the MCP edge
- * surfaces the `UnboundEphemeralSession:` discriminator instead of the
- * naked message — `Data.TaggedError` sets `name === _tag`, which the
- * edge reshape (tools.ts) keys on — and so callers can `Effect.catchTag`
- * it on the bind Effect's typed E channel.
- */
-export class UnboundEphemeralSession extends Data.TaggedError('UnboundEphemeralSession')<{
-  readonly message: string
-}> {}
 
 const unboundStub: EnsureBound<UnboundEphemeralSession> = Object.assign(
   (): Effect.Effect<AcquiredIdentity, UnboundEphemeralSession> =>
