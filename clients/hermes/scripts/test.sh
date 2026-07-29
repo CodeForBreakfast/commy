@@ -13,9 +13,14 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# Tested against hermes-agent 0.15.2 (PyPI latest). Pin to the confirmed pod
-# Hermes version once the image lane is pinned.
-HERMES_SPEC="${HERMES_SPEC:-hermes-agent>=0.12,<1}"
+# The upper bound is load-bearing, not caution. `--no-deps` means the host
+# Hermes is installed without its tree, so any dependency its import chain
+# grows becomes a collection error here. 0.19.0 grew one (`requests`, reached
+# via gateway -> agent.turn_context -> agent.model_metadata) and turned the
+# gate red on a repo nothing had changed. Raise this bound deliberately, with
+# the suite green, rather than letting PyPI's latest decide.
+# Green against hermes-agent 0.18.2.
+HERMES_SPEC="${HERMES_SPEC:-hermes-agent>=0.12,<0.19}"
 
 uv venv --clear
 uv sync --group dev
