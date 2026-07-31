@@ -561,6 +561,11 @@ describeLiveChannel('zulip live per-seat receiving — zulip.example.com', () =>
                   asMinter.get('/events', anyEventsSchema, {
                     queue_id: queue.queueId,
                     last_event_id: queue.lastEventId,
+                    // `/events` LONG-POLLS by default, holding ~50s for an
+                    // event that will never come on an idle queue. This probe
+                    // is about whether the realm accepts the caller, not about
+                    // events, so ask it to answer now.
+                    dont_block: true,
                   }),
                 )
                 expect(refusal).toBeInstanceOf(ZulipApiError)
@@ -573,6 +578,7 @@ describeLiveChannel('zulip live per-seat receiving — zulip.example.com', () =>
                 const ok = yield* asSeat.get('/events', anyEventsSchema, {
                   queue_id: queue.queueId,
                   last_event_id: queue.lastEventId,
+                  dont_block: true,
                 })
                 expect(ok.result).toBe('success')
               }),
