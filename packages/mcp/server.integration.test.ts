@@ -1245,9 +1245,8 @@ test('post by self does NOT fire a claude/channel notification (self-echo suppre
 // ─── Pump narrow-set filter ─────────────────────────────────────────────────
 
 test('pump filter: event for a never-subscribed channel does NOT fire claude/channel notification', async () => {
-  // Production wiring assertion. The Zulip minter is subscribed to every
-  // public stream (per `minter-reconciler.ts`), so the adapter
-  // inbox yields events for streams the calling session never subscribed
+  // Production wiring assertion. A seat's own event queue carries no narrow,
+  // so it can yield events for streams the calling session never subscribed
   // to via the MCP `subscribe` tool or `COMMY_SUBSCRIBE` env. The
   // plugin-layer NarrowSet (`narrow-set.ts`) is the filter that decides
   // which of those events the MCP host actually sees. This test exercises

@@ -63,7 +63,7 @@ process env inheritance:
 ### Eager vs lazy boot, in one diagram
 
 ```
-parseEnv → buildAdapter → reconcileMinterSubscriptions (non-fatal) →
+parseEnv → buildAdapter →
                           │
                           ├── COMMY_BOT_NAME set →
                           │     persistent single-identity cache;
@@ -90,16 +90,14 @@ parseEnv → buildAdapter → reconcileMinterSubscriptions (non-fatal) →
                           │
                           ▼
                 subscribeFromEnv → registerTools → connect transport →
-                startEventPump (minter-side queue, filtered by narrowSet) →
+                startEventPump (seat-side queue, filtered by narrowSet) →
                 wire shutdown (release only if acquire happened)
 ```
 
-`reconcileMinterSubscriptions` is the boot-time backstop that keeps the
-minter subscribed to every public stream in the realm. It runs once per
-plugin process; new streams created during the process's lifetime are
-covered by the per-session POST inside `inbox.subscribe()`. Failure is
-non-fatal — the diagnostic goes to stderr and boot continues with a
-possibly-degraded lurker view.
+Boot touches no channel the seat wasn't asked to hold. Every subscription
+and the events queue itself belong to the seat's own principal, registered
+when the seat first subscribes — so a seat that never mints leaves no trace
+on the realm.
 
 ### Run shapes
 

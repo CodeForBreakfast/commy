@@ -167,7 +167,6 @@ interface FakeAdapterCalls {
   readonly acquired: string[]
   readonly closes: { count: number }
   readonly subscribed: SubscriptionTarget[]
-  readonly reconcileCalls: { count: number }
   readonly events: string[]
 }
 
@@ -178,16 +177,11 @@ const buildFakeAdapter = (
     readonly identityOrigin?: IdentityOrigin
     /** Reject every substrate-side subscribe, for the part-way-failure paths. */
     readonly subscribeError?: InboxError
-    readonly reconcileReport?: {
-      readonly added: ReadonlyArray<ChannelName>
-      readonly error: string | undefined
-    }
   } = {},
 ): { readonly adapter: ZulipAdapter; readonly calls: FakeAdapterCalls } => {
   const acquired: string[] = []
   const closes = { count: 0 }
   const subscribed: SubscriptionTarget[] = []
-  const reconcileCalls = { count: 0 }
   const events: string[] = []
   const identity: Identity = {
     id: decodeIdentityIdSync('bot:myproject-concierge'),
@@ -258,25 +252,15 @@ const buildFakeAdapter = (
     channelDescription: () => Effect.succeed(Option.none()),
     presence: (_id: Identity): Effect.Effect<Presence> => Effect.succeed('offline'),
   }
-  const defaultReconcileReport = {
-    added: [] as ReadonlyArray<ChannelName>,
-    error: undefined as string | undefined,
-  }
   const adapter = completeAsSubstrate(
     { identity: identityPort, publisher, inbox, history, directory },
     {
-      reconcileMinterSubscriptions: () =>
-        Effect.sync(() => {
-          events.push('reconcile')
-          reconcileCalls.count += 1
-          return options.reconcileReport ?? defaultReconcileReport
-        }),
       close: async () => {
         closes.count += 1
       },
     },
   )
-  return { adapter, calls: { acquired, closes, subscribed, reconcileCalls, events } }
+  return { adapter, calls: { acquired, closes, subscribed, events } }
 }
 
 test('main resolves cleanly when given a valid env', async () => {
@@ -348,7 +332,7 @@ test('lazy mode (cc-<8> from session id) does NOT acquire at boot', async () => 
   }
   const exit = await runProgram(env, fake.adapter, { loggerLayer: captureLogger(stderr) })
   // No acquire call, no acquire-failure stderr, clean boot, adapter still
-  // closed. Reconcile is silent in the no-op case.
+  // closed.
   expect(Exit.isSuccess(exit)).toBe(true)
   expect(fake.calls.acquired).toEqual([])
   expect(stderr).toEqual([])
@@ -639,42 +623,6 @@ test('main applies env-driven subscriptions in order after acquire and Type-1 de
     },
   ])
   expect(fake.calls.closes.count).toBe(1)
-})
-
-test('main reconciles minter subscriptions during boot before env subscribes', async () => {
-  const fake = buildFakeAdapter({
-    reconcileReport: {
-      added: [decodeChannelNameSync('commy'), decodeChannelNameSync('general')],
-      error: undefined,
-    },
-  })
-  const log: string[] = []
-  const env = { ...validEnv, COMMY_SUBSCRIBE: 'home' }
-  await runProgram(env, fake.adapter, { loggerLayer: captureLogger(log) })
-  expect(fake.calls.reconcileCalls.count).toBe(1)
-  expect(fake.calls.events.indexOf('reconcile')).toBeLessThan(
-    fake.calls.events.indexOf('subscribe'),
-  )
-  expect(log.some((line) => line.includes('commy') && line.includes('general'))).toBe(true)
-})
-
-test('main calls reconcile but stays silent when there is nothing to add', async () => {
-  const fake = buildFakeAdapter()
-  const log: string[] = []
-  await runProgram(validEnv, fake.adapter, { loggerLayer: captureLogger(log) })
-  expect(fake.calls.reconcileCalls.count).toBe(1)
-  expect(log).toEqual([])
-})
-
-test('main keeps booting when reconcile reports an error (log + continue)', async () => {
-  const fake = buildFakeAdapter({
-    reconcileReport: { added: [], error: 'realm unreachable' },
-  })
-  const log: string[] = []
-  const exit = await runProgram(validEnv, fake.adapter, { loggerLayer: captureLogger(log) })
-  expect(Exit.isSuccess(exit)).toBe(true)
-  expect(fake.calls.acquired).toEqual(['myproject-concierge'])
-  expect(log.some((line) => line.includes('realm unreachable'))).toBe(true)
 })
 
 // ─── Type-1 default sub set for project concierges ──────────────

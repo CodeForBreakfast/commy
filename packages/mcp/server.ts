@@ -374,7 +374,7 @@ const buildIdentityCache = (
 
 /**
  * The plugin's boot program as ONE composed Effect,
- * from parse → reconcile → identity → tools → pump, run at a single
+ * from parse → identity → tools → pump, run at a single
  * `runMain` edge. Services (substrate adapter, cursor store,
  * ConfigProvider, logger) arrive through the app Layer;
  * {@link ProgramParams} carries the remaining per-run knobs.
@@ -579,23 +579,6 @@ export const makeProgram = (
         if (cwd === undefined) return Effect.succeed(undefined)
         return Effect.map(deriveProject({ cwd, readGitContext }), Option.getOrUndefined)
       }
-
-      // Minter subscription reconcile: boot-time backstop that
-      // keeps the minter subscribed to every public stream. Non-fatal —
-      // log + continue. Silent in the steady-state no-op case.
-      yield* adapter.reconcileMinterSubscriptions().pipe(
-        Effect.flatMap((reconcile) => {
-          if (reconcile.error !== undefined) {
-            return Effect.logError(`commy plugin: minter reconcile failed: ${reconcile.error}`)
-          }
-          if (reconcile.added.length > 0) {
-            return Effect.logInfo(
-              `commy plugin: minter reconcile — subscribed minter to ${reconcile.added.length} new public stream(s): ${reconcile.added.join(', ')}`,
-            )
-          }
-          return Effect.void
-        }),
-      )
 
       // Sample the realm-wide editing switch once, before the tool list is
       // built, so a seat on a realm with editing off is never offered

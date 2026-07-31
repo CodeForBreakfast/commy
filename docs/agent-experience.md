@@ -149,10 +149,10 @@ something must listen on its behalf. That something was the minter,
 subscribed to every public stream, with the event queue registered against
 it rather than the per-session bot.
 
-The example is told in the past tense because the first two steps of the
-chain have since been taken apart: the queue and the subscriptions now
-belong to the seat. The rest of the chain is still standing, and the
-paragraphs below say which parts.
+The example is told in the past tense because that arrangement is gone: the
+queue and the subscriptions belong to the seat, and the minter listens for
+nobody. One piece of the chain is still standing, and the paragraphs below
+say which.
 
 Everything else follows from that one deferral. One shared subscriber means
 per-agent narrowing cannot be a realm subscription, so it becomes a
@@ -188,11 +188,16 @@ had to move together, because Zulip builds a channel message's recipient set
 from the channel's subscription rows: a seat-owned queue over minter-held
 subscriptions would have received nothing at all.
 
-What has not moved yet: the minter still holds its blanket public-stream
-subscription, and topic-level narrowing is still a client-side filter with a
-local record behind it. Those are the next steps of the same unwinding, not
-exemptions — channel-level narrowing has moved, and is now read back from the
-realm on every boot.
+The minter holds no stream subscriptions. It has two jobs, both genuinely
+its own: minting bots, and the directory and history reads that need no
+principal. Nothing listens on another seat's behalf, so a seat that never
+mints costs the realm nothing — the saving the optimisation was after,
+without the architecture that funded it.
+
+Topic-level narrowing is still a client-side filter with a local record
+behind it — the last piece of the chain standing. That is the next step of
+the same unwinding, not an exemption; channel-level narrowing is realm state
+under the seat's own principal, read back from the realm on every boot.
 
 Principle 5 catches it at the first step. Principle 3 catches the store.
 Principle 1 catches `session_id` reaching the tool surface.
@@ -204,10 +209,9 @@ while the architecture funding it does not. What could not be deferred was
 receiving — a queue is state held on the agent's behalf. Reading was never
 the problem.
 
-Two things would remain client-side afterwards, both legitimately:
-topic-level narrows and the event-queue handle. The difference is that they
-would filter the agent's own queue rather than a shared one — local, small,
-and interfering with nobody.
+Two things remain client-side, both legitimately: topic-level narrows and
+the event-queue handle. Both filter the agent's own queue rather than a
+shared one — local, small, and interfering with nobody.
 
 They are legitimate for different reasons, and only one of them is an
 exemption. The event-queue handle is principle 3's second: the substrate
