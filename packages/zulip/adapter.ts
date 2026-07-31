@@ -106,8 +106,6 @@ import {
   mentionTokens,
   unresolvedMentions,
 } from './mentions.ts'
-import type { ReconcileReport } from './minter-reconciler.ts'
-import { reconcileMinterSubscriptions } from './minter-reconciler.ts'
 import { buildMessageRef, permalinkBase, withChannelPermalink } from './permalink.ts'
 import { type RenderedContentLookup, renderedContentForBatch } from './rendered-content.ts'
 import { mentionsOfMessage } from './rendered-mentions.ts'
@@ -220,14 +218,6 @@ export interface ZulipAdapterConfig {
 
 export type ZulipAdapter = AgentComms &
   AttachmentStore & {
-    /**
-     * Subscribe the minter to every public stream it isn't yet on.
-     * Boot-time backstop so the plugin's event pump observes
-     * events on streams created after the minter's initial subscription
-     * set. Non-throwing: failure is captured in the returned report and
-     * the caller decides whether to log + continue or abort.
-     */
-    reconcileMinterSubscriptions(): Effect.Effect<ReconcileReport, never>
     close(): Promise<void>
   }
 
@@ -1233,22 +1223,6 @@ export const zulipAdapter = (
       subscriptions: Schema.Array(Schema.Struct({ name: Schema.NonEmptyString })),
     })
 
-    // POST /users/me/subscriptions response carries a per-user map of
-    // names actually subscribed vs already subscribed. For minter-routed
-    // calls we only care about the minter's row; defaults to empty so
-    // the schema parses cleanly when the realm omits the minter (a race
-    // where every requested stream was already subscribed by someone
-    // else in the interim).
-    const reconcileSubscriptionsResponseSchema = Schema.Struct({
-      result: Schema.Literal('success'),
-      subscribed: Schema.optional(
-        Schema.Record({ key: Schema.String, value: Schema.Array(Schema.String) }),
-      ),
-      already_subscribed: Schema.optional(
-        Schema.Record({ key: Schema.String, value: Schema.Array(Schema.String) }),
-      ),
-    })
-
     const streamsListResponseSchema = Schema.Struct({
       result: Schema.Literal('success'),
       streams: Schema.Array(Schema.Struct({ name: Schema.NonEmptyString, stream_id: Schema.Int })),
@@ -1763,7 +1737,7 @@ export const zulipAdapter = (
 
     // Per-event filter. The new-topics-in-channel narrow is the only
     // narrow that requires adapter-side state (seen topics); channel:X is
-    // enforced server-side via the minter's /users/me/subscriptions list.
+    // enforced server-side by the seat's own /users/me/subscriptions rows.
     // We therefore only intercept messages belonging to a channel that has
     // the new-topics narrow active, and pass everything else through
     // unchanged (preserves the plumbing contract: events queue →
@@ -2210,34 +2184,6 @@ export const zulipAdapter = (
         ),
     }
 
-    const reconcileMinter = (): Effect.Effect<ReconcileReport, never> =>
-      reconcileMinterSubscriptions({
-        listUnsubscribedPublicStreams: () =>
-          minterHttp
-            .get('/streams', streamsListResponseSchema, {
-              include_public: true,
-              include_subscribed: false,
-            })
-            .pipe(
-              Effect.flatMap((res) =>
-                Effect.forEach(res.streams, (s) =>
-                  decodeChannelName(s.name).pipe(Effect.map((name) => ({ name }))),
-                ),
-              ),
-            ),
-        subscribeToStreams: (names) =>
-          minterHttp
-            .post('/users/me/subscriptions', reconcileSubscriptionsResponseSchema, {
-              subscriptions: JSON.stringify(names.map((name) => ({ name }))),
-            })
-            .pipe(
-              Effect.flatMap((res) => {
-                const mintedFor = res.subscribed?.[config.minterEmail] ?? []
-                return Effect.forEach(mintedFor, (name) => decodeChannelName(name))
-              }),
-            ),
-      })
-
     return {
       // Zulip stamps integer epoch seconds, so two posts inside the same
       // second collide on `ts`; a caller needing distinct timestamps must
@@ -2248,7 +2194,6 @@ export const zulipAdapter = (
       inbox,
       history,
       directory,
-      reconcileMinterSubscriptions: reconcileMinter,
       downloadFile: (ref: AttachmentRef) =>
         decodeUserUploadPath(ref).pipe(
           Effect.flatMap((urlPath) =>

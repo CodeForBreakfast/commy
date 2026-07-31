@@ -635,7 +635,7 @@ export const readGitContext = (
 /**
  * The full driven surface `main` composes against: the
  * universal `AgentComms` aggregate plus the Zulip-shaped boot extras
- * (reconcile / download / upload / close). Lives in the plugin — core
+ * (download / upload / close). Lives in the plugin — core
  * stays substrate-neutral, and `registerTools` keeps its narrower
  * `AgentComms` dependency via structural subtyping. Request-time DI
  * (methods carrying `R = HttpClient`) is deferred.

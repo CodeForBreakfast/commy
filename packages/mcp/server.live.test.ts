@@ -92,7 +92,7 @@ const liveEnv = (): LiveEnv => {
 }
 
 // Same minter-call spacing as the substrate live suite —
-// boot's reconcile + acquire + subscribe sequence plus per-test
+// boot's acquire + subscribe sequence plus per-test
 // release all hit the shared minter, so the plugin live suite trips
 // the same per-user limit if we don't pace.
 const MINTER_PACE = Duration.millis(900)
@@ -425,7 +425,7 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
           const e = liveEnv()
           yield* Effect.scoped(
             Effect.gen(function* () {
-              // Pace before main()'s boot-time minter calls (reconcile + subscribe).
+              // Pace before main()'s boot-time minter calls (acquire + subscribe).
               yield* Effect.sleep(MINTER_PACE)
               const client = yield* buildHarness({
                 COMMY_SUBSCRIBE: `${e.channelName}`,

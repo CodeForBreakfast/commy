@@ -164,9 +164,8 @@ export interface ToolsCache extends ToolsMemory {
  * `narrowSet` is the consumer-side filter for the inbound event
  * pump. `subscribe` / `unsubscribe` mutate it so the pump tees only
  * intended events to the MCP host. The substrate-side call
- * (`inbox.subscribe` / `inbox.unsubscribe`) handles streams created
- * after the plugin booted; the boot-time minter reconciler
- * covers the rest.
+ * (`inbox.subscribe` / `inbox.unsubscribe`) carries the same change to
+ * the realm under the seat's own principal.
  */
 export interface RegisterToolsDeps {
   readonly adapter: AgentComms
@@ -911,8 +910,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             }
             // Two sinks (see bootstrap.subscribeFromEnv): the consumer-side
             // narrow tells the event pump to tee matching events through;
-            // the substrate-side call subscribes the minter to streams the
-            // boot-time reconciler didn't have a chance to cover.
+            // the substrate-side call subscribes THIS SEAT to the channel, so
+            // the realm delivers its messages to the seat's own queue.
             yield* Effect.sync(() => narrowSet.add(intent)).pipe(
               Effect.andThen(adapter.inbox.subscribe(intentToTarget(intent))),
             )

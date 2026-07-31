@@ -44,8 +44,8 @@ const inMemorySubscriptionStore = {
 
 /**
  * Complete the in-memory substrate to the `ZulipAdapter` shape the program
- * expects. `reconcileMinterSubscriptions` (boot) and `close` (shutdown
- * finalizer) are exercised, so the helper's inert no-ops suffice;
+ * expects. `close` (shutdown finalizer) is exercised, so the helper's inert
+ * no-op suffices;
  * `uploadFile`/`downloadFile` are never reached without an MCP client driving
  * tools, so they die loudly if anything calls them.
  */

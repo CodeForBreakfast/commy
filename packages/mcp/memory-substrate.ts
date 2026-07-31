@@ -13,8 +13,8 @@ import { Duration, Effect } from 'effect'
  * docs/architecture.md § Test architecture). But the `SubstrateAdapter` port
  * those programs depend on is currently *typed as* {@link ZulipAdapter}, so any
  * provided double must be completed from the universal {@link AgentComms} core
- * to that Zulip-shaped aggregate: `reconcileMinterSubscriptions`,
- * `downloadFile`, `uploadFile`, `close`. Concentrating that completion here
+ * to that Zulip-shaped aggregate: `downloadFile`, `uploadFile`, `close`.
+ * Concentrating that completion here
  * keeps the rule self-enforcing: among the above-port tests, `@commy/zulip`
  * appears in exactly one module, this one. Tests that deliberately drive the
  * real adapter (`queue-resume`, `bootstrap`, the live suite) name it for the
@@ -23,32 +23,27 @@ import { Duration, Effect } from 'effect'
  *
  * The members themselves no longer speak Zulip. `downloadFile` / `uploadFile`
  * are the port's `AttachmentStore`, so their doubles are built from
- * `@commy/core/ports` types alone; only `reconcileMinterSubscriptions` and
- * `close` are still Zulip-shaped, and they are why the aggregate is still
- * named here at all.
+ * `@commy/core/ports` types alone; only `close` is still Zulip-shaped, and it
+ * is why the aggregate is still named here at all.
  *
  * `ZulipAdapter` is re-exported so callers annotate their doubles without
  * naming `@commy/zulip` themselves.
  */
 export type { ZulipAdapter } from '@commy/zulip/adapter'
 
-/** The four members that complete `AgentComms` to a `ZulipAdapter`. */
-type SubstrateExtras = Pick<
-  ZulipAdapter,
-  'reconcileMinterSubscriptions' | 'downloadFile' | 'uploadFile' | 'close'
->
+/** The three members that complete `AgentComms` to a `ZulipAdapter`. */
+type SubstrateExtras = Pick<ZulipAdapter, 'downloadFile' | 'uploadFile' | 'close'>
 
 /**
- * Per-member overrides. Anything omitted falls back to an inert default: a
- * no-op reconcile report, an empty download, a stub upload result, a no-op
- * close. Tests override only the member whose behaviour they actually assert.
+ * Per-member overrides. Anything omitted falls back to an inert default: an
+ * empty download, a stub upload result, a no-op close. Tests override only the
+ * member whose behaviour they actually assert.
  */
 type SubstrateExtrasOverrides = Partial<SubstrateExtras>
 
 const stubAttachmentRef = decodeAttachmentRefSync('/user_uploads/0/stub')
 
 const inertExtras: SubstrateExtras = {
-  reconcileMinterSubscriptions: () => Effect.succeed({ added: [], error: undefined }),
   // Empty bytes, but a real filename: the port's contract is that the adapter
   // names the file, so a double that answered a constant would let a caller
   // deriving its own name from the handle pass its tests.
