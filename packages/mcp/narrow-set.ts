@@ -2,7 +2,6 @@ import type {
   ChannelName,
   IdentityId,
   InboundEvent,
-  Mention,
   MessageRef,
   ThreadName,
 } from '@commy/core/ports'
@@ -11,29 +10,31 @@ import { Array as Arr, Data, HashSet, Match, Option } from 'effect'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 
 /**
- * Plugin-layer narrow filter for inbound events.
+ * Plugin-layer narrow filter for the seat's own event queue.
  *
- * The commy Zulip adapter ships the minter's full event stream
- * — every public stream the minter is subscribed to. The pump tees
- * an event to the MCP host only if at least one narrow intent in this
- * set matches. Empty narrow → no events delivered, matching today's
- * "you only see what you subscribed to" semantics.
+ * The queue belongs to the seat's binding, so this filters only events the
+ * seat's own principal received. The pump tees an event to the MCP host only
+ * if at least one narrow intent in this set matches. Empty narrow → no events
+ * delivered, matching today's "you only see what you subscribed to" semantics.
  *
- * Adding / removing intents is local-only; nothing here touches the
- * realm. Substrate-side minter-to-stream subscription is owned by the
- * boot-time reconciler plus the per-session substrate POST
- * inside `inbox.subscribe()` for streams created after the plugin
- * booted.
+ * What remains client-side is what the substrate cannot express: Zulip has no
+ * per-topic delivery primitive, so a thread narrow is filtered here rather
+ * than declared to the realm. Channel-level intent is realm state — a
+ * subscription under the seat's own principal — not a line in this set.
  *
  * Mentions are the one exception to "empty narrow → nothing delivered": a bot
  * always receives its own, with nothing to subscribe to and no way to opt out.
- * They match only once the bot identity is known (i.e. post-acquire) —
- * pre-acquire there is nothing to compare a message's mentions against.
  */
 export interface NarrowSet {
   add(intent: SubscribeIntent): void
   remove(intent: SubscribeIntent): void
-  matches(event: InboundEvent, botIdentityId: IdentityId | undefined): boolean
+  /**
+   * A receiving seat always holds an identity: the events queue is registered
+   * against the seat's own principal, so an unbound seat owns no queue to poll
+   * and produces no events at all (`adapter.ts` `ownerHttp`, `events.ts`'s
+   * `UnboundEphemeralSession` idle). `botIdentityId` is therefore required.
+   */
+  matches(event: InboundEvent, botIdentityId: IdentityId): boolean
   size(): number
   /**
    * Snapshot the current subscription intents (the membership set, not the
@@ -137,19 +138,6 @@ const refMatches = (ref: MessageRef, intents: HashSet.HashSet<IntentKey>): boole
   HashSet.has(intents, channelKey(ref)) ||
   Option.exists(threadKey(ref), (tk) => HashSet.has(intents, tk))
 
-/**
- * Unconditional: a bot always receives its own mentions, so this consults no
- * intent. That is what makes an empty narrow set survivable — a seat that has
- * subscribed to nothing still hears its own name.
- *
- * Still gated on the bot being bound. Pre-acquire there is no identity to
- * compare a message's mentions against, so nothing can match.
- */
-const mentionsMatches = (
-  mentions: ReadonlyArray<Mention>,
-  botIdentityId: IdentityId | undefined,
-): boolean => botIdentityId !== undefined && mentionsIdentity(mentions, botIdentityId)
-
 export const createNarrowSet = (): NarrowSet => {
   let intents = HashSet.empty<IntentKey>()
   let seenTopics = HashSet.empty<IntentKey>()
@@ -221,14 +209,17 @@ export const createNarrowSet = (): NarrowSet => {
       pending.length = 0
       recording = false
     },
+    // `mentionsIdentity` consults no intent: a bot always receives its own
+    // mentions. That is what makes an empty narrow set survivable — a seat
+    // that has subscribed to nothing still hears its own name.
     matches: (event, botIdentityId): boolean =>
       Match.value(event).pipe(
         Match.discriminatorsExhaustive('kind')({
           'message-posted': (e) =>
             messagePostedMatches(e.message.ref) ||
-            mentionsMatches(e.message.mentions, botIdentityId),
+            mentionsIdentity(e.message.mentions, botIdentityId),
           'mention-received': (e) =>
-            refMatches(e.message.ref, intents) || mentionsMatches(e.mentions, botIdentityId),
+            refMatches(e.message.ref, intents) || mentionsIdentity(e.mentions, botIdentityId),
           'reaction-added': (e) => refMatches(e.target, intents),
           'reaction-removed': (e) => refMatches(e.target, intents),
         }),

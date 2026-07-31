@@ -1042,7 +1042,15 @@ export const makeProgram = (
         inbox: adapter.inbox,
         notifier,
         getBotIdentityId,
-        match: (event) => narrowSet.matches(event, getBotIdentityId()),
+        // No binding means the seat owns no events queue, so an event in hand
+        // is not this seat's to filter — the same statement the producer makes
+        // one layer down by idling instead of polling when `ownerHttp` refuses
+        // (zulip/events.ts, `UnboundEphemeralSession`). Reached only if a
+        // release lands between an event being produced and dispatched.
+        match: (event) => {
+          const botIdentityId = getBotIdentityId()
+          return botIdentityId !== undefined && narrowSet.matches(event, botIdentityId)
+        },
         // Populate the tools-side identity cache from inbound events so
         // `presence` / `post` mentions / `react` can resolve ids only ever
         // seen via a notification.

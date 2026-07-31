@@ -56,7 +56,7 @@ export interface EventPumpDeps {
   /**
    * Narrow-filter predicate. The pump tees an event to the notifier
    * only when this returns true. Production wires this to
-   * `NarrowSet.matches(event, getBotIdentityId())`. Omit for
+   * `NarrowSet.matches` under the seat's bound identity. Omit for
    * "deliver everything" — useful in tests that don't exercise the
    * narrow filter.
    */
