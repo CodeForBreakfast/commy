@@ -781,46 +781,43 @@ export const makeProgram = (
               // substrate hiccup applying a boot-time token must not refuse the
               // tool call that happened to trigger the mint. It has to precede
               // the catch-up below, which skims the narrow set this seeds.
-              seedSubscriptionsOnMint(acquired, seedDeps)
-                .pipe(
-                  Effect.catchAll((err) =>
-                    Effect.logError(
-                      `commy plugin: COMMY_SUBSCRIBE seeding failed at mint: ${Predicate.isError(err) ? err.message : String(err)}`,
-                    ),
+              seedSubscriptionsOnMint(acquired, seedDeps).pipe(
+                Effect.catchAll((err) =>
+                  Effect.logError(
+                    `commy plugin: COMMY_SUBSCRIBE seeding failed at mint: ${Predicate.isError(err) ? err.message : String(err)}`,
                   ),
-                  Effect.provide(loggerLayer),
-                )
-                .pipe(
-                  Effect.zipRight(ensureSessionSubscriptions(sessionId, project)),
-                  Effect.zipRight(Deferred.await(resumeOutcome)),
-                  Effect.flatMap((queueReplayed) => {
-                    if (queueReplayed) return Effect.void
-                    const identityId = acquired.identity.id
-                    const windowSeconds =
-                      parsed.catchupWindowSeconds ?? DEFAULT_CATCHUP_WINDOW_SECONDS
-                    const catchUpIntents = narrowSet.intents()
-                    return catchUpMentions({
-                      cursorStore,
-                      inbox: adapter.inbox,
-                      identityId,
-                      notifier,
-                    }).pipe(
-                      Effect.catchAllCause(logCatchUpFailure('ephemeral mentions')),
-                      Effect.zipRight(
-                        windowSeconds > 0 && catchUpIntents.length > 0
-                          ? catchUpChannels({
-                              intents: catchUpIntents,
-                              history: adapter.history,
-                              notifier,
-                              botIdentityId: identityId,
-                              windowSeconds,
-                            }).pipe(Effect.catchAllCause(logCatchUpFailure('ephemeral channels')))
-                          : Effect.void,
-                      ),
-                    )
-                  }),
-                  Effect.provide(loggerLayer),
-                )
+                ),
+                Effect.provide(loggerLayer),
+                Effect.zipRight(ensureSessionSubscriptions(sessionId, project)),
+                Effect.zipRight(Deferred.await(resumeOutcome)),
+                Effect.flatMap((queueReplayed) => {
+                  if (queueReplayed) return Effect.void
+                  const identityId = acquired.identity.id
+                  const windowSeconds =
+                    parsed.catchupWindowSeconds ?? DEFAULT_CATCHUP_WINDOW_SECONDS
+                  const catchUpIntents = narrowSet.intents()
+                  return catchUpMentions({
+                    cursorStore,
+                    inbox: adapter.inbox,
+                    identityId,
+                    notifier,
+                  }).pipe(
+                    Effect.catchAllCause(logCatchUpFailure('ephemeral mentions')),
+                    Effect.zipRight(
+                      windowSeconds > 0 && catchUpIntents.length > 0
+                        ? catchUpChannels({
+                            intents: catchUpIntents,
+                            history: adapter.history,
+                            notifier,
+                            botIdentityId: identityId,
+                            windowSeconds,
+                          }).pipe(Effect.catchAllCause(logCatchUpFailure('ephemeral channels')))
+                        : Effect.void,
+                    ),
+                  )
+                }),
+                Effect.provide(loggerLayer),
+              )
           : undefined
 
       const identityCache = yield* buildIdentityCache(adapter, parsed.botName, ephemeralOnAcquire)
