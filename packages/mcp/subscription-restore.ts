@@ -16,15 +16,21 @@ import type { SubscriptionStore } from './subscription-store.ts'
  * replaying a local copy of what it once asked for. A local copy can disagree
  * with delivery; the realm's answer cannot.
  *
- * What the realm cannot hold is narrowing BELOW a channel. A subscription row
- * names a channel, and Zulip has no per-topic delivery primitive, so
+ * What a subscription row cannot express is narrowing BELOW a channel, so
  * `#chan/topic` and `new-topics:#chan` both read back as plain `#chan`.
  * Reconstructing from the realm alone would silently widen every topic
  * subscription into its whole channel. That is why a small local record of
- * TOPIC-LEVEL intents survives: not as authority over what the seat receives,
- * but as the only possible record of how narrowly it wanted to listen. It is
- * the client-side exemption `docs/agent-experience.md` already names — the
- * substrate has no primitive to move it to.
+ * TOPIC-LEVEL intents survives — not as authority over what the seat receives,
+ * but as the record of how narrowly it wanted to listen.
+ *
+ * That record is INTERIM, and `docs/agent-experience.md` is careful about why:
+ * Zulip does have somewhere to put topic intent (`POST /user_topics` with
+ * `visibility_policy: FOLLOWED` persists a per-`(user, stream, topic)` row), it
+ * just does not DELIVER against it, so a client still filters its own queue.
+ * Recording intent there would make this record a cache of realm truth instead
+ * of the last piece of client-side authority. Deliberately not done here: this
+ * change removes state, and adding a new realm write is a different kind of
+ * change with its own risks.
  *
  * The two compose without overlapping: every channel the realm reports becomes
  * a channel-wide narrow UNLESS a persisted topic intent names it, in which case

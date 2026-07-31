@@ -522,6 +522,87 @@ test('main drives a real memory adapter through acquire + env subscribe + close'
   expect(closes).toBe(1)
 })
 
+// ─── boot does not deadlock on the queue-resume verdict (comms-deg1) ──────────
+// The ephemeral post-acquire hook BLOCKS on the resume verdict, and since
+// subscriptions moved to the seat's own principal the boot-time subscribe binds
+// — so that hook runs on the BOOT fiber. The verdict used to be reported only by
+// the events producer, which `startEventPump` materialises as the LAST step of
+// boot, so the boot fiber parked on a deferred only a step it would never reach
+// could complete. Every ephemeral seat with COMMY_SUBSCRIBE set hung before
+// announcing its tools.
+//
+// This test drives the real seam: a memory adapter whose `subscribe` binds
+// through the same `bindOnDemand` holder the Zulip adapter uses, an events
+// stream that never produces (standing in for a pump that has not started), and
+// the production `ResumeOutcomeLive` — a genuinely uncompleted deferred. Before
+// the fix this times out; a harness that pre-completes the verdict cannot see it.
+test('boot completes for an ephemeral seat with COMMY_SUBSCRIBE and no resume verdict yet', async () => {
+  const binderRef = await Effect.runPromise(Ref.make<Option.Option<BindOnDemand>>(Option.none()))
+  const adapter = await Effect.runPromise(memoryAdapter({ bindOnDemand: bindThrough(binderRef) }))
+  const neverProduces: MessageInbox['events'] = () => Stream.empty
+  const substrate = completeAsSubstrate(
+    { ...adapter, inbox: { ...adapter.inbox, events: neverProduces } },
+    { close: async () => {} },
+  )
+  const exit = await Effect.runPromise(
+    Effect.exit(
+      Effect.promise(() =>
+        runProgram(
+          { ...lazyEnv, COMMY_SUBSCRIBE: 'home' },
+          substrate,
+          {
+            loggerLayer: captureLogger([]),
+            readGitContext: () => Effect.succeed(NotInRepo()),
+          },
+          binderRef,
+        ),
+      ).pipe(Effect.timeoutFail({ duration: '5 seconds', onTimeout: () => 'boot hung' as const })),
+    ),
+  )
+  expect(Exit.isSuccess(exit)).toBe(true)
+})
+
+// ─── a listen-only seat catches up at boot (comms-9iro) ──────────────────────
+// The defect: a seat that only listens never posts, so under deferred identity
+// it never acquired, so the REST catch-up gated behind acquire never ran and its
+// downtime backlog was lost. Both halves dissolve once subscribing binds — the
+// seat acquires at boot, and the hook that carries catch-up fires there. Pinned
+// here because this landing rewrites that boot-bind ordering: the property is
+// held by the order of steps, and nothing else would notice it changing.
+test('a listen-only seat runs its catch-up at boot, with zero tool calls', async () => {
+  const binderRef = await Effect.runPromise(Ref.make<Option.Option<BindOnDemand>>(Option.none()))
+  const adapter = await Effect.runPromise(memoryAdapter({ bindOnDemand: bindThrough(binderRef) }))
+  const caughtUpChannels: string[] = []
+  const substrate = completeAsSubstrate(
+    {
+      ...adapter,
+      inbox: { ...adapter.inbox, events: () => Stream.empty },
+      history: {
+        ...adapter.history,
+        readChannel: (channel: ChannelName, _range: Range) =>
+          Effect.sync(() => {
+            caughtUpChannels.push(channel as string)
+            return []
+          }),
+      },
+    },
+    { close: async () => {} },
+  )
+  await runProgram(
+    { ...lazyEnv, COMMY_SUBSCRIBE: 'home' },
+    substrate,
+    {
+      loggerLayer: captureLogger([]),
+      readGitContext: () => Effect.succeed(NotInRepo()),
+    },
+    binderRef,
+  )
+  // The channel catch-up skimmed the seat's boot-time narrow without a single
+  // tool call: COMMY_SUBSCRIBE bound the seat at boot, and the post-acquire hook
+  // that carries catch-up ran there.
+  expect(caughtUpChannels).toEqual(['home'])
+})
+
 test('main aborts non-zero when COMMY_SUBSCRIBE contains a malformed token', async () => {
   const fake = buildFakeAdapter()
   const env = {

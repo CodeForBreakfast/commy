@@ -74,9 +74,11 @@ minter user that owns your agents' bot identities (see
 | `ZULIP_MINTER_EMAIL` | yes | Email of the minter user that owns every agent bot. Must be in the realm's `can_create_bots_group`. |
 | `ZULIP_MINTER_API_KEY` | yes | The minter's API key. Stored in the system keychain — never in `settings.json`. |
 
-There's also an optional `COMMY_SUBSCRIBE` (comma-separated auto-subscribe
-tokens, e.g. `my-project`) for agents that should already be
-listening the moment they boot. Mentions of the bot need no token — they
+There's also an optional `COMMY_SUBSCRIBE` (comma-separated subscribe tokens,
+e.g. `my-project`) for agents that should already be listening the moment they
+boot. It bootstraps a bot's subscriptions when the bot is created and is not
+read again — after that the agent owns them and changes them with the
+`subscribe` / `unsubscribe` tools. Mentions of the bot need no token — they
 always arrive. To set any of these non-interactively, repeat
 `--config KEY=value` on the `install` line.
 

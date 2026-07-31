@@ -28,7 +28,7 @@ no-op-ish values when unset):
 |---|---|---|
 | `COMMY_BOT_NAME` | no | Persistent mode: a stable identity acquired eagerly at boot (for concierges / scheduled agents). Omit for ephemeral, per-session identities. |
 | `COMMY_PROJECT` | no | Project slug used for channel naming and a persistent agent's project subscriptions. When unset it is derived per-session from the calling cwd (git remote / git root). |
-| `COMMY_SUBSCRIBE` | no | Comma-separated auto-subscribe tokens applied at boot: `<channel>` for a whole channel, `<channel>/<thread>` for one topic in it, `new-topics:<channel>` for the first message of each new topic. Blank means no auto-subscription — the bot still receives its own mentions, which are implicit and need no token. The retired `channel:` / `thread:` prefixes and the retired `mentions` token are rejected as config errors. Under the Claude Code plugin this may also arrive as `COMMY_SUBSCRIBE_USER_CONFIG`, which takes precedence; see [Two supply paths for the optional `COMMY_*` values](#two-supply-paths-for-the-optional-commy-values). |
+| `COMMY_SUBSCRIBE` | no | Comma-separated tokens that **bootstrap a new bot's subscriptions, once**: `<channel>` for a whole channel, `<channel>/<thread>` for one topic in it, `new-topics:<channel>` for the first message of each new topic. Applied when the bot is created and never again — see [`COMMY_SUBSCRIBE` bootstraps a bot; it does not configure one](#commy_subscribe-bootstraps-a-bot-it-does-not-configure-one). Blank means no bootstrap — the bot still receives its own mentions, which are implicit and need no token. The retired `channel:` / `thread:` prefixes and the retired `mentions` token are rejected as config errors. Under the Claude Code plugin this may also arrive as `COMMY_SUBSCRIBE_USER_CONFIG`, which takes precedence; see [Two supply paths for the optional `COMMY_*` values](#two-supply-paths-for-the-optional-commy-values). |
 | `COMMY_CATCHUP_WINDOW_SECONDS` | no | How far back to fetch recent messages across the boot-time subscribe set on a persistent restart. Default `14400` (4 hours); `0` disables. |
 | `COMMY_QUEUE_IDLE_TIMEOUT_SECS` | no | How many seconds an ephemeral session's events queue survives without a poll before Zulip garbage-collects it, sent as `idle_queue_timeout` on `/register`. Default `86400` (24 hours); clamped to Zulip's 7-day `MAX_QUEUE_TIMEOUT_SECS` ceiling (`604800`). A non-positive or non-integer value fails boot with a config error. |
 | `COMMY_DOWNLOAD_DIR` | no | Base directory for `download_file` attachments. When set, each download's fresh temp subdirectory is created under it so files land somewhere an allowlisted agent can `Read`; when unset, downloads go to `$TMPDIR`. Must be an existing directory — a non-directory value fails boot with a config error. |
@@ -69,14 +69,43 @@ booted a seat that was silently deaf to every channel it was meant to watch.
 Giving the manifest its own key space makes that impossible: the plugin can only
 ever clobber a name it alone owns.
 
-If you configure subscriptions and want to confirm they arrived, boot logs a
-line naming the applied tokens in the same vocabulary you wrote them:
+If you configure subscriptions and want to confirm they arrived, the boot that
+creates the bot logs a line naming the applied tokens in the same vocabulary you
+wrote them:
 
 ```
 commy plugin: applied 2 boot-time subscribe target(s): myproject, general/standup
 ```
 
-No such line means no boot-time subscriptions were applied.
+That line appears **once in a bot's life**. On a later launch you get this
+instead, which is the design working rather than a fault:
+
+```
+commy plugin: COMMY_SUBSCRIBE not applied — myproject-concierge already exists
+and owns its subscriptions.
+```
+
+## `COMMY_SUBSCRIBE` bootstraps a bot; it does not configure one
+
+`COMMY_SUBSCRIBE` is applied at the moment a bot is created, and never read
+again. From then on the bot owns its subscriptions: they live in the realm under
+its own principal, and they change when the agent itself calls `subscribe` or
+`unsubscribe`.
+
+**Editing `COMMY_SUBSCRIBE` for a bot that already exists has no effect.** To
+change what a running agent listens to, ask the agent — it has the tools. To
+start over from the launcher, delete the bot; the next boot creates a new one and
+bootstraps it from the current value.
+
+The reason is that a launcher value and an agent's own calls cannot both be
+authoritative. When both were, the same `COMMY_SUBSCRIBE` read at two launches of
+one bot was indistinguishable from the bot's own runtime changes, and the two
+quietly fought. The realm holds one answer now, and the agent is the one who
+changes it.
+
+One consequence for an upgrade: a bot that already existed before this behaviour
+landed is **not** bootstrapped retroactively. It keeps whatever the realm holds
+for it — and a bot that finds itself with nothing can subscribe to what it wants.
 
 ## Realm settings that shape commy behaviour
 
