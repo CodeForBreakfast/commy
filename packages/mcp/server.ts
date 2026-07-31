@@ -52,8 +52,6 @@ import { createNarrowSet } from './narrow-set.ts'
 import { FileQueueStateStoreLive, QueueStateStoreTag } from './queue-state-store.ts'
 import { raceReleaseAgainstTimeout } from './release-shutdown.ts'
 import { ResumeOutcomeLive, ResumeOutcome as ResumeOutcomeTag } from './resume-outcome.ts'
-import type { SeedLedger } from './seed-ledger.ts'
-import { FileSeedLedgerLive, SeedLedgerTag } from './seed-ledger.ts'
 import {
   binderFor,
   installBinder,
@@ -266,7 +264,6 @@ const registerType1DefaultsOnBoot = (
   )
 
 interface SeedDeps {
-  readonly ledger: SeedLedger
   readonly inbox: MessageInbox
   readonly narrowSet: NarrowSet
   readonly parsed: ParsedEnv
@@ -294,17 +291,15 @@ interface SeedDeps {
  * had not arrived by boot still gets seeded, rather than half-seeded into a
  * client-side filter over a stream it is not subscribed to.
  *
- * "Once" reads two independent facts, because neither alone is sound:
- *   - the ORIGIN of the bind, which the realm answers as a by-product of
- *     acquiring. A mint is self-evidently the first time this bot has existed,
- *     so it seeds whatever local bookkeeping claims — which is what recovers a
- *     bot an administrator deleted and that we have since re-minted under the
- *     same name.
- *   - the SEED LEDGER, for the population with no mint left to observe: every
- *     pinned bot in an existing fleet is already minted when this lands, so
- *     mint-only seeding would never fire for any of them and they would come up
- *     with no subscriptions at all. See {@link SeedLedger} for what that ledger
- *     is and, more importantly, what it is not.
+ * The ORIGIN of the bind is the whole test, and the realm answers it as a
+ * by-product of acquiring — no local bookkeeping is consulted, and none is
+ * kept. An already-existing bot is never seeded, whatever it is or is not
+ * subscribed to. Graeme's ruling (2026-07-31) settled the one case that looked
+ * like it needed more than this: a bot that comes out of an upgrade with no
+ * subscriptions of its own is LEFT empty rather than bootstrapped, because a
+ * bot that wants subscriptions can subscribe — which is the same charter read
+ * from the other end. That removes the only reason to record what has been
+ * seeded before, so nothing is recorded.
  *
  * Both diagnostics live here rather than at the call sites, so the two mint
  * paths cannot drift into saying different things about the same decision.
@@ -315,57 +310,35 @@ const seedSubscriptionsOnMint = (
 ): Effect.Effect<ReadonlyArray<SubscribeIntent>, SubscribeTokenError | BindError | InboxError> =>
   deps.parsed.subscribe === undefined
     ? Effect.succeed([])
-    : deps.ledger.hasSeeded(acquired.identity.name).pipe(
-        // An unreadable ledger degrades to "not seeded". Re-seeding a bot that
-        // was already seeded restores tokens it may have dropped on purpose,
-        // which the agent can undo; skipping one that was never seeded leaves it
-        // silent, which nothing notices. Of the two, take the recoverable
-        // failure.
-        Effect.catchAll(() => Effect.succeed(false)),
-        Effect.flatMap((alreadySeeded) =>
-          acquired.origin === 'existing' && alreadySeeded
-            ? // The one positive trace that the value was read and deliberately
-              // not applied. It is what the old "no applied line means you have
-              // found a clobbered COMMY_SUBSCRIBE" diagnostic becomes: absence
-              // no longer carries that meaning, because a bot past its
-              // bootstrap never emits the applied line again.
-              Effect.logInfo(
-                `commy plugin: COMMY_SUBSCRIBE not applied — ${acquired.identity.name} already ` +
-                  `exists and owns its subscriptions. Editing COMMY_SUBSCRIBE for a bot that ` +
-                  `already exists has no effect; change its subscriptions through the bot.`,
-              ).pipe(
-                Effect.provide(deps.loggerLayer),
-                Effect.as<ReadonlyArray<SubscribeIntent>>([]),
-              )
-            : subscribeFromEnv(deps.inbox, deps.narrowSet, deps.parsed).pipe(
-                // Recorded only after the tokens actually landed, so a seeding
-                // that failed part-way is retried on the next boot rather than
-                // marked done.
-                Effect.tap(() =>
-                  deps.ledger
-                    .recordSeeded(acquired.identity.name)
-                    .pipe(Effect.catchAll(() => Effect.void)),
-                ),
-                // Deliberately silent on an empty set, rather than warning. The
-                // process cannot distinguish a seat that wanted no subscriptions
-                // from one whose value was destroyed upstream — the operator's
-                // intent is gone by the time the value arrives here — so an
-                // empty-set warning would fire on the majority of perfectly
-                // healthy interactive boots while telling the one broken seat
-                // nothing it could act on. A line that is almost always noise
-                // trains the reader to skip it, which is how the next silent
-                // fault gets to hide. The invariant that stops the clobber
-                // recurring is pinned in the launcher manifest test, not here.
-                Effect.tap((intents) =>
-                  intents.length === 0
-                    ? Effect.void
-                    : Effect.logInfo(
-                        `commy plugin: applied ${intents.length} boot-time subscribe target(s): ${intents.map(intentToToken).join(', ')}`,
-                      ).pipe(Effect.provide(deps.loggerLayer)),
-                ),
-              ),
-        ),
-      )
+    : acquired.origin === 'existing'
+      ? // The one positive trace that the value was read and deliberately not
+        // applied. It is what the old "no applied line means you have found a
+        // clobbered COMMY_SUBSCRIBE" diagnostic becomes: absence no longer
+        // carries that meaning, because a bot past its bootstrap never emits
+        // the applied line again.
+        Effect.logInfo(
+          `commy plugin: COMMY_SUBSCRIBE not applied — ${acquired.identity.name} already ` +
+            `exists and owns its subscriptions. Editing COMMY_SUBSCRIBE for a bot that ` +
+            `already exists has no effect; change its subscriptions through the bot.`,
+        ).pipe(Effect.provide(deps.loggerLayer), Effect.as<ReadonlyArray<SubscribeIntent>>([]))
+      : subscribeFromEnv(deps.inbox, deps.narrowSet, deps.parsed).pipe(
+          // Deliberately silent on an empty set, rather than warning. The
+          // process cannot distinguish a seat that wanted no subscriptions from
+          // one whose value was destroyed upstream — the operator's intent is
+          // gone by the time the value arrives here — so an empty-set warning
+          // would fire on the majority of perfectly healthy interactive boots
+          // while telling the one broken seat nothing it could act on. A line
+          // that is almost always noise trains the reader to skip it, which is
+          // how the next silent fault gets to hide. The invariant that stops the
+          // clobber recurring is pinned in the launcher manifest test, not here.
+          Effect.tap((intents) =>
+            intents.length === 0
+              ? Effect.void
+              : Effect.logInfo(
+                  `commy plugin: applied ${intents.length} boot-time subscribe target(s): ${intents.map(intentToToken).join(', ')}`,
+                ).pipe(Effect.provide(deps.loggerLayer)),
+          ),
+        )
 
 /**
  * Default boot-time channel/thread catch-up window for persistent bots.
@@ -456,7 +429,6 @@ export const makeProgram = (
   | CursorStoreTag
   | SubscriptionStoreTag
   | QueueStateStoreTag
-  | SeedLedgerTag
   | SessionIdTag
   | ResumeOutcomeTag
   | SessionBinderTag
@@ -487,7 +459,6 @@ export const makeProgram = (
       // ephemeral onAcquire hook below.
       const resumeOutcome = yield* ResumeOutcomeTag
       const queueStateStore = yield* QueueStateStoreTag
-      const seedLedger = yield* SeedLedgerTag
       yield* Effect.flatMap(
         readBootSessionId,
         Option.match({
@@ -757,7 +728,6 @@ export const makeProgram = (
       // The COMMY_SUBSCRIBE bootstrap, ready for whichever path mints this
       // seat's bot. See `seedSubscriptionsOnMint`.
       const seedDeps: SeedDeps = {
-        ledger: seedLedger,
         inbox: adapter.inbox,
         narrowSet,
         parsed,
@@ -1155,7 +1125,6 @@ const AppLayer: Layer.Layer<
   | SubstrateAdapter
   | CursorStoreTag
   | SubscriptionStoreTag
-  | SeedLedgerTag
   | SessionIdTag
   | QueueStateStoreTag
   | ResumeOutcomeTag
@@ -1166,7 +1135,6 @@ const AppLayer: Layer.Layer<
   ZulipAdapterLive,
   FileCursorStoreLive,
   FileSubscriptionStoreLive,
-  FileSeedLedgerLive,
   stderrLoggerLayer,
 ).pipe(
   Layer.provideMerge(FileQueueStateStoreLive),
@@ -1212,7 +1180,6 @@ export const MainLive: Layer.Layer<
   | SubstrateAdapter
   | CursorStoreTag
   | SubscriptionStoreTag
-  | SeedLedgerTag
   | QueueStateStoreTag
   | SessionIdTag
   | ResumeOutcomeTag

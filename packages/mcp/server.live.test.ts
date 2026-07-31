@@ -54,7 +54,6 @@ import { FileCursorStoreLive } from './cursor-store.ts'
 import { buildQueueStateHooks } from './queue-state-hooks.ts'
 import { FileQueueStateStoreLive, QueueStateStoreTag } from './queue-state-store.ts'
 import { ResumeOutcomeLive, ResumeOutcome as ResumeOutcomeService } from './resume-outcome.ts'
-import { FileSeedLedgerLive } from './seed-ledger.ts'
 import { makeProgram } from './server.ts'
 import { SessionBinderLive } from './session-binder.ts'
 import { SessionIdLive, SessionId as SessionIdService } from './session-id.ts'
@@ -245,10 +244,6 @@ const buildHarness = (
             Layer.mergeAll(
               substrateAdapterLayer(parseEnv.pipe(Effect.as(wrappedAdapter))),
               FileCursorStoreLive,
-              // The seed ledger is file-backed like the cursor store: this
-              // harness gives each test its own XDG state home, so a bot minted
-              // here is seeded once and the ledger dies with the fixture.
-              FileSeedLedgerLive,
               FileQueueStateStoreLive,
               // Feed the one shared session-id deferred into the store, which now
               // awaits it — mergeAll won't wire a sibling's output to a sibling's
@@ -326,7 +321,6 @@ const buildResumeHarness = (
               adapterLayer,
               FileCursorStoreLive,
               FileSubscriptionStoreLive,
-              FileSeedLedgerLive,
               stderrLoggerLayer,
             ).pipe(
               Layer.provideMerge(

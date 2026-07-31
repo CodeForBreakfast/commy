@@ -52,8 +52,6 @@ import type { IdentityCache } from './identity-cache.ts'
 import { completeAsSubstrate, type ZulipAdapter } from './memory-substrate.ts'
 import { QueueStateStoreTag } from './queue-state-store.ts'
 import { ResumeOutcomeLive } from './resume-outcome.ts'
-import type { SeedLedger } from './seed-ledger.ts'
-import { createInMemorySeedLedger, SeedLedgerTag } from './seed-ledger.ts'
 import { clientDisconnect, forkIdleSweep, makeProgram, type ProgramParams } from './server.ts'
 import type { BindOnDemand } from './session-binder.ts'
 import {
@@ -117,10 +115,6 @@ const runProgram = (
   // adapter actually needs to bind pass the same ref they built it around;
   // the rest get a fresh one nobody reads.
   binderRef?: Ref.Ref<Option.Option<BindOnDemand>>,
-  // The seed ledger, for tests that care whether COMMY_SUBSCRIBE was applied.
-  // Fresh per run by default, since a shared one would let one test's
-  // bootstrap suppress the next test's.
-  seedLedger: SeedLedger = createInMemorySeedLedger(),
 ) => {
   // Default to a discarding capture, not the stderr logger: boot emits real
   // diagnostics (the applied subscribe set among them) and a test run's output
@@ -141,7 +135,6 @@ const runProgram = (
               : Layer.succeed(SessionBinderTag, binderRef),
             ResumeOutcomeLive,
             Layer.succeed(QueueStateStoreTag, createInMemoryQueueStateStore()),
-            Layer.succeed(SeedLedgerTag, seedLedger),
             loggerLayer,
           ),
           testPlatformLayer(env),
@@ -390,26 +383,23 @@ test('lazy mode does NOT mint at boot when COMMY_SUBSCRIBE is unset', async () =
 })
 
 // ─── COMMY_SUBSCRIBE is a once-per-bot bootstrap (comms-g5zh.4 / comms-g5zh.8) ──
-// Graeme's ruling (2026-07-20): nix bootstraps the bot ACCOUNT; the bot owns its
-// subscriptions once it exists. The four tests below pin the whole decision
-// table — the two facts that drive it (the origin of the bind, and whether this
-// installation has seeded this bot before) and what each one is there to catch.
+// Graeme's rulings: nix bootstraps the bot ACCOUNT and the bot owns its
+// subscriptions once it exists (2026-07-20); and a bot that comes out of an
+// upgrade with no subscriptions of its own is LEFT empty rather than
+// bootstrapped, because a bot that wants subscriptions can subscribe
+// (2026-07-31). Together those make the origin of the bind the whole test —
+// there is nothing to remember between boots, so nothing is remembered.
 
-test('COMMY_SUBSCRIBE is inert on a bot that already exists and was already seeded', async () => {
-  // The bead's acceptance, and the fleet's steady state: a pinned pane
+test('COMMY_SUBSCRIBE is inert on a bot that already exists', async () => {
+  // The bead's acceptance and the fleet's steady state: a pinned pane
   // relaunching. The tokens are not re-applied, and an operator who edits them
   // is told so rather than left reading silence.
   const fake = buildFakeAdapter({ identityOrigin: 'existing' })
-  const ledger = createInMemorySeedLedger()
-  await Effect.runPromise(ledger.recordSeeded(decodeDisplayNameSync('myproject-concierge')))
   const logs: string[] = []
-  await runProgram(
-    { ...validEnv, COMMY_SUBSCRIBE: 'home' },
-    fake.adapter,
-    { loggerLayer: captureLogger(logs), readGitContext: () => Effect.succeed(NotInRepo()) },
-    undefined,
-    ledger,
-  )
+  await runProgram({ ...validEnv, COMMY_SUBSCRIBE: 'home' }, fake.adapter, {
+    loggerLayer: captureLogger(logs),
+    readGitContext: () => Effect.succeed(NotInRepo()),
+  })
   expect(fake.calls.acquired).toEqual(['myproject-concierge'])
   expect(fake.calls.subscribed).toEqual([])
   expect(logs).toEqual([
@@ -419,64 +409,29 @@ test('COMMY_SUBSCRIBE is inert on a bot that already exists and was already seed
   ])
 })
 
-test('an already-minted bot this installation has never seeded is seeded once (upgrade path)', async () => {
-  // comms-g5zh.8. Every pinned bot in an existing fleet is already minted when
-  // this lands, so mint-only seeding would never fire for any of them and they
-  // would come up with no subscriptions at all — a fleet-wide silent deafening
-  // that passes every test written against freshly minted bots.
+test('an already-minted bot with no subscriptions of its own is left alone, not bootstrapped', async () => {
+  // comms-g5zh.8 as ruled. Every pinned bot crossing this upgrade has an empty
+  // own-subscription set — before this architecture the MINTER held the
+  // subscriptions, so no bot ever had any of its own. Bootstrapping them would
+  // resurrect subscriptions their agents may have dropped on purpose; a bot
+  // that wants subscriptions subscribes.
   const fake = buildFakeAdapter({ identityOrigin: 'existing' })
-  const ledger = createInMemorySeedLedger()
-  await runProgram(
-    { ...validEnv, COMMY_SUBSCRIBE: 'home' },
-    fake.adapter,
-    { readGitContext: () => Effect.succeed(NotInRepo()) },
-    undefined,
-    ledger,
-  )
-  expect(fake.calls.subscribed).toEqual([decodeChannelNameSync('home')])
-  expect(
-    await Effect.runPromise(ledger.hasSeeded(decodeDisplayNameSync('myproject-concierge'))),
-  ).toBe(true)
-})
-
-test('a freshly minted bot is seeded even when the ledger still holds its old entry', async () => {
-  // The realm's answer outranks local bookkeeping. A bot an administrator
-  // deleted and that we have since re-minted under the same name is a NEW bot
-  // with no subscriptions, and the stale marker would otherwise leave it deaf
-  // for good.
-  const fake = buildFakeAdapter({ identityOrigin: 'minted' })
-  const ledger = createInMemorySeedLedger()
-  await Effect.runPromise(ledger.recordSeeded(decodeDisplayNameSync('myproject-concierge')))
-  await runProgram(
-    { ...validEnv, COMMY_SUBSCRIBE: 'home' },
-    fake.adapter,
-    { readGitContext: () => Effect.succeed(NotInRepo()) },
-    undefined,
-    ledger,
-  )
-  expect(fake.calls.subscribed).toEqual([decodeChannelNameSync('home')])
-})
-
-test('the seeding is recorded only after the tokens actually land', async () => {
-  // A substrate rejection part-way through must leave the bot un-marked, so the
-  // next boot retries rather than treating a half-applied bootstrap as done.
-  const fake = buildFakeAdapter({
-    subscribeError: new InboxError({
-      operation: 'subscribe',
-      cause: new Error('substrate rejected subscribe'),
-    }),
+  await runProgram({ ...validEnv, COMMY_SUBSCRIBE: 'home' }, fake.adapter, {
+    readGitContext: () => Effect.succeed(NotInRepo()),
   })
-  const ledger = createInMemorySeedLedger()
-  await runProgram(
-    { ...validEnv, COMMY_SUBSCRIBE: 'home' },
-    fake.adapter,
-    { loggerLayer: captureLogger([]), readGitContext: () => Effect.succeed(NotInRepo()) },
-    undefined,
-    ledger,
-  )
-  expect(
-    await Effect.runPromise(ledger.hasSeeded(decodeDisplayNameSync('myproject-concierge'))),
-  ).toBe(false)
+  expect(fake.calls.subscribed).toEqual([])
+})
+
+test('a freshly minted bot is bootstrapped', async () => {
+  // The other half of the same rule, and the only path that ever applies the
+  // tokens. A bot an administrator deleted and that we have since re-minted
+  // under the same name reaches here too — it is a new bot with no
+  // subscriptions, and the realm says so.
+  const fake = buildFakeAdapter({ identityOrigin: 'minted' })
+  await runProgram({ ...validEnv, COMMY_SUBSCRIBE: 'home' }, fake.adapter, {
+    readGitContext: () => Effect.succeed(NotInRepo()),
+  })
+  expect(fake.calls.subscribed).toEqual([decodeChannelNameSync('home')])
 })
 
 test('main acquire failure stringifies non-Error rejections', async () => {

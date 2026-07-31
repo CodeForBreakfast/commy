@@ -3,7 +3,6 @@ import type { CommandExecutor, FileSystem } from '@effect/platform'
 import { NodeContext } from '@effect/platform-node'
 import { ConfigProvider, Effect, Layer, Option } from 'effect'
 import { type QueueStateStore, QueueStateStoreTag } from './queue-state-store.ts'
-import { createInMemorySeedLedger, SeedLedgerTag } from './seed-ledger.ts'
 import type { SessionIdValue } from './session-id.ts'
 
 /**
@@ -63,18 +62,10 @@ export const createInMemoryQueueStateStore = (): QueueStateStore => {
 }
 
 /**
- * The two boot-time stores every substituted-adapter harness needs and none of
- * them cares about: the queue-state store boot reads for the resume verdict,
- * and the seed ledger that makes `COMMY_SUBSCRIBE` a once-per-bot bootstrap.
- * Both in-memory, so a test run leaves nothing behind. A test that cares about
- * either — the seeding-is-once tests do — provides its own instead.
- *
- * A FUNCTION, not a shared constant: the ledger is keyed by bot name and most
- * boot tests boot the same one, so a module-level instance would let the first
- * test's seeding suppress every later test's.
+ * The boot-time store every substituted-adapter harness needs and none of them
+ * cares about: the queue-state store boot reads to answer "is there anything to
+ * resume?". A FUNCTION, not a shared constant, so one harness's writes cannot
+ * reach another's boot.
  */
-export const testBootStoresLayer = (): Layer.Layer<QueueStateStoreTag | SeedLedgerTag> =>
-  Layer.mergeAll(
-    Layer.succeed(QueueStateStoreTag, createInMemoryQueueStateStore()),
-    Layer.succeed(SeedLedgerTag, createInMemorySeedLedger()),
-  )
+export const testBootStoresLayer = (): Layer.Layer<QueueStateStoreTag> =>
+  Layer.succeed(QueueStateStoreTag, createInMemoryQueueStateStore())
