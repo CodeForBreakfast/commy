@@ -49,7 +49,10 @@ import { CursorStoreTag } from './cursor-store.ts'
 // `completeAsSubstrate` is the single seam that completes it to the Zulip-shaped
 // `SubstrateAdapter` port; no Zulip type or brand is named directly here.
 import { completeAsSubstrate } from './memory-substrate.ts'
+import { QueueStateStoreTag } from './queue-state-store.ts'
 import { ResumeOutcome as ResumeOutcomeTag } from './resume-outcome.ts'
+import type { SeedLedger } from './seed-ledger.ts'
+import { createInMemorySeedLedger, SeedLedgerTag } from './seed-ledger.ts'
 import { makeProgram } from './server.ts'
 import type { BindOnDemand } from './session-binder.ts'
 import { bindThrough, SessionBinder as SessionBinderTag } from './session-binder.ts'
@@ -57,7 +60,7 @@ import { SessionId as SessionIdTag, type SessionIdValue } from './session-id.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 import type { SubscriptionStore } from './subscription-store.ts'
 import { SubscriptionStoreTag } from './subscription-store.ts'
-import { testPlatformLayer } from './test-platform.ts'
+import { createInMemoryQueueStateStore, testPlatformLayer } from './test-platform.ts'
 
 const createMemoryCursorStore = (): CursorStore => {
   const store = new Map<string, TimestampType>()
@@ -149,6 +152,12 @@ interface AdapterOverrides {
   readonly seedHumans?: ReadonlyArray<string>
   /** Override the COMMY_SUBSCRIBE env var (default: unset). */
   readonly subscribe?: string
+  /**
+   * Override the seed ledger (default: a fresh in-memory one per harness).
+   * Pass a pre-populated ledger to boot a bot that has already been
+   * bootstrapped, which is how the upgrade and reboot cases are driven.
+   */
+  readonly seedLedger?: SeedLedger
   /** Override the cursor store (default: in-memory). */
   readonly cursorStore?: CursorStore
   /** Override the subscription store (default: in-memory, bound to the shared deferred). */
@@ -365,6 +374,10 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
   // adapter's resume wiring does), so pre-resolve the shared deferred the
   // ephemeral onAcquire awaits — default false (catch-up runs) unless a test
   // simulates a surviving queue.
+  // Per-harness seed ledger: COMMY_SUBSCRIBE is a once-per-bot bootstrap, so a
+  // ledger shared across harnesses would let one test's seeding suppress the
+  // next test's. A test exercising the already-seeded path passes its own.
+  const seedLedger = overrides.seedLedger ?? createInMemorySeedLedger()
   const resumeOutcomeDeferred = Deferred.unsafeMake<boolean>(FiberId.none)
   Deferred.unsafeDone(resumeOutcomeDeferred, Effect.succeed(overrides.resumeQueueReplayed ?? false))
   const runExit = Effect.runPromiseExit(
@@ -381,6 +394,8 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
             Layer.succeed(SessionIdTag, sessionIdDeferred),
             Layer.succeed(ResumeOutcomeTag, resumeOutcomeDeferred),
             Layer.succeed(SessionBinderTag, binderRef),
+            Layer.succeed(QueueStateStoreTag, createInMemoryQueueStateStore()),
+            Layer.succeed(SeedLedgerTag, seedLedger),
             loggerLayer,
           ),
           testPlatformLayer(env),
@@ -524,11 +539,14 @@ test('static audit: no plugin source imports or calls fs-write APIs', () => {
   //   cursor-store.ts        — per-identity mentions cursor under <XDG_STATE_HOME>
   //   subscription-store.ts  — per-session_id narrow-set snapshot under <XDG_STATE_HOME>
   //   queue-state-store.ts   — per-session events-queue state under <XDG_STATE_HOME>
+  //   seed-ledger.ts         — per-bot "COMMY_SUBSCRIBE already applied" marker
+  //                            under <XDG_STATE_HOME>
   //   server.ts              — download_file temp files under os.tmpdir()
   const writeAllowlist = new Set([
     'cursor-store.ts',
     'subscription-store.ts',
     'queue-state-store.ts',
+    'seed-ledger.ts',
     'server.ts',
   ])
   const sources = readdirSync(pluginDir).filter(

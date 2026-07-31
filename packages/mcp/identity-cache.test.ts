@@ -54,6 +54,7 @@ const buildIdentity = (name: string): Identity => ({
 const buildAcquired = (name: string): AcquiredIdentity => ({
   identity: buildIdentity(name),
   credentials: { apiKey: `key-${name}` },
+  origin: 'minted',
 })
 
 /**

@@ -445,9 +445,28 @@ export interface RealmSettings {
  */
 export type Credentials = Readonly<Record<string, string>>
 
+/**
+ * Whether an acquire brought an identity into existence or bound to one that
+ * was already there.
+ *
+ * The substrate answers this as a by-product of acquiring — Zulip's acquire is
+ * a lookup that mints on miss — so a caller reads the answer rather than
+ * inferring one from local state. That matters because the alternative
+ * inferences are all wrong in a way that shows up only in production: "no
+ * subscriptions yet" cannot tell a never-seeded bot from one that deliberately
+ * unsubscribed from everything, and "no local state file" cannot tell a fresh
+ * seat from one whose state was pruned.
+ *
+ * `minted` is the one moment a seat first exists, and it is what bootstrap
+ * hangs off: `COMMY_SUBSCRIBE` seeds a seat's subscriptions there and nowhere
+ * else, because from that point the bot owns them.
+ */
+export type IdentityOrigin = 'minted' | 'existing'
+
 export interface AcquiredIdentity {
   readonly credentials: Credentials
   readonly identity: Identity
+  readonly origin: IdentityOrigin
 }
 
 /**
