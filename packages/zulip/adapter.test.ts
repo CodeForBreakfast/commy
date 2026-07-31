@@ -2884,6 +2884,65 @@ effectTest('inbox.unsubscribe deletes the subscription under the seat own princi
   }),
 )
 
+// comms-g5zh.3's acceptance, and the bug it DELETES rather than mitigates.
+//
+// Under the shared minter there was one subscription row for the whole fleet,
+// so seat B's unsubscribe issued a DELETE against the row seat A was receiving
+// through — and deafened A. Nothing refcounted it: `streamIsListening` counts
+// only within one adapter instance across narrow kinds, and `inboxRef` is
+// per-process, so no cross-seat unwinding existed to get wrong.
+//
+// With each seat holding its own row the bug has no shape to take: B's DELETE
+// names B's principal, and A's row is not reachable from it. This asserts the
+// structural fact that makes that true — every write in the exchange goes out
+// under the seat that issued it, and the minter issues none. The behavioural
+// half (A keeps receiving) needs two real principals in a realm and lives in
+// the live suite.
+effectTest('one seat unsubscribing writes only under its own principal, never a shared one', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedUsers(stub, [HERMES, RIQ])
+    yield* seedRegenerate(stub, HERMES.user_id, 'hermes-key')
+    yield* seedRegenerate(stub, RIQ.user_id, 'riq-key')
+    yield* seedRegisterOk(stub)
+    yield* stub.respond('POST', '/api/v1/users/me/subscriptions', {
+      body: { result: 'success', subscribed: {}, already_subscribed: {}, unauthorized: [] },
+    })
+    yield* stub.respond('DELETE', '/api/v1/users/me/subscriptions', {
+      body: { result: 'success', subscribed: {}, already_subscribed: {}, unauthorized: [] },
+    })
+
+    const config = yield* makeConfig()
+    const seatA = yield* zulipAdapter(stub, config)
+    yield* seatA.identity.acquire(decodeBotNameSync('hermes-agent'))
+    const seatB = yield* zulipAdapter(stub, config)
+    yield* seatB.identity.acquire(decodeBotNameSync('riq6r230'))
+
+    const authA = { email: 'hermes-agent-bot@example.com', apiKey: 'hermes-key' }
+    const authB = { email: 'riq-bot@example.com', apiKey: 'riq-key' }
+
+    yield* seatA.inbox.subscribe(generalChannel.name)
+    yield* seatB.inbox.subscribe(generalChannel.name)
+    yield* seatB.inbox.unsubscribe(generalChannel.name)
+
+    const subscriptionWrites = (yield* stub.captured).filter(
+      (r) => r.url.pathname === '/api/v1/users/me/subscriptions',
+    )
+    const byAuth = subscriptionWrites.map((r) => ({
+      method: r.method,
+      auth: decodeBasicAuth(r.headers.get('Authorization')),
+    }))
+    expect(byAuth).toEqual([
+      { method: 'POST', auth: authA },
+      { method: 'POST', auth: authB },
+      { method: 'DELETE', auth: authB },
+    ])
+    // The load-bearing negative: no subscription write in the exchange went out
+    // as the minter. A single minter-issued DELETE here is the whole bug.
+    expect(byAuth.filter((w) => w.auth.email === minterAuth.email)).toEqual([])
+  }),
+)
+
 // A seat that cannot bind must not fall back to the minter for receiving, for
 // the same reason `publisher.post` must not: the fallback is invisible and
 // leaves the seat reading a surface that is not its own. The refusal is the

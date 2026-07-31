@@ -878,21 +878,20 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
       const registerFreshQueue: Effect.Effect<
         EventQueueCursor,
         ZulipApiError | ParseResult.ParseError | UnboundEphemeralSession
-      > = queueHttp
-        .pipe(Effect.flatMap((http) => registerQueue(http, config.queueIdleTimeoutSecs)))
-        .pipe(
-          Effect.tap((q) => config.onQueueRegister?.(q) ?? Effect.void),
-          // A (re-)register is the one moment a seat can silently lose its
-          // backlog: the new queue starts at the server's current
-          // last_event_id, so anything that arrived while no queue existed
-          // is gone. Recording it means a gap in the record has a visible
-          // cause rather than looking like a quiet realm.
-          Effect.tap((q) =>
-            Effect.logInfo(
-              `commy zulip events: registered queue_id=${q.queueId} last_event_id=${q.lastEventId}`,
-            ),
+      > = queueHttp.pipe(
+        Effect.flatMap((http) => registerQueue(http, config.queueIdleTimeoutSecs)),
+        Effect.tap((q) => config.onQueueRegister?.(q) ?? Effect.void),
+        // A (re-)register is the one moment a seat can silently lose its
+        // backlog: the new queue starts at the server's current
+        // last_event_id, so anything that arrived while no queue existed
+        // is gone. Recording it means a gap in the record has a visible
+        // cause rather than looking like a quiet realm.
+        Effect.tap((q) =>
+          Effect.logInfo(
+            `commy zulip events: registered queue_id=${q.queueId} last_event_id=${q.lastEventId}`,
           ),
-        )
+        ),
+      )
 
       const readRegistration: Effect.Effect<Option.Option<EventQueueCursor>> =
         config.currentRegistration ?? Effect.succeedNone

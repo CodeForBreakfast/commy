@@ -371,6 +371,60 @@ effectTest(
   { layer: TestContext.TestContext },
 )
 
+// comms-9iro, dissolved rather than mitigated. That bug was a ONE-SHOT: the
+// producer consulted the session once at materialisation, got nothing, and
+// latched — a seat that lost that race stayed deaf for the pump's entire
+// lifetime, with no retry and no way to notice from inside.
+//
+// The property that replaces it is not an await. It is the absence of a latch:
+// a producer that starts unbound keeps its unfold alive and re-reads the
+// inbox's registration each step, so a seat that binds LATER is picked up. This
+// test starts the pump on an unbound seat, binds afterwards, and requires the
+// event to arrive. It fails if any step in that path gives up permanently.
+effectTest(
+  'a producer that starts unbound adopts the queue a later subscribe registers',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* seedUsers(stub, [HERMES])
+      yield* seedRegenerate(stub, HERMES.user_id)
+      yield* seedRegister(stub)
+      yield* seedSubscribeOk(stub)
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        {
+          body: {
+            result: 'success',
+            events: [messageEvent(5, aZulipMessage({ content: 'after binding' }))],
+          },
+        },
+        { hang: true },
+      ])
+      // Deliberately NOT acquired: the producer materialises against a seat
+      // that owns no queue and cannot register one.
+      const adapter = yield* zulipAdapter({
+        realmUrl: yield* RealmUrl(REALM_URL).pipe(Effect.orDie),
+        minterEmail: yield* BotEmail('minter@example.com').pipe(Effect.orDie),
+        minterApiKey: Redacted.make(yield* ApiKey('minter-key').pipe(Effect.orDie)),
+      }).pipe(Effect.provideService(HttpClient.HttpClient, stub.client))
+      const queue = yield* eventQueue(adapter)
+
+      // Let the unbound producer idle through several re-checks. Under a latch
+      // these are the steps during which it would have given up for good.
+      yield* TestClock.adjust(Duration.seconds(30))
+      expect(yield* eventPolls(stub)).toHaveLength(0)
+      expect(yield* registerPosts(stub)).toHaveLength(0)
+
+      yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+      yield* adapter.inbox.subscribe(homeChannel.name)
+      yield* TestClock.adjust(Duration.seconds(30))
+
+      const event = yield* Queue.take(queue)
+      expect(event.kind).toBe('message-posted')
+      expect(yield* eventPolls(stub)).not.toHaveLength(0)
+    }),
+  { layer: TestContext.TestContext },
+)
+
 // The reads a batch needs — rendered content, reaction targets — stay on the
 // minter. A read leaves no realm-visible trace, so it needs no principal of
 // its own, and routing it through the seat would spend the seat's rate-limit
