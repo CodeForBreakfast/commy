@@ -46,6 +46,9 @@ const DECISIONS_CHANNEL = 'commy'
 const DECISIONS_THREAD = 'ref-types-split-decisions'
 const SID_RESUME = '61b08d76-0000-4000-8000-000000000001'
 const SID_FRESH = 'f9e5f9e5-0000-4000-8000-000000000002'
+// The seat receiving the events these tests match. It is never mentioned in
+// them — what's under test is narrow membership, not the mention path.
+const SEAT_ID = decodeIdentityIdSync('bot:cc-61b08d76')
 
 const generalTopicsIntent: SubscribeIntent = {
   kind: 'new-topics-in-channel',
@@ -166,7 +169,7 @@ test('restore rehydrates the persisted narrow set when the shared deferred is fi
       )
 
       // Rebooted, deaf: nothing restored while the id is unknown.
-      expect(narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(false)
+      expect(narrowSet.matches(reactionOnDecisionsThread(), SEAT_ID)).toBe(false)
 
       // Fill the shared deferred ALONE — no callTool.
       yield* Deferred.succeed(session, asSessionId(SID_RESUME))
@@ -174,7 +177,7 @@ test('restore rehydrates the persisted narrow set when the shared deferred is fi
 
       // Restored: the human's :one: reaction on the decisions thread now matches,
       // and the thread was re-wired on the substrate.
-      expect(narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(true)
+      expect(narrowSet.matches(reactionOnDecisionsThread(), SEAT_ID)).toBe(true)
       expect(subscribes).toContainEqual(intentToTarget(decisionsThreadIntent))
       expect(sortIntents(narrowSet.intents())).toEqual(
         sortIntents([decisionsThreadIntent, generalTopicsIntent]),
@@ -266,7 +269,7 @@ test('a fresh session (no record) rebuilds from the realm and replays buffered d
       // Nothing re-declared on the substrate: this process already subscribed
       // `env-default` on the way in, so the rebuild has no round-trip to make.
       expect(subscribes).toEqual([])
-      expect(narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(false)
+      expect(narrowSet.matches(reactionOnDecisionsThread(), SEAT_ID)).toBe(false)
     }),
   ))
 
@@ -295,7 +298,7 @@ test('a seat with no realm rows and no topic record comes back empty', () =>
       yield* Fiber.join(fiber)
 
       expect(narrowSet.intents()).toEqual([])
-      expect(narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(false)
+      expect(narrowSet.matches(reactionOnDecisionsThread(), SEAT_ID)).toBe(false)
     }),
   ))
 

@@ -125,13 +125,17 @@ const newTopicsIntent = (channel: string): SubscribeIntent => ({
   channelName: decodeChannelNameSync(channel),
 })
 
-const noBot: IdentityIdType | undefined = undefined
+// A receiving seat always holds an identity — the events queue is registered
+// against its own principal, so an unbound seat produces no events to filter.
+// Tests whose subject is not mentions still supply one; this seat is never in
+// any message's mention list, so it never widens a match on its own.
+const seat: IdentityIdType = buildIdentity('bot:seat', 'seat').id
 
 test('empty narrow set matches nothing', () => {
   const set = createNarrowSet()
   expect(set.size()).toBe(0)
-  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(false)
-  expect(set.matches(buildReactionAdded('home'), noBot)).toBe(false)
+  expect(set.matches(buildMessagePosted('home', undefined), seat)).toBe(false)
+  expect(set.matches(buildReactionAdded('home'), seat)).toBe(false)
 })
 
 // comms-n1my. The one exception to "empty narrow → nothing delivered", and the
@@ -153,45 +157,45 @@ test('empty narrow set still matches a mention of the bound bot', () => {
 test('channel narrow matches message-posted on that channel', () => {
   const set = createNarrowSet()
   set.add(channelIntent('home'))
-  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(true)
-  expect(set.matches(buildMessagePosted('other', undefined), noBot)).toBe(false)
+  expect(set.matches(buildMessagePosted('home', undefined), seat)).toBe(true)
+  expect(set.matches(buildMessagePosted('other', undefined), seat)).toBe(false)
 })
 
 test('channel narrow matches message-posted in any thread of that channel', () => {
   const set = createNarrowSet()
   set.add(channelIntent('home'))
-  expect(set.matches(buildMessagePosted('home', 'payments'), noBot)).toBe(true)
+  expect(set.matches(buildMessagePosted('home', 'payments'), seat)).toBe(true)
 })
 
 test('thread narrow matches only the named thread within the channel', () => {
   const set = createNarrowSet()
   set.add(threadIntent('home', 'payments'))
-  expect(set.matches(buildMessagePosted('home', 'payments'), noBot)).toBe(true)
-  expect(set.matches(buildMessagePosted('home', 'breakfast'), noBot)).toBe(false)
-  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(false)
-  expect(set.matches(buildMessagePosted('other', 'payments'), noBot)).toBe(false)
+  expect(set.matches(buildMessagePosted('home', 'payments'), seat)).toBe(true)
+  expect(set.matches(buildMessagePosted('home', 'breakfast'), seat)).toBe(false)
+  expect(set.matches(buildMessagePosted('home', undefined), seat)).toBe(false)
+  expect(set.matches(buildMessagePosted('other', 'payments'), seat)).toBe(false)
 })
 
 test('thread narrow does not alias a distinct channel/thread pair sharing a slash boundary', () => {
   const set = createNarrowSet()
   set.add(threadIntent('a', 'b/c'))
-  expect(set.matches(buildMessagePosted('a', 'b/c'), noBot)).toBe(true)
-  expect(set.matches(buildMessagePosted('a/b', 'c'), noBot)).toBe(false)
+  expect(set.matches(buildMessagePosted('a', 'b/c'), seat)).toBe(true)
+  expect(set.matches(buildMessagePosted('a/b', 'c'), seat)).toBe(false)
 })
 
 test('channel narrow matches reaction-added/removed on that channel', () => {
   const set = createNarrowSet()
   set.add(channelIntent('home'))
-  expect(set.matches(buildReactionAdded('home'), noBot)).toBe(true)
-  expect(set.matches(buildReactionRemoved('home'), noBot)).toBe(true)
-  expect(set.matches(buildReactionAdded('other'), noBot)).toBe(false)
+  expect(set.matches(buildReactionAdded('home'), seat)).toBe(true)
+  expect(set.matches(buildReactionRemoved('home'), seat)).toBe(true)
+  expect(set.matches(buildReactionAdded('other'), seat)).toBe(false)
 })
 
 test('thread narrow matches reactions on a message in that thread', () => {
   const set = createNarrowSet()
   set.add(threadIntent('home', 'payments'))
-  expect(set.matches(buildReactionAdded('home', 'payments'), noBot)).toBe(true)
-  expect(set.matches(buildReactionAdded('home', 'other'), noBot)).toBe(false)
+  expect(set.matches(buildReactionAdded('home', 'payments'), seat)).toBe(true)
+  expect(set.matches(buildReactionAdded('home', 'other'), seat)).toBe(false)
 })
 
 test('a mention matches message-posted only when the bot is among the mentions', () => {
@@ -200,12 +204,6 @@ test('a mention matches message-posted only when the bot is among the mentions',
   const other = buildIdentity('user:other', 'other')
   expect(set.matches(buildMessagePosted('home', undefined, [bot]), bot.id)).toBe(true)
   expect(set.matches(buildMessagePosted('home', undefined, [other]), bot.id)).toBe(false)
-})
-
-test('a mention does not match pre-acquire (no bot identity)', () => {
-  const set = createNarrowSet()
-  const bot = buildIdentity('bot:me', 'me')
-  expect(set.matches(buildMessagePosted('home', undefined, [bot]), noBot)).toBe(false)
 })
 
 test('a mention matches mention-received events whenever the bot is in mentions', () => {
@@ -228,10 +226,10 @@ test('combined channel + thread narrows widen the match window alongside mention
 test('remove drops an intent so subsequent events no longer match', () => {
   const set = createNarrowSet()
   set.add(channelIntent('home'))
-  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(true)
+  expect(set.matches(buildMessagePosted('home', undefined), seat)).toBe(true)
   set.remove(channelIntent('home'))
   expect(set.size()).toBe(0)
-  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(false)
+  expect(set.matches(buildMessagePosted('home', undefined), seat)).toBe(false)
 })
 
 test('remove on an unknown intent is a no-op', () => {
@@ -260,53 +258,53 @@ test('thread and channel narrows for the same channel coexist as distinct entrie
 test('new-topics narrow matches the first message of a topic on that channel', () => {
   const set = createNarrowSet()
   set.add(newTopicsIntent('home'))
-  expect(set.matches(buildMessagePosted('home', 'fresh-topic'), noBot)).toBe(true)
-  expect(set.matches(buildMessagePosted('elsewhere', 'fresh-topic'), noBot)).toBe(false)
+  expect(set.matches(buildMessagePosted('home', 'fresh-topic'), seat)).toBe(true)
+  expect(set.matches(buildMessagePosted('elsewhere', 'fresh-topic'), seat)).toBe(false)
 })
 
 test('new-topics narrow does not match a topic-less message', () => {
   const set = createNarrowSet()
   set.add(newTopicsIntent('home'))
-  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(false)
+  expect(set.matches(buildMessagePosted('home', undefined), seat)).toBe(false)
 })
 
 test('new-topics narrow does not match a second message in an already-seen topic', () => {
   const set = createNarrowSet()
   set.add(newTopicsIntent('home'))
-  expect(set.matches(buildMessagePosted('home', 'fresh-topic'), noBot)).toBe(true)
-  expect(set.matches(buildMessagePosted('home', 'fresh-topic'), noBot)).toBe(false)
+  expect(set.matches(buildMessagePosted('home', 'fresh-topic'), seat)).toBe(true)
+  expect(set.matches(buildMessagePosted('home', 'fresh-topic'), seat)).toBe(false)
 })
 
 test('new-topics narrow tracks each topic independently', () => {
   const set = createNarrowSet()
   set.add(newTopicsIntent('home'))
-  expect(set.matches(buildMessagePosted('home', 'topic-a'), noBot)).toBe(true)
-  expect(set.matches(buildMessagePosted('home', 'topic-b'), noBot)).toBe(true)
-  expect(set.matches(buildMessagePosted('home', 'topic-a'), noBot)).toBe(false)
-  expect(set.matches(buildMessagePosted('home', 'topic-b'), noBot)).toBe(false)
+  expect(set.matches(buildMessagePosted('home', 'topic-a'), seat)).toBe(true)
+  expect(set.matches(buildMessagePosted('home', 'topic-b'), seat)).toBe(true)
+  expect(set.matches(buildMessagePosted('home', 'topic-a'), seat)).toBe(false)
+  expect(set.matches(buildMessagePosted('home', 'topic-b'), seat)).toBe(false)
 })
 
 test('new-topics first-per-topic is scoped per channel, not channel-wide', () => {
   const set = createNarrowSet()
   set.add(newTopicsIntent('home'))
   set.add(newTopicsIntent('elsewhere'))
-  expect(set.matches(buildMessagePosted('home', 'shared-name'), noBot)).toBe(true)
-  expect(set.matches(buildMessagePosted('elsewhere', 'shared-name'), noBot)).toBe(true)
+  expect(set.matches(buildMessagePosted('home', 'shared-name'), seat)).toBe(true)
+  expect(set.matches(buildMessagePosted('elsewhere', 'shared-name'), seat)).toBe(true)
 })
 
 test('channel narrow still matches every message in a topic, even after new-topics has seen it', () => {
   const set = createNarrowSet()
   set.add(channelIntent('home'))
   set.add(newTopicsIntent('home'))
-  expect(set.matches(buildMessagePosted('home', 'fresh-topic'), noBot)).toBe(true)
-  expect(set.matches(buildMessagePosted('home', 'fresh-topic'), noBot)).toBe(true)
+  expect(set.matches(buildMessagePosted('home', 'fresh-topic'), seat)).toBe(true)
+  expect(set.matches(buildMessagePosted('home', 'fresh-topic'), seat)).toBe(true)
 })
 
 test('new-topics narrow does not match reactions on the channel', () => {
   const set = createNarrowSet()
   set.add(newTopicsIntent('home'))
-  expect(set.matches(buildReactionAdded('home', 'fresh-topic'), noBot)).toBe(false)
-  expect(set.matches(buildReactionRemoved('home', 'fresh-topic'), noBot)).toBe(false)
+  expect(set.matches(buildReactionAdded('home', 'fresh-topic'), seat)).toBe(false)
+  expect(set.matches(buildReactionRemoved('home', 'fresh-topic'), seat)).toBe(false)
 })
 
 // The new-topics narrow is first-message-per-topic and says nothing about
@@ -334,7 +332,7 @@ test('new-topics narrow remove drops only the new-topics entry', () => {
   set.add(newTopicsIntent('home'))
   set.remove(newTopicsIntent('home'))
   expect(set.size()).toBe(1)
-  expect(set.matches(buildReactionAdded('home'), noBot)).toBe(true)
+  expect(set.matches(buildReactionAdded('home'), seat)).toBe(true)
 })
 
 const sortIntents = (intents: ReadonlyArray<SubscribeIntent>): ReadonlyArray<SubscribeIntent> =>
@@ -367,7 +365,7 @@ test('intents() excludes a removed intent', () => {
 test('intents() does not leak the seen-topics ledger after a new-topics match', () => {
   const set = createNarrowSet()
   set.add(newTopicsIntent('home'))
-  expect(set.matches(buildMessagePosted('home', 'fresh-topic'), noBot)).toBe(true)
+  expect(set.matches(buildMessagePosted('home', 'fresh-topic'), seat)).toBe(true)
   expect(set.intents()).toEqual([newTopicsIntent('home')])
 })
 
@@ -377,7 +375,7 @@ test('load(Some) sets the base on an empty set', () => {
   expect(sortIntents(set.intents())).toEqual(
     sortIntents([channelIntent('home'), newTopicsIntent('general')]),
   )
-  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(true)
+  expect(set.matches(buildMessagePosted('home', undefined), seat)).toBe(true)
 })
 
 test('load(Some) replaces the prior base — the old set no longer matches', () => {
@@ -385,8 +383,8 @@ test('load(Some) replaces the prior base — the old set no longer matches', () 
   set.add(channelIntent('home'))
   set.load(Option.some([channelIntent('work')]))
   expect(set.intents()).toEqual([channelIntent('work')])
-  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(false)
-  expect(set.matches(buildMessagePosted('work', undefined), noBot)).toBe(true)
+  expect(set.matches(buildMessagePosted('home', undefined), seat)).toBe(false)
+  expect(set.matches(buildMessagePosted('work', undefined), seat)).toBe(true)
 })
 
 test('load(Some([])) drops every narrow — matches nothing', () => {
@@ -396,7 +394,7 @@ test('load(Some([])) drops every narrow — matches nothing', () => {
   set.load(Option.some([]))
   expect(set.intents()).toEqual([])
   expect(set.size()).toBe(0)
-  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(false)
+  expect(set.matches(buildMessagePosted('home', undefined), seat)).toBe(false)
 })
 
 test('load(None) keeps the current base — the fresh-session fallback', () => {
@@ -404,7 +402,7 @@ test('load(None) keeps the current base — the fresh-session fallback', () => {
   set.add(channelIntent('home'))
   set.load(Option.none())
   expect(set.intents()).toEqual([channelIntent('home')])
-  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(true)
+  expect(set.matches(buildMessagePosted('home', undefined), seat)).toBe(true)
 })
 
 test('a buffered subscribe replays onto the loaded base', () => {
@@ -425,7 +423,7 @@ test('a buffered unsubscribe of a base member is applied after the base loads', 
   set.remove(channelIntent('home'))
   set.load(Option.some([channelIntent('home'), newTopicsIntent('general')]))
   expect(set.intents()).toEqual([newTopicsIntent('general')])
-  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(false)
+  expect(set.matches(buildMessagePosted('home', undefined), seat)).toBe(false)
 })
 
 test('an env seed applied before buffering is not resurrected by load(Some) — dropped stays dropped', () => {
@@ -436,7 +434,7 @@ test('an env seed applied before buffering is not resurrected by load(Some) — 
   // Persisted set unsubscribed the env default; nothing re-adds it.
   set.load(Option.some([]))
   expect(set.intents()).toEqual([])
-  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(false)
+  expect(set.matches(buildMessagePosted('home', undefined), seat)).toBe(false)
 })
 
 test('load(None) keeps the env seed and applies buffered deltas', () => {
@@ -454,5 +452,5 @@ test('a delta applies live during buffering — matches is not blacked out befor
   const set = createNarrowSet()
   set.beginBuffering()
   set.add(channelIntent('home'))
-  expect(set.matches(buildMessagePosted('home', undefined), noBot)).toBe(true)
+  expect(set.matches(buildMessagePosted('home', undefined), seat)).toBe(true)
 })
