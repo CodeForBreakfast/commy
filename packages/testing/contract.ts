@@ -1174,6 +1174,40 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         ),
       ))
 
+    // What a seat reads back on the way up, and the ceiling on what it can
+    // read. A subscription names a CHANNEL on every substrate worth targeting,
+    // so a narrow below that — one topic, or first-messages-only — reads back as
+    // its plain channel. A substrate that answered anything finer would make the
+    // caller's own narrowing look redundant when it is not.
+    test('inbox.subscriptions() reports the channels this seat subscribed, and only channels', () =>
+      Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const lobby = yield* env.seedChannel('lobby')
+            const annex = yield* env.seedChannel('annex')
+            yield* env.comms.inbox.subscribe(lobby.name)
+            yield* env.comms.inbox.subscribe({
+              channel: annex.name,
+              thread: decodeThreadNameSync('planning'),
+            })
+            const subscribed = yield* env.comms.inbox.subscriptions()
+            expect([...subscribed].sort()).toEqual([annex.name, lobby.name].sort())
+          }),
+        ),
+      ))
+
+    test('inbox.subscriptions() drops a channel the seat unsubscribed from', () =>
+      Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const lobby = yield* env.seedChannel('lobby')
+            yield* env.comms.inbox.subscribe(lobby.name)
+            yield* env.comms.inbox.unsubscribe(lobby.name)
+            expect(yield* env.comms.inbox.subscriptions()).toEqual([])
+          }),
+        ),
+      ))
+
     test('inbox.replay(since) returns past message-posted events with ts >= since', () =>
       Effect.runPromise(
         Effect.gen(function* () {

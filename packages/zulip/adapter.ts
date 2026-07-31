@@ -16,6 +16,7 @@ import type {
   HistoryReader,
   Identity,
   IdentityId,
+  IdentityOrigin,
   IdentityPort,
   InboundEvent,
   Message,
@@ -520,6 +521,12 @@ interface BoundState {
   readonly credentials: Credentials
   readonly userId: ZulipUserRef
   readonly http: BotHttp
+  /**
+   * Recorded so the idempotent re-acquire below answers with the origin of the
+   * bind that actually happened, rather than re-deriving one from a realm the
+   * first acquire has already changed.
+   */
+  readonly origin: IdentityOrigin
 }
 
 // Channels are addressed by name, so the narrow sets and the per-channel
@@ -630,7 +637,11 @@ export const zulipAdapter = (
                 }),
               ),
             onSome: (bound: BoundState) =>
-              Effect.succeed({ identity: bound.identity, credentials: bound.credentials }),
+              Effect.succeed({
+                identity: bound.identity,
+                credentials: bound.credentials,
+                origin: bound.origin,
+              }),
           }),
         ),
       )
@@ -889,15 +900,22 @@ export const zulipAdapter = (
           ),
         )
 
-    interface MintedBot {
+    interface BoundBot {
       readonly userId: ZulipUserRef
       readonly apiKey: ApiKeyType
       readonly email: BotEmailType
+      /**
+       * Which arm of the lookup produced this bot. Carried out of the adapter
+       * because the realm answers it here and nowhere else: once the bind has
+       * resolved, a bot the minter just created and one it has served for
+       * months are indistinguishable.
+       */
+      readonly origin: IdentityOrigin
     }
 
     const mintBot = (
       name: BotName,
-    ): Effect.Effect<MintedBot, ZulipApiError | ParseResult.ParseError> => {
+    ): Effect.Effect<BoundBot, ZulipApiError | ParseResult.ParseError> => {
       const shortName = sanitiseShortName(name)
       return minterHttp
         .post('/bots', newBotSchema, {
@@ -912,10 +930,11 @@ export const zulipAdapter = (
               apiKey: ApiKey(res.api_key),
             }).pipe(
               Effect.map(
-                ({ email, apiKey }): MintedBot => ({
+                ({ email, apiKey }): BoundBot => ({
                   userId: ZulipUserRef(res.user_id),
                   apiKey,
                   email,
+                  origin: 'minted',
                 }),
               ),
             ),
@@ -938,7 +957,7 @@ export const zulipAdapter = (
 
     const regenerateBotKey = (
       existing: ZulipUser,
-    ): Effect.Effect<MintedBot, ZulipApiError | ParseResult.ParseError> =>
+    ): Effect.Effect<BoundBot, ZulipApiError | ParseResult.ParseError> =>
       minterHttp.post(`/bots/${existing.user_id}/api_key/regenerate`, regenerateKeySchema, {}).pipe(
         Effect.flatMap((res) =>
           Effect.all({
@@ -946,10 +965,11 @@ export const zulipAdapter = (
             apiKey: ApiKey(res.api_key),
           }).pipe(
             Effect.map(
-              ({ email, apiKey }): MintedBot => ({
+              ({ email, apiKey }): BoundBot => ({
                 userId: ZulipUserRef(existing.user_id),
                 apiKey,
                 email,
+                origin: 'existing',
               }),
             ),
           ),
@@ -958,7 +978,7 @@ export const zulipAdapter = (
 
     const acquireBot = (
       name: BotName,
-    ): Effect.Effect<MintedBot, ZulipApiError | ReactivateForbidden | ParseResult.ParseError> =>
+    ): Effect.Effect<BoundBot, ZulipApiError | ReactivateForbidden | ParseResult.ParseError> =>
       findAnyBotByName(name).pipe(
         Effect.flatMap(
           Option.match({
@@ -978,21 +998,25 @@ export const zulipAdapter = (
     const attachBot = (
       name: BotName,
       apiKey: ApiKeyType,
-    ): Effect.Effect<MintedBot, ZulipApiError | AttachIdentityNotFound | ParseResult.ParseError> =>
+    ): Effect.Effect<BoundBot, ZulipApiError | AttachIdentityNotFound | ParseResult.ParseError> =>
       findAnyBotByName(name).pipe(
         Effect.flatMap(
           Option.match({
-            onNone: (): Effect.Effect<MintedBot, AttachIdentityNotFound | ParseResult.ParseError> =>
+            onNone: (): Effect.Effect<BoundBot, AttachIdentityNotFound | ParseResult.ParseError> =>
               Effect.fail(new AttachIdentityNotFound({ name })),
             onSome: (
               existing,
-            ): Effect.Effect<MintedBot, AttachIdentityNotFound | ParseResult.ParseError> =>
+            ): Effect.Effect<BoundBot, AttachIdentityNotFound | ParseResult.ParseError> =>
               BotEmail(existing.email).pipe(
                 Effect.map(
-                  (email): MintedBot => ({
+                  // Attach binds a persona the operator provisioned out of
+                  // band, so it is `existing` even on this seat's first ever
+                  // bind — the account predates us and owns its own state.
+                  (email): BoundBot => ({
                     userId: ZulipUserRef(existing.user_id),
                     apiKey,
                     email,
+                    origin: 'existing',
                   }),
                 ),
               ),
@@ -1005,7 +1029,7 @@ export const zulipAdapter = (
     const provideMintedFor = (
       name: BotName,
     ): Effect.Effect<
-      MintedBot,
+      BoundBot,
       ZulipApiError | ReactivateForbidden | AttachIdentityNotFound | ParseResult.ParseError
     > => {
       const attach = config.attachIdentity
@@ -1029,7 +1053,11 @@ export const zulipAdapter = (
             onSome: (existing) => {
               if (existing.acquiredName === name) {
                 return Effect.succeed<readonly [AcquiredIdentity, Option.Option<BoundState>]>([
-                  { identity: existing.identity, credentials: existing.credentials },
+                  {
+                    identity: existing.identity,
+                    credentials: existing.credentials,
+                    origin: existing.origin,
+                  },
                   current,
                 ])
               }
@@ -1073,8 +1101,12 @@ export const zulipAdapter = (
                       credentials,
                       userId: minted.userId,
                       http,
+                      origin: minted.origin,
                     }
-                    return [{ identity: ident, credentials }, Option.some(next)] as const
+                    return [
+                      { identity: ident, credentials, origin: minted.origin },
+                      Option.some(next),
+                    ] as const
                   }),
                 ),
                 Effect.mapError((cause) => new IdentityError({ operation: 'acquire', cause })),
@@ -1192,6 +1224,14 @@ export const zulipAdapter = (
     }
 
     const subscriptionsResponseSchema = Schema.Struct({ result: Schema.Literal('success') })
+
+    // GET /users/me/subscriptions — the seat's own subscription rows. Only the
+    // names matter here; the rest of each row describes delivery settings the
+    // plugin does not model.
+    const mySubscriptionsResponseSchema = Schema.Struct({
+      result: Schema.Literal('success'),
+      subscriptions: Schema.Array(Schema.Struct({ name: Schema.NonEmptyString })),
+    })
 
     // POST /users/me/subscriptions response carries a per-user map of
     // names actually subscribed vs already subscribed. For minter-routed
@@ -1853,6 +1893,20 @@ export const zulipAdapter = (
                 }),
               )
             }).pipe(Effect.mapError((cause) => new InboxError({ operation: 'subscribe', cause }))),
+          ),
+        ),
+      // Reads the seat's own rows, so it goes out on the seat's credential like
+      // the writes do — "me" here has to be the seat, and the minter's answer
+      // would be a different seat's subscriptions wearing this one's name.
+      subscriptions: () =>
+        boundHttp().pipe(
+          Effect.flatMap((http) =>
+            http.get('/users/me/subscriptions', mySubscriptionsResponseSchema).pipe(
+              Effect.flatMap((res) =>
+                Effect.forEach(res.subscriptions, (row) => decodeChannelName(row.name)),
+              ),
+              Effect.mapError((cause) => new InboxError({ operation: 'subscribe', cause })),
+            ),
           ),
         ),
       unsubscribe: (target) =>

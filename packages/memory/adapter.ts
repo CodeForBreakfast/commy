@@ -35,6 +35,7 @@ import type {
   HistoryReader,
   Identity,
   IdentityKind,
+  IdentityOrigin,
   IdentityPort,
   InboundEvent,
   Mention,
@@ -126,6 +127,7 @@ interface Binding {
   readonly acquiredName: BotName
   readonly identity: Identity
   readonly credentials: Credentials
+  readonly origin: IdentityOrigin
 }
 
 type Emit = (event: InboundEvent) => void
@@ -271,13 +273,20 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     const allocId = (counter: Ref.Ref<number>): Effect.Effect<number> =>
       Ref.getAndUpdate(counter, (n) => n + 1)
 
+    // Reports which arm it took, so `acquire` reads the origin of the bind off
+    // the registration itself instead of probing the map a second time. Callers
+    // seeding a peer discard it — an origin only means something for the
+    // identity a seat binds AS.
     const registerIdentity = (
       name: string,
       kind: IdentityKind,
-    ): Effect.Effect<Identity, ParseResult.ParseError> =>
+    ): Effect.Effect<
+      { readonly identity: Identity; readonly origin: IdentityOrigin },
+      ParseResult.ParseError
+    > =>
       Effect.gen(function* () {
         const existing = identitiesByName.get(name)
-        if (existing !== undefined) return existing
+        if (existing !== undefined) return { identity: existing, origin: 'existing' as const }
         const id = yield* decodeIdentityId(String(yield* allocId(nextIdentityId))).pipe(
           Effect.orDie,
         )
@@ -285,7 +294,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         const identity: Identity = { id, name: displayName, kind }
         identitiesById.set(id, identity)
         identitiesByName.set(name, identity)
-        return identity
+        return { identity, origin: 'minted' as const }
       })
 
     // With no strategy wired, an explicit `acquire` is the only way to bind:
@@ -303,7 +312,12 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
                     'the adapter was built without a bind-on-demand strategy.',
                 }),
               ),
-            onSome: (b) => Effect.succeed({ identity: b.identity, credentials: b.credentials }),
+            onSome: (b) =>
+              Effect.succeed({
+                identity: b.identity,
+                credentials: b.credentials,
+                origin: b.origin,
+              }),
           }),
         ),
       )
@@ -395,7 +409,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
                     // UnknownIdentity-only.
                     registerIdentity(name, selfKind).pipe(
                       Effect.orDie,
-                      Effect.flatMap((ident) =>
+                      Effect.flatMap(({ identity: ident, origin }) =>
                         allocId(nextCredentialsId).pipe(
                           Effect.flatMap((credId) => {
                             const credentials: Credentials = {
@@ -407,6 +421,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
                               acquiredName: name,
                               identity: ident,
                               credentials,
+                              origin,
                             }
                             // Atomic check-then-set: claim the slot only if
                             // still free, otherwise honour the winner. Loses
@@ -800,6 +815,22 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         requireBound().pipe(
           Effect.zipRight(Ref.update(subscriptions, HashSet.remove(subscriptionKey(target)))),
         ),
+      // Mirrors the realm's answer: a subscription row names a CHANNEL, so
+      // every narrow over a channel reads back as that channel and `mentions`
+      // (which is not a subscription at all) reads back as nothing. Collapsing
+      // here rather than in the caller keeps the two substrates answering the
+      // same question.
+      subscriptions: () =>
+        requireBound().pipe(
+          Effect.zipRight(Ref.get(subscriptions)),
+          Effect.map((keys) =>
+            Arr.dedupe(
+              Arr.filterMap(Arr.fromIterable(keys), (key) =>
+                key.kind === 'mentions' ? Option.none() : Option.some(key.channelName),
+              ),
+            ),
+          ),
+        ),
       events: () =>
         Stream.asyncPush<InboundEvent>((emit) =>
           Effect.acquireRelease(
@@ -967,9 +998,9 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     const seedChannel = (name: string): Effect.Effect<ChannelRef, ParseResult.ParseError> =>
       registerChannel(name)
     const seedAgent = (name: string): Effect.Effect<Identity, ParseResult.ParseError> =>
-      registerIdentity(name, 'agent')
+      registerIdentity(name, 'agent').pipe(Effect.map((registered) => registered.identity))
     const seedHuman = (name: string): Effect.Effect<Identity, ParseResult.ParseError> =>
-      registerIdentity(name, 'human')
+      registerIdentity(name, 'human').pipe(Effect.map((registered) => registered.identity))
 
     // Authored by `peer`, not the bound self: mirrors publisher.post's store +
     // fan-out path but stamps `sender: peer` and skips requireBound. The

@@ -58,7 +58,7 @@ import type { BindOnDemand } from './session-binder.ts'
 import { bindThrough, SessionBinder as SessionBinderTag } from './session-binder.ts'
 import { SessionId as SessionIdTag, type SessionIdValue } from './session-id.ts'
 import { SubscriptionStoreTag } from './subscription-store.ts'
-import { testPlatformLayer } from './test-platform.ts'
+import { testBootStoresLayer, testPlatformLayer } from './test-platform.ts'
 
 const REPO_ROOT = join(import.meta.dir, '..', '..')
 const PLUGIN_ROOT = join(REPO_ROOT, 'clients', 'claude-code')
@@ -238,6 +238,7 @@ const bootDeployedSeat = async (
             Layer.succeed(SessionIdTag, sessionIdDeferred),
             Layer.succeed(ResumeOutcomeTag, resumeOutcome),
             Layer.succeed(SessionBinderTag, binderRef),
+            testBootStoresLayer(),
             captureLogger([]),
           ),
           testPlatformLayer(CLAUDE_CODE_CHILD_ENV),

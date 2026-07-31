@@ -1,6 +1,9 @@
+import type { EventQueueCursor } from '@commy/core/ports'
 import type { CommandExecutor, FileSystem } from '@effect/platform'
 import { NodeContext } from '@effect/platform-node'
-import { ConfigProvider, Layer } from 'effect'
+import { ConfigProvider, Effect, Layer, Option } from 'effect'
+import { type QueueStateStore, QueueStateStoreTag } from './queue-state-store.ts'
+import type { SessionIdValue } from './session-id.ts'
 
 /**
  * Fixture config source for the boot tests. `parseEnv` reads the ambient
@@ -34,3 +37,35 @@ export const testPlatformLayer = (
   env: Record<string, string | undefined>,
 ): Layer.Layer<FileSystem.FileSystem | CommandExecutor.CommandExecutor> =>
   Layer.merge(testConfigProviderLayer(env), NodeContext.layer)
+
+/**
+ * In-memory queue-state store for the boot tests — keeps the runner's homedir
+ * untouched, the same reason the cursor store is faked there. Boot reads it to
+ * answer "is there anything to resume?"; a harness that never persists a queue
+ * always answers no, which is the fresh-session case.
+ */
+export const createInMemoryQueueStateStore = (): QueueStateStore => {
+  const states = new Map<string, EventQueueCursor>()
+  return {
+    read: (sessionId: SessionIdValue) =>
+      Effect.sync(() => Option.fromNullable(states.get(sessionId as string))),
+    write: (sessionId: SessionIdValue, state: EventQueueCursor) =>
+      Effect.sync(() => {
+        states.set(sessionId as string, state)
+      }),
+    advance: (sessionId: SessionIdValue, lastEventId: number) =>
+      Effect.sync(() => {
+        const prior = states.get(sessionId as string)
+        if (prior !== undefined) states.set(sessionId as string, { ...prior, lastEventId })
+      }),
+  }
+}
+
+/**
+ * The boot-time store every substituted-adapter harness needs and none of them
+ * cares about: the queue-state store boot reads to answer "is there anything to
+ * resume?". A FUNCTION, not a shared constant, so one harness's writes cannot
+ * reach another's boot.
+ */
+export const testBootStoresLayer = (): Layer.Layer<QueueStateStoreTag> =>
+  Layer.succeed(QueueStateStoreTag, createInMemoryQueueStateStore())

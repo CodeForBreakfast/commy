@@ -445,9 +445,28 @@ export interface RealmSettings {
  */
 export type Credentials = Readonly<Record<string, string>>
 
+/**
+ * Whether an acquire brought an identity into existence or bound to one that
+ * was already there.
+ *
+ * The substrate answers this as a by-product of acquiring — Zulip's acquire is
+ * a lookup that mints on miss — so a caller reads the answer rather than
+ * inferring one from local state. That matters because the alternative
+ * inferences are all wrong in a way that shows up only in production: "no
+ * subscriptions yet" cannot tell a never-seeded bot from one that deliberately
+ * unsubscribed from everything, and "no local state file" cannot tell a fresh
+ * seat from one whose state was pruned.
+ *
+ * `minted` is the one moment a seat first exists, and it is what bootstrap
+ * hangs off: `COMMY_SUBSCRIBE` seeds a seat's subscriptions there and nowhere
+ * else, because from that point the bot owns them.
+ */
+export type IdentityOrigin = 'minted' | 'existing'
+
 export interface AcquiredIdentity {
   readonly credentials: Credentials
   readonly identity: Identity
+  readonly origin: IdentityOrigin
 }
 
 /**
@@ -673,6 +692,23 @@ export interface MessageInbox {
    */
   subscribe(target: SubscriptionTarget): Effect.Effect<void, BindError | InboxError>
   unsubscribe(target: SubscriptionTarget): Effect.Effect<void, BindError | InboxError>
+  /**
+   * The channels the realm currently delivers to this seat, read back from the
+   * subscription rows written under its own principal.
+   *
+   * This is what makes a seat's subscriptions survive a restart without the
+   * plugin keeping its own copy of them: on the way up, a seat asks the realm
+   * what it is subscribed to rather than replaying what it once asked for.
+   * Reading it binds — the answer is per-member state, so there is no answer
+   * before the seat has a principal, and an unbound seat's honest answer is not
+   * "nothing" but "there is no seat yet".
+   *
+   * CHANNELS ONLY, and that ceiling is the substrate's rather than ours: a
+   * subscription row names a channel, so a seat that only wants one topic in a
+   * channel and a seat that wants the whole channel are indistinguishable here.
+   * Narrowing below a channel stays with the caller.
+   */
+  subscriptions(): Effect.Effect<ReadonlyArray<ChannelName>, BindError | InboxError>
   /**
    * Effect-native Stream of inbound events. Adapters drive this from
    * their substrate's event mechanism (Zulip's events queue, Discord

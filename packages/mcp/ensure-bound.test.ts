@@ -23,6 +23,7 @@ const buildIdentity = (name: string): Identity => ({
 const buildAcquired = (name: string): AcquiredIdentity => ({
   identity: buildIdentity(name),
   credentials: { apiKey: `key-${name}` },
+  origin: 'minted',
 })
 
 const run = <A, E>(self: Effect.Effect<A, E>): Promise<A> => Effect.runPromise(self)

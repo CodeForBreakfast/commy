@@ -119,6 +119,7 @@ const queueInbox = (options: QueueInboxOptions = { events: [] }): QueueInboxHand
   const inbox: MessageInbox = {
     subscribe: () => Effect.void,
     unsubscribe: () => Effect.void,
+    subscriptions: () => Effect.succeed([]),
     settingsChanges: () => Stream.empty,
     events: () =>
       Stream.async<InboundEvent>((emit) => {
@@ -200,6 +201,7 @@ test('pump reports realm settings changes without notifying the consumer', () =>
       const inbox: MessageInbox = {
         subscribe: () => Effect.void,
         unsubscribe: () => Effect.void,
+        subscriptions: () => Effect.succeed([]),
         settingsChanges: () => Stream.make({ editingAvailable: false }),
         events: () => Stream.empty,
         replay: () => Effect.succeed([]),

@@ -84,8 +84,12 @@ describe('seedDefaultsIfFresh', () => {
   })
 })
 
+// Only the topic-level slice is written. Channel-wide intents are the realm's
+// to hold — it has a subscription row for each — and a second copy here could
+// only ever disagree with the rows that actually govern delivery. What the realm
+// CANNOT hold is narrowing below a channel, and that is precisely what stays.
 describe('persistSubscriptions', () => {
-  test('writes the current narrow-set snapshot to the session-bound store', async () => {
+  test('writes the topic-level slice of the narrow set, not the channel-wide intents', async () => {
     const narrowSet = createNarrowSet()
     narrowSet.add(newTopics('general'))
     narrowSet.add(channel('commy'))
@@ -95,8 +99,20 @@ describe('persistSubscriptions', () => {
     }
     await Effect.runPromise(persistSubscriptions(store, narrowSet))
     expect(written.length).toBe(1)
-    expect(sortIntents(written[0] ?? [])).toEqual(
-      sortIntents([newTopics('general'), channel('commy')]),
-    )
+    expect(sortIntents(written[0] ?? [])).toEqual(sortIntents([newTopics('general')]))
+  })
+
+  test('an empty topic slice is still written, so the record stays a true has-run-before signal', async () => {
+    // `seedDefaultsIfFresh` gates on the record's PRESENCE. A seat whose narrows
+    // are all channel-wide must still leave one behind, or its next launch would
+    // read as a first launch and re-seed defaults it had dropped.
+    const narrowSet = createNarrowSet()
+    narrowSet.add(channel('commy'))
+    const written: ReadonlyArray<SubscribeIntent>[] = []
+    const store: Pick<SubscriptionStore, 'write'> = {
+      write: (intents) => Effect.sync(() => void written.push(intents)),
+    }
+    await Effect.runPromise(persistSubscriptions(store, narrowSet))
+    expect(written).toEqual([[]])
   })
 })

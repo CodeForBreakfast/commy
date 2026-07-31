@@ -26,7 +26,7 @@ import {
   Predicate,
   Schedule,
 } from 'effect'
-import type { BotName, GitContext, ProjectSlug, SessionId } from './bootstrap.ts'
+import type { BotName, GitContext, ParsedEnv, ProjectSlug, SessionId } from './bootstrap.ts'
 import {
   readGitContext as defaultReadGitContext,
   deriveProject,
@@ -49,7 +49,7 @@ import { buildMcpServer } from './mcp-server.ts'
 import { type CatchUpError, catchUpMentions } from './mentions-catch-up.ts'
 import type { NarrowSet } from './narrow-set.ts'
 import { createNarrowSet } from './narrow-set.ts'
-import { FileQueueStateStoreLive, type QueueStateStoreTag } from './queue-state-store.ts'
+import { FileQueueStateStoreLive, QueueStateStoreTag } from './queue-state-store.ts'
 import { raceReleaseAgainstTimeout } from './release-shutdown.ts'
 import { ResumeOutcomeLive, ResumeOutcome as ResumeOutcomeTag } from './resume-outcome.ts'
 import {
@@ -62,6 +62,7 @@ import { withSessionContext } from './session-context.ts'
 import { SessionIdLive, SessionId as SessionIdTag } from './session-id.ts'
 import type { SubscribeIntent, SubscribeTokenError } from './subscribe-parser.ts'
 import { intentToTarget, intentToToken } from './subscribe-parser.ts'
+import type { PersistedTopicIntents } from './subscription-restore.ts'
 import {
   persistSubscriptions,
   restoreSubscriptions,
@@ -263,6 +264,83 @@ const registerType1DefaultsOnBoot = (
     ),
   )
 
+interface SeedDeps {
+  readonly inbox: MessageInbox
+  readonly narrowSet: NarrowSet
+  readonly parsed: ParsedEnv
+  readonly loggerLayer: Layer.Layer<never>
+}
+
+/**
+ * Apply `COMMY_SUBSCRIBE` to a bot exactly once in its life, at the mint.
+ *
+ * Graeme's ruling (2026-07-20): "nix is only bootstrapping the bot account —
+ * the bot owns it once it exists." So the tokens seed a bot's subscriptions and
+ * are then never consulted again — not on resume, not on reconnect. From the
+ * seeding onwards the subscriptions live in the realm under the seat's own
+ * principal and change only when the agent itself subscribes or unsubscribes.
+ * Editing `COMMY_SUBSCRIBE` for a bot that already exists does nothing, BY
+ * DESIGN: that cross-session ambiguity — the same value read at two launches of
+ * one bot, indistinguishable from the bot's own runtime changes — is precisely
+ * what is being removed.
+ *
+ * Called wherever the mint actually happens, which differs by mode and is why
+ * this takes an already-acquired identity rather than binding for itself. A
+ * persistent bot mints at the boot acquire. An ephemeral seat mints on its first
+ * bind, which is at boot when `COMMY_SUBSCRIBE` gives it something to hold and
+ * otherwise on its first attribution-producing call — so a seat whose session id
+ * had not arrived by boot still gets seeded, rather than half-seeded into a
+ * client-side filter over a stream it is not subscribed to.
+ *
+ * The ORIGIN of the bind is the whole test, and the realm answers it as a
+ * by-product of acquiring — no local bookkeeping is consulted, and none is
+ * kept. An already-existing bot is never seeded, whatever it is or is not
+ * subscribed to. Graeme's ruling (2026-07-31) settled the one case that looked
+ * like it needed more than this: a bot that comes out of an upgrade with no
+ * subscriptions of its own is LEFT empty rather than bootstrapped, because a
+ * bot that wants subscriptions can subscribe — which is the same charter read
+ * from the other end. That removes the only reason to record what has been
+ * seeded before, so nothing is recorded.
+ *
+ * Both diagnostics live here rather than at the call sites, so the two mint
+ * paths cannot drift into saying different things about the same decision.
+ */
+const seedSubscriptionsOnMint = (
+  acquired: AcquiredIdentity,
+  deps: SeedDeps,
+): Effect.Effect<ReadonlyArray<SubscribeIntent>, SubscribeTokenError | BindError | InboxError> =>
+  deps.parsed.subscribe === undefined
+    ? Effect.succeed([])
+    : acquired.origin === 'existing'
+      ? // The one positive trace that the value was read and deliberately not
+        // applied. It is what the old "no applied line means you have found a
+        // clobbered COMMY_SUBSCRIBE" diagnostic becomes: absence no longer
+        // carries that meaning, because a bot past its bootstrap never emits
+        // the applied line again.
+        Effect.logInfo(
+          `commy plugin: COMMY_SUBSCRIBE not applied — ${acquired.identity.name} already ` +
+            `exists and owns its subscriptions. Editing COMMY_SUBSCRIBE for a bot that ` +
+            `already exists has no effect; change its subscriptions through the bot.`,
+        ).pipe(Effect.provide(deps.loggerLayer), Effect.as<ReadonlyArray<SubscribeIntent>>([]))
+      : subscribeFromEnv(deps.inbox, deps.narrowSet, deps.parsed).pipe(
+          // Deliberately silent on an empty set, rather than warning. The
+          // process cannot distinguish a seat that wanted no subscriptions from
+          // one whose value was destroyed upstream — the operator's intent is
+          // gone by the time the value arrives here — so an empty-set warning
+          // would fire on the majority of perfectly healthy interactive boots
+          // while telling the one broken seat nothing it could act on. A line
+          // that is almost always noise trains the reader to skip it, which is
+          // how the next silent fault gets to hide. The invariant that stops the
+          // clobber recurring is pinned in the launcher manifest test, not here.
+          Effect.tap((intents) =>
+            intents.length === 0
+              ? Effect.void
+              : Effect.logInfo(
+                  `commy plugin: applied ${intents.length} boot-time subscribe target(s): ${intents.map(intentToToken).join(', ')}`,
+                ).pipe(Effect.provide(deps.loggerLayer)),
+          ),
+        )
+
 /**
  * Default boot-time channel/thread catch-up window for persistent bots.
  * 4 hours covers overnight downtime without flooding the
@@ -351,6 +429,7 @@ export const makeProgram = (
   | SubstrateAdapter
   | CursorStoreTag
   | SubscriptionStoreTag
+  | QueueStateStoreTag
   | SessionIdTag
   | ResumeOutcomeTag
   | SessionBinderTag
@@ -380,6 +459,7 @@ export const makeProgram = (
       // surviving queue replayed the backlog); awaited once per session in the
       // ephemeral onAcquire hook below.
       const resumeOutcome = yield* ResumeOutcomeTag
+      const queueStateStore = yield* QueueStateStoreTag
       yield* Effect.flatMap(
         readBootSessionId,
         Option.match({
@@ -387,6 +467,57 @@ export const makeProgram = (
           onSome: (sessionId) => Deferred.succeed(sessionIdDeferred, sessionId).pipe(Effect.asVoid),
         }),
       )
+      // Report "there is nothing to resume" HERE, at the earliest point the
+      // answer is knowable, rather than leaving it to the producer alone.
+      //
+      // This closes a boot deadlock, not a diagnostic gap. The ephemeral
+      // `onAcquire` below BLOCKS on this verdict, and since subscriptions moved
+      // to the seat's own principal the boot-time subscribe binds — so
+      // `onAcquire` runs on the BOOT fiber. The producer that would otherwise
+      // complete the verdict is materialised by `startEventPump`, the last step
+      // of boot, which the parked boot fiber never reaches. Every ephemeral seat
+      // with `COMMY_SUBSCRIBE` set hangs before announcing its tools.
+      //
+      // An absent queue-state is a complete answer on its own: with nothing
+      // persisted there is no surviving queue, so no replay can happen and the
+      // catch-up fallback is the right path. A PRESENT queue-state is NOT an
+      // answer — whether that queue is still alive is only knowable by polling
+      // it — so this stays silent there and the producer reports as before. The
+      // deferred is first-write-wins, so the producer's own report is a harmless
+      // no-op whenever this one fired first.
+      //
+      // Reading the store also cannot clobber a resume candidate:
+      // `onQueueRegister`'s guard treats a completed verdict as licence to
+      // replace the persisted state wholesale, but this only completes it in the
+      // branch where there was nothing persisted to protect.
+      const reportNothingToResume: Effect.Effect<void> =
+        parsed.botName !== undefined
+          ? Effect.void
+          : Deferred.poll(sessionIdDeferred).pipe(
+              Effect.flatMap(
+                Option.match({
+                  // No session id at boot means no bind can happen at boot
+                  // either (the cache hands back its unbound stub), so nothing
+                  // can park on the verdict and the producer keeps it.
+                  onNone: () => Effect.void,
+                  onSome: (awaitId) =>
+                    Effect.flatMap(awaitId, (sessionId) =>
+                      queueStateStore.read(sessionId).pipe(
+                        Effect.map(Option.isNone),
+                        // An unreadable store is treated as fresh, matching
+                        // `resumeQueue`'s own best-effort degrade.
+                        Effect.catchAll(() => Effect.succeed(true)),
+                        Effect.flatMap((nothingPersisted) =>
+                          nothingPersisted
+                            ? Deferred.succeed(resumeOutcome, false).pipe(Effect.asVoid)
+                            : Effect.void,
+                        ),
+                      ),
+                    ),
+                }),
+              ),
+            )
+      yield* reportNothingToResume
       // Per-tool-call feeder: every PreToolUse-stamped call
       // (post/edit_message/react/unreact/current_identity) hands its session_id
       // here. Idempotent — after the first writer the rest return false.
@@ -500,44 +631,61 @@ export const makeProgram = (
           ? createType2DefaultsOnAcquire(narrowSet, adapter.inbox)
           : undefined
 
-      // Reactive subscription restore. Restore is a reaction to the
-      // session_id becoming known, not a thing a specific action triggers: a host
-      // that does not inject the session id into the MCP child's env boots
-      // session-blind, and there the id cannot arrive until the seat itself acts.
-      // `restoreSubscriptions` reads the session-bound store, whose `read` awaits
-      // the shared session-id `Deferred` internally — so this is forked ONCE into
-      // the connected runtime below and parks on that read until any source (the
-      // boot-env feeder, which covers a Claude Code seat whether fresh or
-      // resumed, or the first tool call of an acting seat) fills the id, then
-      // rehydrates with zero agent action. Must be forked, not awaited inline: an
-      // inline await would block boot/serving until the id lands. The store's
-      // presence stays a true resume signal; a corrupt or unreadable store logs
-      // and is swallowed rather than stranding the session. Ephemeral mode only:
-      // a persistent COMMY_BOT_NAME pane gets a new session_id every launch, so
-      // its store is always absent → the fresh path → COMMY_SUBSCRIBE-only.
+      // Rebuild this seat's narrow set from the realm, narrowed by whatever
+      // topic-level intents were recorded for it. See `restoreSubscriptions` for
+      // why those two sources and no others.
       //
-      // Restoring re-subscribes, and a subscription is realm state under the
-      // seat's own principal, so this needs the seat's naming inputs in context
-      // for the bind to resolve. Awaiting the id here is the same wait the
-      // store's own `read` already performs, and it is safe for the same reason
-      // the fork exists: nothing downstream of a forked fiber is waiting on it.
-      const restoreOnResume: Effect.Effect<void> =
-        parsed.botName !== undefined
-          ? Effect.void
-          : Deferred.await(sessionIdDeferred).pipe(
-              Effect.flatMap((sessionId) =>
-                withSessionContext(
-                  restoreSubscriptions({ subscriptionStore, narrowSet, inbox: adapter.inbox }),
-                  { sessionId, project: parsed.project },
-                ),
-              ),
-              Effect.catchAll((err) =>
-                Effect.logError(
-                  `commy plugin: subscription restore failed: ${Predicate.isError(err) ? err.message : String(err)}`,
-                ),
-              ),
-              Effect.provide(loggerLayer),
+      // Runs for BOTH modes, which is new. A pinned pane has no session record —
+      // its session id changes every launch — so before this it came up with
+      // nothing but its boot-time defaults while the realm went on delivering
+      // every channel it had ever joined at runtime. That seat is the one this
+      // fixes; the ephemeral seat merely stops being a special case.
+      //
+      // Forked, never awaited inline. The ephemeral record's read parks on the
+      // shared session id, and a host that injects none leaves that id
+      // unarrived until the seat itself acts — an inline await would hold boot
+      // there. A pinned pane reads no record at all and so would not park, but
+      // it still forks: it re-subscribes, which binds, and nothing on the boot
+      // fiber should wait on a substrate round-trip it does not need.
+      //
+      // Re-subscribing is realm state under the seat's own principal, so the
+      // seat's naming inputs have to be in context for the bind to resolve.
+      const persistedTopicIntents: PersistedTopicIntents =
+        parsed.botName === undefined
+          ? subscriptionStore.read()
+          : // A pinned bot's record could never be its own: the store is keyed by
+            // session id and its id is new every launch. Reading one would park
+            // on an id no host supplies, for an answer that would not be about
+            // this bot anyway.
+            Effect.succeedNone
+      const rebuildNarrowSet: Effect.Effect<void> = (
+        parsed.botName === undefined
+          ? Deferred.await(sessionIdDeferred).pipe(
+              Effect.map((sessionId): SessionId | undefined => sessionId),
             )
+          : Effect.succeed(undefined)
+      ).pipe(
+        Effect.flatMap((sessionId) =>
+          withSessionContext(
+            restoreSubscriptions({
+              persisted: persistedTopicIntents,
+              isBound: () => identityCache.boundIdentityIds().size > 0,
+              narrowSet,
+              inbox: adapter.inbox,
+            }),
+            { sessionId, project: parsed.project },
+          ),
+        ),
+        Effect.catchAll((err) =>
+          // Load anyway on failure, with no base: the narrow set is buffering
+          // and something has to end that window, or a seat that could not
+          // reach the realm journals deltas nothing ever replays.
+          Effect.logError(
+            `commy plugin: could not rebuild the subscription set: ${Predicate.isError(err) ? err.message : String(err)}`,
+          ).pipe(Effect.zipRight(Effect.sync(() => narrowSet.load(Option.none())))),
+        ),
+        Effect.provide(loggerLayer),
+      )
       const seedDefaults = (project: ProjectSlug | undefined): Effect.Effect<void> =>
         registerType2Defaults !== undefined ? registerType2Defaults(project) : Effect.void
       // Seed the acquire-gated Type-2 defaults for a fresh session (store absent).
@@ -595,7 +743,17 @@ export const makeProgram = (
               ),
             )
 
-      // Ephemeral-mode post-acquire hook: restore (or
+      // The COMMY_SUBSCRIBE bootstrap, ready for whichever path mints this
+      // seat's bot. See `seedSubscriptionsOnMint`.
+      const seedDeps: SeedDeps = {
+        inbox: adapter.inbox,
+        narrowSet,
+        parsed,
+        loggerLayer,
+      }
+
+      // Ephemeral-mode post-acquire hook: seed this bot's `COMMY_SUBSCRIBE`
+      // bootstrap if this is its mint, restore (or
       // seed) the narrow set on the first action of this session_id, then —
       // ONLY when the queue-resume failed — replay missed history. The cache
       // runs this via ensure-bound's own runtime edge; the composed Effect
@@ -618,7 +776,19 @@ export const makeProgram = (
               project: ProjectSlug | undefined,
               sessionId: SessionId,
             ): Effect.Effect<void> =>
-              ensureSessionSubscriptions(sessionId, project).pipe(
+              // The bootstrap runs FIRST and its failures are logged rather
+              // than raised: this hook rides the caller's acquire, and a
+              // substrate hiccup applying a boot-time token must not refuse the
+              // tool call that happened to trigger the mint. It has to precede
+              // the catch-up below, which skims the narrow set this seeds.
+              seedSubscriptionsOnMint(acquired, seedDeps).pipe(
+                Effect.catchAll((err) =>
+                  Effect.logError(
+                    `commy plugin: COMMY_SUBSCRIBE seeding failed at mint: ${Predicate.isError(err) ? err.message : String(err)}`,
+                  ),
+                ),
+                Effect.provide(loggerLayer),
+                Effect.zipRight(ensureSessionSubscriptions(sessionId, project)),
                 Effect.zipRight(Deferred.await(resumeOutcome)),
                 Effect.flatMap((queueReplayed) => {
                   if (queueReplayed) return Effect.void
@@ -669,6 +839,11 @@ export const makeProgram = (
       // The single-identity cache ignores the session_id.
       // Ephemeral mode: skip — the first tool call mints lazily.
       let type1Intents: ReadonlyArray<SubscribeIntent> = []
+      // The persistent bot's boot acquire, held so the COMMY_SUBSCRIBE
+      // bootstrap below can read the origin of the bind that just happened.
+      // Persistent mode has no post-acquire hook to hang the seeding off, so
+      // this is where its mint is observable.
+      let persistentIdentity: AcquiredIdentity | undefined
       if (parsed.botName !== undefined) {
         const botName = parsed.botName
         const ensureBound = yield* identityCache.ensureBoundFor(undefined)
@@ -689,7 +864,14 @@ export const makeProgram = (
               ).pipe(Effect.zipRight(Effect.fail(bootErr))),
             // Type-1 defaults: post-acquire register the
             // universal `mentions` narrow plus project-specific subs.
-            onSuccess: () => registerType1DefaultsOnBoot(adapter.inbox, narrowSet, parsed.project),
+            onSuccess: (acquired) =>
+              Effect.sync(() => {
+                persistentIdentity = acquired
+              }).pipe(
+                Effect.zipRight(
+                  registerType1DefaultsOnBoot(adapter.inbox, narrowSet, parsed.project),
+                ),
+              ),
           }),
         )
       }
@@ -737,54 +919,51 @@ export const makeProgram = (
           }),
         ),
       )
-      // A seat with no way to bind cannot hold subscriptions at all — the
-      // ephemeral bot name is derived from the session id, so there is no name
-      // to mint under. Log what was lost and carry on serving: deaf is the
-      // accepted outcome here (the residual gap Graeme's 2026-07-05 ruling
-      // names), a dead MCP child is not.
+      // Two mint paths, one bootstrap, and boot's job differs between them.
+      //
+      // PERSISTENT: the eager acquire above IS the mint, and there is no
+      // post-acquire hook, so the seeding happens here — after the Type-1
+      // defaults, which are a separate, per-boot concern that this bead does not
+      // touch (they are computed from the project slug, not read from
+      // COMMY_SUBSCRIBE, and a pane depends on them being re-registered every
+      // boot).
+      //
+      // EPHEMERAL: the mint runs `ephemeralOnAcquire`, which seeds. All boot has
+      // to do is TRIGGER that mint, and only when COMMY_SUBSCRIBE gives the seat
+      // something to hold — receiving needs a queue and a queue needs a
+      // principal, so a seat asked to hold subscriptions needs an identity at
+      // boot. A seat asked to hold nothing must NOT mint here; it stays
+      // identity-free until it acts.
       const subscribedIntents = yield* withSessionContext(
-        subscribeFromEnv(adapter.inbox, narrowSet, parsed),
+        persistentIdentity !== undefined
+          ? seedSubscriptionsOnMint(persistentIdentity, seedDeps)
+          : parsed.subscribe === undefined
+            ? Effect.succeed<ReadonlyArray<SubscribeIntent>>([])
+            : binderFor(identityCache).pipe(Effect.as<ReadonlyArray<SubscribeIntent>>([])),
         { sessionId: Option.getOrUndefined(bootSessionId), project: parsed.project },
       ).pipe(
+        // A seat with no way to bind cannot hold subscriptions at all — the
+        // ephemeral bot name is derived from the session id, so there is no name
+        // to mint under. Log what was lost and carry on serving: deaf is the
+        // accepted outcome here (the residual gap Graeme's 2026-07-05 ruling
+        // names), a dead MCP child is not. The seeding is not lost with it: an
+        // ephemeral seat that could not bind at boot still seeds when its first
+        // action mints it.
         Effect.catchIf(isBindError, (cause) =>
           Effect.logWarning(
             `commy plugin: boot-time subscribe could not bind an identity, so no ` +
-              `subscriptions were applied — this seat will not receive channel traffic. ` +
-              `${Predicate.isError(cause) ? cause.message : String(cause)}`,
+              `subscriptions were applied yet — this seat will not receive channel traffic ` +
+              `until it acts. ${Predicate.isError(cause) ? cause.message : String(cause)}`,
           ).pipe(Effect.provide(loggerLayer), Effect.as<ReadonlyArray<SubscribeIntent>>([])),
         ),
       )
 
-      // Leave a positive trace of what the boot-time subscribe set actually
-      // resolved to. This is the diagnostic whose absence let a clobbered
-      // COMMY_SUBSCRIBE cost months: an operator who configures subscriptions
-      // and then finds no line here — or a line that does not name the tokens
-      // they set — has the fault in front of them, which is more than the empty
-      // case could ever have given them.
-      //
-      // Deliberately silent when the set is empty, rather than warning. The
-      // process cannot distinguish a seat that wanted no subscriptions from one
-      // whose value was destroyed upstream — the operator's intent is gone by
-      // the time the value arrives here — so an empty-set warning would fire on
-      // the majority of perfectly healthy interactive boots while telling the
-      // one broken seat nothing it could act on. A line that is almost always
-      // noise trains the reader to skip it, which is how the next silent fault
-      // gets to hide. The invariant that stops the clobber recurring is pinned
-      // in the launcher manifest test, not here.
-      if (subscribedIntents.length > 0) {
-        yield* Effect.logInfo(
-          `commy plugin: applied ${subscribedIntents.length} boot-time subscribe target(s): ${subscribedIntents.map(intentToToken).join(', ')}`,
-        ).pipe(Effect.provide(loggerLayer))
-      }
-
-      // Ephemeral resume: start journaling runtime subscribe/unsubscribe deltas
-      // now — after the COMMY_SUBSCRIBE base is seeded but before any tool call
-      // can mutate — so a delta racing the boot-forked restore below is replayed
-      // onto the restored base rather than clobbered by it. Persistent mode never
-      // restores, so it never buffers: add/remove apply directly.
-      if (parsed.botName === undefined) {
-        narrowSet.beginBuffering()
-      }
+      // Start journaling runtime subscribe/unsubscribe deltas now — after the
+      // boot-time defaults and any COMMY_SUBSCRIBE bootstrap have landed, but
+      // before a tool call can mutate — so a delta racing the boot-forked
+      // rebuild below is replayed onto its result rather than clobbered by it.
+      // Both modes buffer, because both now rebuild.
+      narrowSet.beginBuffering()
 
       const toolsCache = registerTools(mcp, {
         adapter,
@@ -913,14 +1092,14 @@ export const makeProgram = (
         yield* forkIdleSweep(identityCache, EPHEMERAL_IDLE_SWEEP_INTERVAL_MS)
       }
 
-      // Boot-forked subscription restore, scope-tied like the sweep. Parks on the
-      // store's `Deferred.await` until any source fills the shared session-id,
-      // then loads the persisted base (resume) or drains the buffer over the env
-      // seed (fresh); either way it replays the deltas journaled since
-      // `beginBuffering`, so a subscribe racing the load is never lost. A no-op
-      // Effect in persistent mode. Never awaited inline: an unfilled id on a
-      // listen-only seat would otherwise block the scope forever.
-      yield* Effect.forkScoped(restoreOnResume)
+      // Boot-forked narrow-set rebuild, scope-tied like the sweep. Asks the
+      // realm what this seat is subscribed to and narrows the answer with its
+      // recorded topic intents, then replays the deltas journaled since
+      // `beginBuffering` so a subscribe racing the load is never lost. Never
+      // awaited inline: an ephemeral seat's record parks on the shared session
+      // id, and an unfilled id on a listen-only seat would otherwise block the
+      // scope forever.
+      yield* Effect.forkScoped(rebuildNarrowSet)
 
       // Block until either the event stream ends / the pump fatally parks
       // and is interrupted (the SIGINT/SIGTERM path), OR the MCP client
@@ -1014,6 +1193,7 @@ export const MainLive: Layer.Layer<
   | SubstrateAdapter
   | CursorStoreTag
   | SubscriptionStoreTag
+  | QueueStateStoreTag
   | SessionIdTag
   | ResumeOutcomeTag
   | SessionBinderTag

@@ -125,12 +125,14 @@ Places the current implementation fails this reference.
   exactly one test-side module, this one" — and production code has since
   eroded it. (`bootstrap.ts` naming the adapter is fine; that is the
   composition root choosing an implementation.) Principle 2.
-- **Sticky subscriptions are keyed on `session_id`, not identity**
-  (`packages/mcp/subscription-store.ts`). Subscriptions belong to the
-  account: a human relaunching their browser keeps them. The code
-  deliberately rejected identity-keying to avoid treating a relaunch of a
-  pinned pane as a resume — but under this reference, that is the correct
-  behaviour, not a bug to avoid. Principle 3.
+- **What survives a restart is keyed on `session_id`, not identity**
+  (`packages/mcp/subscription-store.ts`). Mostly closed: a seat now reads its
+  channel subscriptions back from the realm under its own principal, so a
+  relaunched pinned pane keeps them the way a human relaunching a browser
+  does. What is still session-keyed is the record of TOPIC-level narrows —
+  the part a subscription row cannot express. That record is the last piece
+  of client-side authority here, and the paragraph on topic narrows below
+  says where it belongs instead. Principle 3.
 - **Exploration is thinner than a human's.** Agents get `read_channel`,
   `read_thread` and `list_channels`; a human member also gets search and
   unread state. Principle 1, prospectively — this is a gap to fill, not
@@ -160,6 +162,12 @@ deafen another. A filter that lives in memory is lost on resume, so it needs
 a persistent store. That store has no realm principal to key on, so it keys
 on `session_id`. Each step is locally reasonable; the sum is not.
 
+The store step is now mostly undone too. Once subscriptions are the seat's own
+realm state, resume stops being "restore what I saved" and becomes "ask what I
+am subscribed to" — what a human's client does. Only the topic-level narrows
+still need a local record, because a subscription row names a channel and
+nothing finer.
+
 The refcounting step is the one the architecture never took, and its absence
 was live. `streamIsListening` does refcount — but over the narrow *kinds* one
 seat holds on a channel (`channel:X` against `new-topics:X`), within a single
@@ -181,8 +189,10 @@ from the channel's subscription rows: a seat-owned queue over minter-held
 subscriptions would have received nothing at all.
 
 What has not moved yet: the minter still holds its blanket public-stream
-subscription, and narrowing is still a client-side filter. Those are the next
-steps of the same unwinding, not exemptions.
+subscription, and topic-level narrowing is still a client-side filter with a
+local record behind it. Those are the next steps of the same unwinding, not
+exemptions — channel-level narrowing has moved, and is now read back from the
+realm on every boot.
 
 Principle 5 catches it at the first step. Principle 3 catches the store.
 Principle 1 catches `session_id` reaching the tool surface.

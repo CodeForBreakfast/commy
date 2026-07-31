@@ -18,31 +18,33 @@ import { SessionId, type SessionIdValue } from './session-id.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 
 /**
- * Persistent per-session_id narrow-set snapshot.
+ * Per-session_id record of the narrows a subscription row cannot express.
  *
- * The plugin-layer `narrowSet` (narrow-set.ts) decides which inbound events
- * reach this agent; it is in-memory only and rebuilt from `COMMY_SUBSCRIBE`
- * on every boot, so a stopped-then-resumed Claude Code session silently
- * loses every runtime `subscribe`/`unsubscribe`. This store persists the
- * current set to disk on each mutation and restores it on resume, so the
- * session comes back with exactly the subscriptions it had — including
- * runtime unsubscribes (a dropped default channel stays dropped).
+ * This file used to hold the whole narrow set, and its own reasoning said why:
+ * the set was in-memory, rebuilt from `COMMY_SUBSCRIBE` every boot, so a
+ * resumed session lost every runtime `subscribe`/`unsubscribe`. That premise is
+ * gone. Subscriptions are the seat's own realm state now, and a seat rebuilds
+ * by ASKING the realm what it is subscribed to (`subscription-restore.ts`).
  *
- * The store is keyed on **session_id**, never identity id: the rule is
- * about the session, and Claude Code keeps the same session_id across a
- * resume. Keying on identity id would wrongly treat each relaunch of a
- * pinned `COMMY_BOT_NAME` pane as a resume; a new session_id every launch
- * keeps those panes on the fresh `COMMY_SUBSCRIBE`-only path for free.
+ * What the realm cannot answer is narrowing below a channel — a subscription
+ * row names a channel, so `#chan/topic` and `new-topics:#chan` read back as
+ * plain `#chan`. That is all this record still holds. Channel-wide intents are
+ * deliberately absent: a second copy of something the realm already holds could
+ * only ever disagree with the rows that actually govern delivery.
  *
- * `read` yields `Option.none` only when no file exists for the session —
- * the "fresh session, seed from `COMMY_SUBSCRIBE`" signal. An empty
- * persisted set returns `Option.some([])`, NOT `none`: a session that
- * unsubscribed from everything must resume with nothing, not fall back to
- * the env defaults. A file that exists but cannot be parsed surfaces a
- * `ParseError` rather than masquerading as absent.
+ * Still keyed on **session_id**, never identity id — Graeme's 2026-06-29
+ * ruling, and it survives the shrink intact. Keying on identity would treat
+ * each relaunch of a pinned `COMMY_BOT_NAME` pane as a resume of the last one.
  *
- * Writes overwrite unconditionally — the latest snapshot is authoritative,
- * so a smaller set (after an unsubscribe) correctly replaces a larger one.
+ * `read` yields `Option.none` only when no file exists for the session, which
+ * is what marks a first launch. An empty record returns `Option.some([])`, NOT
+ * `none`: a session whose narrows are all channel-wide has still run before,
+ * and `seedDefaultsIfFresh` reads exactly that distinction. A file that exists
+ * but cannot be parsed surfaces a `ParseError` rather than masquerading as
+ * absent.
+ *
+ * Writes overwrite unconditionally — the latest snapshot is authoritative, so a
+ * smaller set (after an unsubscribe) correctly replaces a larger one.
  */
 export interface SubscriptionStore {
   read(): Effect.Effect<

@@ -49,6 +49,7 @@ import { CursorStoreTag } from './cursor-store.ts'
 // `completeAsSubstrate` is the single seam that completes it to the Zulip-shaped
 // `SubstrateAdapter` port; no Zulip type or brand is named directly here.
 import { completeAsSubstrate } from './memory-substrate.ts'
+import { QueueStateStoreTag } from './queue-state-store.ts'
 import { ResumeOutcome as ResumeOutcomeTag } from './resume-outcome.ts'
 import { makeProgram } from './server.ts'
 import type { BindOnDemand } from './session-binder.ts'
@@ -57,7 +58,7 @@ import { SessionId as SessionIdTag, type SessionIdValue } from './session-id.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 import type { SubscriptionStore } from './subscription-store.ts'
 import { SubscriptionStoreTag } from './subscription-store.ts'
-import { testPlatformLayer } from './test-platform.ts'
+import { createInMemoryQueueStateStore, testPlatformLayer } from './test-platform.ts'
 
 const createMemoryCursorStore = (): CursorStore => {
   const store = new Map<string, TimestampType>()
@@ -381,6 +382,7 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
             Layer.succeed(SessionIdTag, sessionIdDeferred),
             Layer.succeed(ResumeOutcomeTag, resumeOutcomeDeferred),
             Layer.succeed(SessionBinderTag, binderRef),
+            Layer.succeed(QueueStateStoreTag, createInMemoryQueueStateStore()),
             loggerLayer,
           ),
           testPlatformLayer(env),
@@ -1838,7 +1840,11 @@ test('ephemeral queue-DEAD resume: mentions + channels catch-up run and backfill
 
 // ─── Type-2 default sub set for interactive CC sessions ─────────
 
-const captureSubscribes = (): {
+const captureSubscribes = (
+  // What the realm reports this seat is already subscribed to — the rows a
+  // previous run of the same session left behind.
+  realmChannels: ReadonlyArray<string> = [],
+): {
   readonly inboxOverrides: Partial<MessageInbox>
   readonly tokens: ReadonlyArray<string>
 } => {
@@ -1855,6 +1861,7 @@ const captureSubscribes = (): {
         Effect.sync(() => {
           tokens.push(renderTarget(target))
         }),
+      subscriptions: () => Effect.succeed(realmChannels.map((n) => decodeChannelNameSync(n))),
     },
   }
 }
@@ -2011,29 +2018,28 @@ test('ephemeral subscribe persists the live narrow set (defaults + new sub) unde
     await waitFor(() => writes.length > 0, 200)
     const last = writes.at(-1)
     expect(last?.sid).toBe(sid)
-    // The snapshot is the full live set. With no project there is no Type-2
-    // default to seed, so it is exactly the channel just subscribed — and a
-    // later resume restores that.
-    expect(new Set((last?.intents ?? []).map((i) => JSON.stringify(i)))).toEqual(
-      new Set([JSON.stringify({ kind: 'channel', channelName: decodeChannelNameSync('home') })]),
-    )
+    // Only the topic-level slice is written, and a plain channel subscribe has
+    // none — the realm holds that row, and a copy of it here could only
+    // disagree with what actually governs delivery. The write still happens,
+    // because its PRESENCE is what tells the next launch this session has run
+    // before.
+    expect(last?.intents).toEqual([])
   } finally {
     await h.cleanup()
   }
 })
 
-test('ephemeral resume restores the persisted narrow set and does NOT re-apply Type-2 defaults', async () => {
-  // A prior session persisted a single channel and had dropped the other
-  // defaults. Resume must honour that exactly — restore the `home` channel,
-  // and never re-add a dropped default.
-  const persisted: ReadonlyArray<SubscribeIntent> = [
-    { kind: 'channel', channelName: decodeChannelNameSync('home') },
-  ]
+test('ephemeral resume recovers its channels from the realm and does NOT re-apply Type-2 defaults', async () => {
+  // A prior run of this session subscribed `home` and had dropped the other
+  // defaults. `home` lives in the REALM now — that is where a channel
+  // subscription is held — and the session record is present but empty, which
+  // is what marks this a resume rather than a first launch. Resume must honour
+  // both: recover `home`, and never re-add a dropped default.
   const subscriptionStore: SubscriptionStore = {
-    read: () => Effect.succeed(Option.some(persisted)),
+    read: () => Effect.succeed(Option.some([])),
     write: () => Effect.void,
   }
-  const cap = captureSubscribes()
+  const cap = captureSubscribes(['home'])
   const h = await buildHarness({
     ephemeral: true,
     env: { COMMY_PROJECT: 'myproject' },

@@ -30,6 +30,7 @@ import { clientDisconnect, makeProgram } from './server.ts'
 import { SessionBinderLive } from './session-binder.ts'
 import { SessionIdLive } from './session-id.ts'
 import { SubscriptionStoreTag } from './subscription-store.ts'
+import { testBootStoresLayer } from './test-platform.ts'
 
 const inMemoryCursorStore = {
   read: () => Effect.succeed(Option.none()),
@@ -80,6 +81,7 @@ NodeRuntime.runMain(
           substrateAdapterLayer(substrate),
           Layer.succeed(CursorStoreTag, inMemoryCursorStore),
           Layer.succeed(SubscriptionStoreTag, inMemorySubscriptionStore),
+          testBootStoresLayer(),
           SessionIdLive,
           SessionBinderLive,
           ResumeOutcomeLive,

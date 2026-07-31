@@ -54,6 +54,7 @@ const BOUND_HTTP_CALLERS = [
   'setChannelDescription',
   'setThreadResolved',
   'subscribe',
+  'subscriptions',
   'unreact',
   'unsubscribe',
 ] as const
@@ -64,13 +65,20 @@ const BOUND_HTTP_CALLERS = [
  * a subscription row and the event queue that delivers against it — so these
  * bind for the same reason the publisher verbs do.
  *
+ * `subscriptions` (comms-g5zh.5) is the one READ in this set, and it belongs
+ * here for a different reason than the writes: it asks what the realm holds
+ * FOR THIS SEAT, so it can only be answered by the seat's own credential. The
+ * minter's answer would be a different seat's subscriptions wearing this one's
+ * name. It never causes a mint, though — its only caller checks that the seat
+ * is already bound, or has grounds to believe its bot exists, before asking.
+ *
  * Held apart from {@link BOUND_VERBS} because the tool-side trace resolves them
  * through a different receiver (`adapter.inbox.*`, not `adapter.publisher.*`).
  * That distinction is the whole reason the pre-existing guard could not see
  * them: it compared over publisher verbs alone, so a binding inbox verb sat
  * outside the compared set entirely and the suite stayed green.
  */
-const BOUND_INBOX_VERBS = ['subscribe', 'unsubscribe'] as const
+const BOUND_INBOX_VERBS = ['subscribe', 'subscriptions', 'unsubscribe'] as const
 
 /**
  * Tools that reach `boundHttp` through an inbox verb while sitting outside the

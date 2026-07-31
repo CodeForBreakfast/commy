@@ -8,6 +8,7 @@ import type {
   HistoryReader,
   Identity,
   IdentityId as IdentityIdType,
+  IdentityOrigin,
   IdentityPort,
   MessageInbox,
   MessagePublisher,
@@ -49,6 +50,7 @@ import type { IdentityCache } from './identity-cache.ts'
 // re-exports the `ZulipAdapter` type so this file names no `@commy/zulip` module
 // directly.
 import { completeAsSubstrate, type ZulipAdapter } from './memory-substrate.ts'
+import { QueueStateStoreTag } from './queue-state-store.ts'
 import { ResumeOutcomeLive } from './resume-outcome.ts'
 import { clientDisconnect, forkIdleSweep, makeProgram, type ProgramParams } from './server.ts'
 import type { BindOnDemand } from './session-binder.ts'
@@ -61,7 +63,7 @@ import { SessionIdLive } from './session-id.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 import type { SubscriptionStore } from './subscription-store.ts'
 import { SubscriptionStoreTag } from './subscription-store.ts'
-import { testPlatformLayer } from './test-platform.ts'
+import { createInMemoryQueueStateStore, testPlatformLayer } from './test-platform.ts'
 
 /**
  * In-memory cursor store for the boot tests — keeps the runner's homedir
@@ -132,6 +134,7 @@ const runProgram = (
               ? SessionBinderLive
               : Layer.succeed(SessionBinderTag, binderRef),
             ResumeOutcomeLive,
+            Layer.succeed(QueueStateStoreTag, createInMemoryQueueStateStore()),
             loggerLayer,
           ),
           testPlatformLayer(env),
@@ -152,6 +155,14 @@ const validEnv = {
   COMMY_BOT_NAME: 'myproject-concierge',
 } as const
 
+/** Ephemeral (lazy) mode: no COMMY_BOT_NAME, so the bot name comes off the session id. */
+const lazyEnv = {
+  ZULIP_SITE: 'https://zulip.example.com',
+  ZULIP_MINTER_EMAIL: 'minter-bot@zulip.example.com',
+  ZULIP_MINTER_API_KEY: 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk1',
+  CLAUDE_CODE_SESSION_ID: 'abcdef12-3456-4789-89ab-cdef01234567',
+} as const
+
 interface FakeAdapterCalls {
   readonly acquired: string[]
   readonly closes: { count: number }
@@ -163,6 +174,10 @@ interface FakeAdapterCalls {
 const buildFakeAdapter = (
   options: {
     readonly acquireError?: unknown
+    /** What the substrate says about the bind: a fresh mint, or a bot that was already there. */
+    readonly identityOrigin?: IdentityOrigin
+    /** Reject every substrate-side subscribe, for the part-way-failure paths. */
+    readonly subscribeError?: InboxError
     readonly reconcileReport?: {
       readonly added: ReadonlyArray<ChannelName>
       readonly error: string | undefined
@@ -182,6 +197,10 @@ const buildFakeAdapter = (
   const acquiredIdentity: AcquiredIdentity = {
     credentials: { apiKey: 'fresh-key' },
     identity,
+    // Default to a fresh mint: most boot tests exercise a bot coming into
+    // existence, which is when COMMY_SUBSCRIBE seeds. The already-existing
+    // case — a pinned bot on its second launch — is driven by the option.
+    origin: options.identityOrigin ?? 'minted',
   }
   const identityPort: IdentityPort = {
     currentIdentity: () => Effect.succeed(identity),
@@ -207,11 +226,21 @@ const buildFakeAdapter = (
   }
   const inbox: MessageInbox = {
     subscribe: (target: SubscriptionTarget) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         events.push('subscribe')
+        if (options.subscribeError !== undefined) return Effect.fail(options.subscribeError)
         subscribed.push(target)
+        return Effect.void
       }),
     unsubscribe: (_target: SubscriptionTarget) => Effect.void,
+    // What the realm would report back: a subscription row names a channel, so
+    // every narrow this fake was handed reads back as its channel.
+    subscriptions: () =>
+      Effect.succeed(
+        subscribed.map((target) =>
+          typeof target === 'string' ? target : (target.channel as ChannelName),
+        ),
+      ),
     settingsChanges: () => Stream.empty,
     events: () => Stream.empty,
     replay: (_since: TimestampType) => Effect.succeed([]),
@@ -326,25 +355,91 @@ test('lazy mode (cc-<8> from session id) does NOT acquire at boot', async () => 
   expect(fake.calls.closes.count).toBe(1)
 })
 
-test('lazy mode still applies COMMY_SUBSCRIBE at boot (pre-acquire subscriptions)', async () => {
+// A seat asked to hold subscriptions mints at boot rather than at its first
+// action, and the reason is structural: receiving needs an events queue, and a
+// queue is realm state that needs a principal to hold it. So COMMY_SUBSCRIBE is
+// what pulls an otherwise-lazy ephemeral seat into existence early — and the
+// seeding rides that mint.
+test('lazy mode mints at boot when COMMY_SUBSCRIBE gives the seat something to hold', async () => {
   const fake = buildFakeAdapter()
   const env = {
-    ZULIP_SITE: 'https://zulip.example.com',
-    ZULIP_MINTER_EMAIL: 'minter-bot@zulip.example.com',
-    ZULIP_MINTER_API_KEY: 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk1',
-    CLAUDE_CODE_SESSION_ID: 'abcdef12-3456-4789-89ab-cdef01234567',
+    ...lazyEnv,
     COMMY_SUBSCRIBE: 'home',
   }
   const logs: string[] = []
-  await runProgram(env, fake.adapter, { loggerLayer: captureLogger(logs) })
-  expect(fake.calls.acquired).toEqual([])
+  await runProgram(env, fake.adapter, {
+    loggerLayer: captureLogger(logs),
+    readGitContext: () => Effect.succeed(NotInRepo()),
+  })
+  expect(fake.calls.acquired).toEqual(['cc-abcdef12'])
   expect(fake.calls.subscribed).toEqual([decodeChannelNameSync('home')])
   expect(fake.calls.closes.count).toBe(1)
-  // Boot leaves a positive trace of what it applied. An operator who configured
-  // subscriptions and finds no such line — or one that omits their tokens — is
-  // looking straight at the fault, which is the diagnostic a clobbered
-  // COMMY_SUBSCRIBE spent months not having.
+  // The one positive trace that the bootstrap ran. It appears at most once in a
+  // bot's life, so its absence on a later boot is the design, not a fault.
   expect(logs).toEqual(['commy plugin: applied 1 boot-time subscribe target(s): home'])
+})
+
+test('lazy mode does NOT mint at boot when COMMY_SUBSCRIBE is unset', async () => {
+  // The mirror of the test above, and the line the optimisation lives on: a
+  // seat the realm holds nothing for stays identity-free until it acts.
+  const fake = buildFakeAdapter()
+  await runProgram(lazyEnv, fake.adapter, {
+    readGitContext: () => Effect.succeed(NotInRepo()),
+  })
+  expect(fake.calls.acquired).toEqual([])
+  expect(fake.calls.subscribed).toEqual([])
+})
+
+// ─── COMMY_SUBSCRIBE is a once-per-bot bootstrap (comms-g5zh.4 / comms-g5zh.8) ──
+// Graeme's rulings: nix bootstraps the bot ACCOUNT and the bot owns its
+// subscriptions once it exists (2026-07-20); and a bot that comes out of an
+// upgrade with no subscriptions of its own is LEFT empty rather than
+// bootstrapped, because a bot that wants subscriptions can subscribe
+// (2026-07-31). Together those make the origin of the bind the whole test —
+// there is nothing to remember between boots, so nothing is remembered.
+
+test('COMMY_SUBSCRIBE is inert on a bot that already exists', async () => {
+  // The bead's acceptance and the fleet's steady state: a pinned pane
+  // relaunching. The tokens are not re-applied, and an operator who edits them
+  // is told so rather than left reading silence.
+  const fake = buildFakeAdapter({ identityOrigin: 'existing' })
+  const logs: string[] = []
+  await runProgram({ ...validEnv, COMMY_SUBSCRIBE: 'home' }, fake.adapter, {
+    loggerLayer: captureLogger(logs),
+    readGitContext: () => Effect.succeed(NotInRepo()),
+  })
+  expect(fake.calls.acquired).toEqual(['myproject-concierge'])
+  expect(fake.calls.subscribed).toEqual([])
+  expect(logs).toEqual([
+    'commy plugin: COMMY_SUBSCRIBE not applied — myproject-concierge already exists and owns its ' +
+      'subscriptions. Editing COMMY_SUBSCRIBE for a bot that already exists has no effect; change ' +
+      'its subscriptions through the bot.',
+  ])
+})
+
+test('an already-minted bot with no subscriptions of its own is left alone, not bootstrapped', async () => {
+  // comms-g5zh.8 as ruled. Every pinned bot crossing this upgrade has an empty
+  // own-subscription set — before this architecture the MINTER held the
+  // subscriptions, so no bot ever had any of its own. Bootstrapping them would
+  // resurrect subscriptions their agents may have dropped on purpose; a bot
+  // that wants subscriptions subscribes.
+  const fake = buildFakeAdapter({ identityOrigin: 'existing' })
+  await runProgram({ ...validEnv, COMMY_SUBSCRIBE: 'home' }, fake.adapter, {
+    readGitContext: () => Effect.succeed(NotInRepo()),
+  })
+  expect(fake.calls.subscribed).toEqual([])
+})
+
+test('a freshly minted bot is bootstrapped', async () => {
+  // The other half of the same rule, and the only path that ever applies the
+  // tokens. A bot an administrator deleted and that we have since re-minted
+  // under the same name reaches here too — it is a new bot with no
+  // subscriptions, and the realm says so.
+  const fake = buildFakeAdapter({ identityOrigin: 'minted' })
+  await runProgram({ ...validEnv, COMMY_SUBSCRIBE: 'home' }, fake.adapter, {
+    readGitContext: () => Effect.succeed(NotInRepo()),
+  })
+  expect(fake.calls.subscribed).toEqual([decodeChannelNameSync('home')])
 })
 
 test('main acquire failure stringifies non-Error rejections', async () => {
@@ -425,6 +520,87 @@ test('main drives a real memory adapter through acquire + env subscribe + close'
     },
   ])
   expect(closes).toBe(1)
+})
+
+// ─── boot does not deadlock on the queue-resume verdict (comms-deg1) ──────────
+// The ephemeral post-acquire hook BLOCKS on the resume verdict, and since
+// subscriptions moved to the seat's own principal the boot-time subscribe binds
+// — so that hook runs on the BOOT fiber. The verdict used to be reported only by
+// the events producer, which `startEventPump` materialises as the LAST step of
+// boot, so the boot fiber parked on a deferred only a step it would never reach
+// could complete. Every ephemeral seat with COMMY_SUBSCRIBE set hung before
+// announcing its tools.
+//
+// This test drives the real seam: a memory adapter whose `subscribe` binds
+// through the same `bindOnDemand` holder the Zulip adapter uses, an events
+// stream that never produces (standing in for a pump that has not started), and
+// the production `ResumeOutcomeLive` — a genuinely uncompleted deferred. Before
+// the fix this times out; a harness that pre-completes the verdict cannot see it.
+test('boot completes for an ephemeral seat with COMMY_SUBSCRIBE and no resume verdict yet', async () => {
+  const binderRef = await Effect.runPromise(Ref.make<Option.Option<BindOnDemand>>(Option.none()))
+  const adapter = await Effect.runPromise(memoryAdapter({ bindOnDemand: bindThrough(binderRef) }))
+  const neverProduces: MessageInbox['events'] = () => Stream.empty
+  const substrate = completeAsSubstrate(
+    { ...adapter, inbox: { ...adapter.inbox, events: neverProduces } },
+    { close: async () => {} },
+  )
+  const exit = await Effect.runPromise(
+    Effect.exit(
+      Effect.promise(() =>
+        runProgram(
+          { ...lazyEnv, COMMY_SUBSCRIBE: 'home' },
+          substrate,
+          {
+            loggerLayer: captureLogger([]),
+            readGitContext: () => Effect.succeed(NotInRepo()),
+          },
+          binderRef,
+        ),
+      ).pipe(Effect.timeoutFail({ duration: '5 seconds', onTimeout: () => 'boot hung' as const })),
+    ),
+  )
+  expect(Exit.isSuccess(exit)).toBe(true)
+})
+
+// ─── a listen-only seat catches up at boot (comms-9iro) ──────────────────────
+// The defect: a seat that only listens never posts, so under deferred identity
+// it never acquired, so the REST catch-up gated behind acquire never ran and its
+// downtime backlog was lost. Both halves dissolve once subscribing binds — the
+// seat acquires at boot, and the hook that carries catch-up fires there. Pinned
+// here because this landing rewrites that boot-bind ordering: the property is
+// held by the order of steps, and nothing else would notice it changing.
+test('a listen-only seat runs its catch-up at boot, with zero tool calls', async () => {
+  const binderRef = await Effect.runPromise(Ref.make<Option.Option<BindOnDemand>>(Option.none()))
+  const adapter = await Effect.runPromise(memoryAdapter({ bindOnDemand: bindThrough(binderRef) }))
+  const caughtUpChannels: string[] = []
+  const substrate = completeAsSubstrate(
+    {
+      ...adapter,
+      inbox: { ...adapter.inbox, events: () => Stream.empty },
+      history: {
+        ...adapter.history,
+        readChannel: (channel: ChannelName, _range: Range) =>
+          Effect.sync(() => {
+            caughtUpChannels.push(channel as string)
+            return []
+          }),
+      },
+    },
+    { close: async () => {} },
+  )
+  await runProgram(
+    { ...lazyEnv, COMMY_SUBSCRIBE: 'home' },
+    substrate,
+    {
+      loggerLayer: captureLogger([]),
+      readGitContext: () => Effect.succeed(NotInRepo()),
+    },
+    binderRef,
+  )
+  // The channel catch-up skimmed the seat's boot-time narrow without a single
+  // tool call: COMMY_SUBSCRIBE bound the seat at boot, and the post-acquire hook
+  // that carries catch-up ran there.
+  expect(caughtUpChannels).toEqual(['home'])
 })
 
 test('main aborts non-zero when COMMY_SUBSCRIBE contains a malformed token', async () => {
