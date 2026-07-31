@@ -781,8 +781,25 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     }
 
     const inbox: MessageInbox = {
-      subscribe: (target) => Ref.update(subscriptions, HashSet.add(subscriptionKey(target))),
-      unsubscribe: (target) => Ref.update(subscriptions, HashSet.remove(subscriptionKey(target))),
+      // Declaring interest BINDS, in step with the Zulip adapter (comms-g5zh.2
+      // / .3): a subscription is state the realm holds on the agent's behalf,
+      // and the event queue that delivers against it is registered under the
+      // same principal.
+      //
+      // This adapter holds no realm, so nothing here would break if it skipped
+      // the bind — which is exactly why it must not. Every rig that boots the
+      // server against this adapter would then exercise a seam that differs
+      // from the one that ships, and a seat that cannot bind would look
+      // perfectly healthy in tests while receiving nothing in production. That
+      // divergence is the failure comms-hsym recorded, not a saving.
+      subscribe: (target) =>
+        requireBound().pipe(
+          Effect.zipRight(Ref.update(subscriptions, HashSet.add(subscriptionKey(target)))),
+        ),
+      unsubscribe: (target) =>
+        requireBound().pipe(
+          Effect.zipRight(Ref.update(subscriptions, HashSet.remove(subscriptionKey(target)))),
+        ),
       events: () =>
         Stream.asyncPush<InboundEvent>((emit) =>
           Effect.acquireRelease(

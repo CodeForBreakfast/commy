@@ -561,7 +561,14 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
   // id-blind and best-effort (see the subscribe handler): the post and react
   // handlers both reach here via ensure-bound, so the session-id deferred is
   // already fed and the store already seeded or restored by this point.
+  // Takes the CALLER'S `run`, not the bare runtime edge. Subscribing is a
+  // state-holding call and binds like any other, so it needs the calling
+  // session's context; running it at the edge instead would put it on a fiber
+  // with no session id, where the seam correctly refuses. That refusal would
+  // land on a caller who did nothing wrong — they posted, and the sticky
+  // subscribe is our inference from that post.
   const stickyThreadEngagement = async (
+    run: <A, E>(effect: Effect.Effect<A, E>) => Promise<A>,
     channel: ChannelRef,
     threadName: Option.Option<ThreadName>,
   ): Promise<void> => {
@@ -572,7 +579,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
       threadName: threadName.value,
     }
     narrowSet.add(intent)
-    await runEdge(
+    await run(
       adapter.inbox
         .subscribe(intentToTarget(intent))
         .pipe(Effect.zipRight(deps.persistSessionSubscriptions ?? Effect.void)),
@@ -735,6 +742,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         )
         cache.rememberMessage(ref)
         await stickyThreadEngagement(
+          run,
           ref.channel,
           Option.map(ref.thread, (t) => t.name),
         )
@@ -834,7 +842,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           }),
         )
         cache.rememberMessage(ref)
-        await stickyThreadEngagement(ref.channel, threadName)
+        await stickyThreadEngagement(run, ref.channel, threadName)
         return {}
       },
     },

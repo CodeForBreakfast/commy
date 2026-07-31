@@ -76,20 +76,20 @@ const BOUND_INBOX_VERBS = ['subscribe', 'unsubscribe'] as const
  * Tools that reach `boundHttp` through an inbox verb while sitting outside the
  * matcher, so the hook never stamps them and the bind seam sees no session id.
  *
- * These are NOT a `comms-tww6`-style attribution accident — they cannot inherit
- * an earlier call's seat, because `boundHttp` consults the binder on every call
- * and refuses outright when the context carries no session id
- * (`adapter.ts`, the "may THIS CALLER use it?" comment). An unstamped
- * `subscribe` therefore FAILS rather than binding to the wrong seat.
+ * EMPTY, and it has to stay that way. An unstamped inbox verb is not a
+ * `comms-tww6`-style attribution accident — it cannot inherit an earlier
+ * call's seat, because `boundHttp` consults the binder on every call and
+ * refuses outright when the context carries no session id. It simply FAILS.
  *
- * Emptying this list means widening the `hooks.json` matcher to the seven tools
- * that declare `session_id`. That change reverses commit `0f0e755` (PR #126),
- * which deliberately declined it while the shared minter still owned
- * subscriptions — so it is a ratification call, not a lint fix, and is held
- * pending that ruling. The list exists so the gap is machine-visible in the
- * meantime rather than resting on prose.
+ * The matcher was widened to the seven tools that declare `session_id`, which
+ * REVERSES commit `0f0e755` (PR #126) — that commit chose id-blind subscribe
+ * and explicitly declined to add these two. The reversal is deliberate and
+ * ratified: `#126`'s choice served the shared-minter architecture, where
+ * subscribe wrote under the minter and needed no identity of its own.
+ * `comms-g5zh.3` retires that architecture — subscribe now mints — so the
+ * premise `#126` rested on is gone.
  */
-const G5ZH3_MATCHER_PENDING = ['subscribe', 'unsubscribe'] as const
+const G5ZH3_MATCHER_PENDING = [] as const
 
 /**
  * Tools that reach `boundHttp` while declaring no `session_id` and sitting
@@ -267,9 +267,13 @@ test('the matcher carries no tool that never reaches boundHttp and never binds',
     .filter((name) => name !== 'current_identity')
     .filter((name) => {
       const f = facts.get(name)
+      if (f === undefined) return true
+      // Either receiver counts. A tool binds through the publisher verbs or
+      // through the inbox verbs; asking only about the first would call a
+      // legitimately-stamped `subscribe` an orphan.
       return (
-        f === undefined ||
-        ![...f.verbs].some((v) => (BOUND_VERBS as ReadonlyArray<string>).includes(v))
+        ![...f.verbs].some((v) => (BOUND_VERBS as ReadonlyArray<string>).includes(v)) &&
+        ![...f.inboxVerbs].some((v) => (BOUND_INBOX_VERBS as ReadonlyArray<string>).includes(v))
       )
     })
     .sort()

@@ -194,33 +194,26 @@ export const createEphemeralIdentityCache = (
         ...(project !== undefined ? { project } : {}),
       })
 
-    const wrapWithOnAcquire =
+    // `onAcquire` is handed to `createEnsureBound` as its `afterAcquire` hook
+    // rather than wrapped around `acquire` here. It re-enters the bind seam —
+    // seeding subscriptions calls `inbox.subscribe`, which reaches for a bound
+    // credential — so it has to run after the binding is recorded, or it awaits
+    // the Deferred its own caller must complete. See `EnsureBoundDeps`.
+    const afterAcquireFor =
       (project: ProjectSlug | undefined, sessionId: SessionId) =>
-      (n: BotName): Effect.Effect<AcquiredIdentity, UnknownIdentity | IdentityError> =>
-        deps
-          .acquire(n)
-          .pipe(
-            Effect.tap((acquired) =>
-              deps.onAcquire !== undefined
-                ? deps.onAcquire(acquired, project, sessionId)
-                : Effect.void,
-            ),
-          )
+      (acquired: AcquiredIdentity): Effect.Effect<void, UnknownIdentity | IdentityError> =>
+        deps.onAcquire !== undefined ? deps.onAcquire(acquired, project, sessionId) : Effect.void
 
     // Capture the prior slot's release into the new slot's first acquire:
     // the release-then-acquire only fires if the prior identity actually
     // bound. `priorEnsure.current()` is read when the new acquire runs, so a
     // prior still mid-acquire (current() === undefined) skips release.
     const acquireForTransition =
-      (
-        priorEnsure: EnsureBound<UnknownIdentity | IdentityError>,
-        project: ProjectSlug | undefined,
-        sessionId: SessionId,
-      ) =>
+      (priorEnsure: EnsureBound<UnknownIdentity | IdentityError>) =>
       (n: BotName): Effect.Effect<AcquiredIdentity, UnknownIdentity | IdentityError> =>
         priorEnsure.current() !== undefined
-          ? deps.release().pipe(Effect.zipRight(wrapWithOnAcquire(project, sessionId)(n)))
-          : wrapWithOnAcquire(project, sessionId)(n)
+          ? deps.release().pipe(Effect.zipRight(deps.acquire(n)))
+          : deps.acquire(n)
 
     const mintSlot = (
       sessionId: SessionId,
@@ -229,11 +222,12 @@ export const createEphemeralIdentityCache = (
       prior: Slot | undefined,
     ): Effect.Effect<readonly [EnsureBound<UnknownIdentity | IdentityError>, Slot]> => {
       const name = deriveBotName(sessionId, project)
-      const acquire =
-        prior !== undefined
-          ? acquireForTransition(prior.ensureBound, project, sessionId)
-          : wrapWithOnAcquire(project, sessionId)
-      return createEnsureBound({ acquire, name }).pipe(
+      const acquire = prior !== undefined ? acquireForTransition(prior.ensureBound) : deps.acquire
+      return createEnsureBound({
+        acquire,
+        name,
+        afterAcquire: afterAcquireFor(project, sessionId),
+      }).pipe(
         Effect.map(
           (ensureBound) => [ensureBound, { sessionId, ensureBound, lastUsedMs: nowMs }] as const,
         ),

@@ -16,6 +16,28 @@ export interface EnsureBoundDeps<E> {
    * `composeBotName`.
    */
   readonly name: BotName
+  /**
+   * Post-acquire work, sequenced into the caller's call but run AFTER the
+   * state machine has recorded the binding.
+   *
+   * The ordering is load-bearing and the reason this is a separate hook rather
+   * than something `acquire` wraps. Post-acquire work RE-ENTERS the bind seam:
+   * seeding a seat's subscriptions calls `inbox.subscribe`, which reaches for a
+   * bound credential like any other state-holding call. Run while the state
+   * still says `pending`, that re-entry awaits the very `Deferred` its own
+   * caller is responsible for completing — a self-deadlock that hangs the
+   * seat's first action.
+   *
+   * Recording the binding first is also the honest model: the identity exists
+   * the moment `acquire` returns it. What follows is work done AS that
+   * identity, not part of obtaining it.
+   *
+   * The caller still waits for this, so the "subscriptions are seeded before
+   * the tool result returns" contract holds. What changes is that a CONCURRENT
+   * caller is released as soon as the identity exists rather than waiting out
+   * an unrelated caller's seeding.
+   */
+  readonly afterAcquire?: (acquired: AcquiredIdentity) => Effect.Effect<void, E>
 }
 
 /**
@@ -99,6 +121,21 @@ export const createEnsureBound = <E>(deps: EnsureBoundDeps<E>): Effect.Effect<En
               onSuccess: (identity) => ({ kind: 'acquired' as const, identity }),
             }),
           ).pipe(Effect.zipRight(Deferred.done(decision.deferred, exit))),
+        ),
+        // Outside the `onExit` above, so the state already reads `acquired`
+        // and this hook's own re-entry into the seam resolves instead of
+        // awaiting itself. The documented failure contract is preserved by
+        // hand: a hook that fails still drops the state back to idle, so the
+        // next caller re-acquires and re-runs it.
+        Effect.tap((acquired) =>
+          deps.afterAcquire === undefined
+            ? Effect.void
+            : // `onError`, not `tapError`: a hook that THROWS dies rather than
+              // failing, and a defect must drop the binding for the same reason
+              // a typed failure does — the post-acquire work did not complete.
+              deps
+                .afterAcquire(acquired)
+                .pipe(Effect.onError(() => Ref.set(stateRef, { kind: 'idle' as const }))),
         ),
       )
     })
