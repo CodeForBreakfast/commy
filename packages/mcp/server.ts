@@ -62,6 +62,7 @@ import { withSessionContext } from './session-context.ts'
 import { SessionIdLive, SessionId as SessionIdTag } from './session-id.ts'
 import type { SubscribeIntent, SubscribeTokenError } from './subscribe-parser.ts'
 import { intentToTarget, intentToToken } from './subscribe-parser.ts'
+import type { PersistedTopicIntents } from './subscription-restore.ts'
 import {
   persistSubscriptions,
   restoreSubscriptions,
@@ -630,44 +631,61 @@ export const makeProgram = (
           ? createType2DefaultsOnAcquire(narrowSet, adapter.inbox)
           : undefined
 
-      // Reactive subscription restore. Restore is a reaction to the
-      // session_id becoming known, not a thing a specific action triggers: a host
-      // that does not inject the session id into the MCP child's env boots
-      // session-blind, and there the id cannot arrive until the seat itself acts.
-      // `restoreSubscriptions` reads the session-bound store, whose `read` awaits
-      // the shared session-id `Deferred` internally — so this is forked ONCE into
-      // the connected runtime below and parks on that read until any source (the
-      // boot-env feeder, which covers a Claude Code seat whether fresh or
-      // resumed, or the first tool call of an acting seat) fills the id, then
-      // rehydrates with zero agent action. Must be forked, not awaited inline: an
-      // inline await would block boot/serving until the id lands. The store's
-      // presence stays a true resume signal; a corrupt or unreadable store logs
-      // and is swallowed rather than stranding the session. Ephemeral mode only:
-      // a persistent COMMY_BOT_NAME pane gets a new session_id every launch, so
-      // its store is always absent → the fresh path → COMMY_SUBSCRIBE-only.
+      // Rebuild this seat's narrow set from the realm, narrowed by whatever
+      // topic-level intents were recorded for it. See `restoreSubscriptions` for
+      // why those two sources and no others.
       //
-      // Restoring re-subscribes, and a subscription is realm state under the
-      // seat's own principal, so this needs the seat's naming inputs in context
-      // for the bind to resolve. Awaiting the id here is the same wait the
-      // store's own `read` already performs, and it is safe for the same reason
-      // the fork exists: nothing downstream of a forked fiber is waiting on it.
-      const restoreOnResume: Effect.Effect<void> =
-        parsed.botName !== undefined
-          ? Effect.void
-          : Deferred.await(sessionIdDeferred).pipe(
-              Effect.flatMap((sessionId) =>
-                withSessionContext(
-                  restoreSubscriptions({ subscriptionStore, narrowSet, inbox: adapter.inbox }),
-                  { sessionId, project: parsed.project },
-                ),
-              ),
-              Effect.catchAll((err) =>
-                Effect.logError(
-                  `commy plugin: subscription restore failed: ${Predicate.isError(err) ? err.message : String(err)}`,
-                ),
-              ),
-              Effect.provide(loggerLayer),
+      // Runs for BOTH modes, which is new. A pinned pane has no session record —
+      // its session id changes every launch — so before this it came up with
+      // nothing but its boot-time defaults while the realm went on delivering
+      // every channel it had ever joined at runtime. That seat is the one this
+      // fixes; the ephemeral seat merely stops being a special case.
+      //
+      // Forked, never awaited inline. The ephemeral record's read parks on the
+      // shared session id, and a host that injects none leaves that id
+      // unarrived until the seat itself acts — an inline await would hold boot
+      // there. A pinned pane reads no record at all and so would not park, but
+      // it still forks: it re-subscribes, which binds, and nothing on the boot
+      // fiber should wait on a substrate round-trip it does not need.
+      //
+      // Re-subscribing is realm state under the seat's own principal, so the
+      // seat's naming inputs have to be in context for the bind to resolve.
+      const persistedTopicIntents: PersistedTopicIntents =
+        parsed.botName === undefined
+          ? subscriptionStore.read()
+          : // A pinned bot's record could never be its own: the store is keyed by
+            // session id and its id is new every launch. Reading one would park
+            // on an id no host supplies, for an answer that would not be about
+            // this bot anyway.
+            Effect.succeedNone
+      const rebuildNarrowSet: Effect.Effect<void> = (
+        parsed.botName === undefined
+          ? Deferred.await(sessionIdDeferred).pipe(
+              Effect.map((sessionId): SessionId | undefined => sessionId),
             )
+          : Effect.succeed(undefined)
+      ).pipe(
+        Effect.flatMap((sessionId) =>
+          withSessionContext(
+            restoreSubscriptions({
+              persisted: persistedTopicIntents,
+              isBound: () => identityCache.boundIdentityIds().size > 0,
+              narrowSet,
+              inbox: adapter.inbox,
+            }),
+            { sessionId, project: parsed.project },
+          ),
+        ),
+        Effect.catchAll((err) =>
+          // Load anyway on failure, with no base: the narrow set is buffering
+          // and something has to end that window, or a seat that could not
+          // reach the realm journals deltas nothing ever replays.
+          Effect.logError(
+            `commy plugin: could not rebuild the subscription set: ${Predicate.isError(err) ? err.message : String(err)}`,
+          ).pipe(Effect.zipRight(Effect.sync(() => narrowSet.load(Option.none())))),
+        ),
+        Effect.provide(loggerLayer),
+      )
       const seedDefaults = (project: ProjectSlug | undefined): Effect.Effect<void> =>
         registerType2Defaults !== undefined ? registerType2Defaults(project) : Effect.void
       // Seed the acquire-gated Type-2 defaults for a fresh session (store absent).
@@ -943,14 +961,12 @@ export const makeProgram = (
         ),
       )
 
-      // Ephemeral resume: start journaling runtime subscribe/unsubscribe deltas
-      // now — after the COMMY_SUBSCRIBE base is seeded but before any tool call
-      // can mutate — so a delta racing the boot-forked restore below is replayed
-      // onto the restored base rather than clobbered by it. Persistent mode never
-      // restores, so it never buffers: add/remove apply directly.
-      if (parsed.botName === undefined) {
-        narrowSet.beginBuffering()
-      }
+      // Start journaling runtime subscribe/unsubscribe deltas now — after the
+      // boot-time defaults and any COMMY_SUBSCRIBE bootstrap have landed, but
+      // before a tool call can mutate — so a delta racing the boot-forked
+      // rebuild below is replayed onto its result rather than clobbered by it.
+      // Both modes buffer, because both now rebuild.
+      narrowSet.beginBuffering()
 
       const toolsCache = registerTools(mcp, {
         adapter,
@@ -1079,14 +1095,14 @@ export const makeProgram = (
         yield* forkIdleSweep(identityCache, EPHEMERAL_IDLE_SWEEP_INTERVAL_MS)
       }
 
-      // Boot-forked subscription restore, scope-tied like the sweep. Parks on the
-      // store's `Deferred.await` until any source fills the shared session-id,
-      // then loads the persisted base (resume) or drains the buffer over the env
-      // seed (fresh); either way it replays the deltas journaled since
-      // `beginBuffering`, so a subscribe racing the load is never lost. A no-op
-      // Effect in persistent mode. Never awaited inline: an unfilled id on a
-      // listen-only seat would otherwise block the scope forever.
-      yield* Effect.forkScoped(restoreOnResume)
+      // Boot-forked narrow-set rebuild, scope-tied like the sweep. Asks the
+      // realm what this seat is subscribed to and narrows the answer with its
+      // recorded topic intents, then replays the deltas journaled since
+      // `beginBuffering` so a subscribe racing the load is never lost. Never
+      // awaited inline: an ephemeral seat's record parks on the shared session
+      // id, and an unfilled id on a listen-only seat would otherwise block the
+      // scope forever.
+      yield* Effect.forkScoped(rebuildNarrowSet)
 
       // Block until either the event stream ends / the pump fatally parks
       // and is interrupted (the SIGINT/SIGTERM path), OR the MCP client

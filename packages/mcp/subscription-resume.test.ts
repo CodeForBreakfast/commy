@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import type { InboundEvent, MessageRef, SubscriptionTarget } from '@commy/core/ports'
+import type { InboundEvent, MessageInbox, MessageRef, SubscriptionTarget } from '@commy/core/ports'
 import {
   ChannelPermalinkSchema,
   decodeChannelIdSync,
@@ -63,16 +63,24 @@ const channelIntent = (name: string): SubscribeIntent => ({
 const sortIntents = (intents: ReadonlyArray<SubscribeIntent>): ReadonlyArray<SubscribeIntent> =>
   [...intents].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
 
-// A substrate-subscribe spy: restore wires each restored intent on the substrate
-// via `inbox.subscribe`, mirroring the real adapter's side effect.
-const spyInbox = (): {
-  readonly inbox: { subscribe: (target: SubscriptionTarget) => Effect.Effect<void> }
+// A stand-in realm: it answers `subscriptions()` with the channels it holds
+// rows for, and records the re-declarations the rebuild makes through
+// `subscribe`. `realmChannels` is what this seat was subscribed to before the
+// reboot — the thing a rebuild now asks for instead of replaying a local copy.
+const spyInbox = (
+  realmChannels: ReadonlyArray<string> = [],
+): {
+  readonly inbox: Pick<MessageInbox, 'subscribe' | 'subscriptions'>
   readonly subscribes: ReadonlyArray<SubscriptionTarget>
 } => {
   const subscribes: SubscriptionTarget[] = []
   return {
     subscribes,
-    inbox: { subscribe: (target) => Effect.sync(() => void subscribes.push(target)) },
+    inbox: {
+      subscribe: (target) => Effect.sync(() => void subscribes.push(target)),
+      unsubscribe: () => Effect.void,
+      subscriptions: () => Effect.succeed(realmChannels.map((name) => decodeChannelNameSync(name))),
+    } as Pick<MessageInbox, 'subscribe' | 'subscriptions'>,
   }
 }
 
@@ -138,7 +146,9 @@ test('restore rehydrates the persisted narrow set when the shared deferred is fi
     Effect.gen(function* () {
       const narrowSet = createNarrowSet()
       narrowSet.beginBuffering()
-      const { inbox, subscribes } = spyInbox()
+      // The realm delivers both channels; the topic record is what keeps the
+      // rebuild from widening them into channel-wide narrows.
+      const { inbox, subscribes } = spyInbox([DECISIONS_CHANNEL, 'general'])
       const session = yield* Deferred.make<SessionId>()
       const subscriptionStore = inMemorySubscriptionStore(
         session,
@@ -147,7 +157,12 @@ test('restore rehydrates the persisted narrow set when the shared deferred is fi
 
       // Boot-fork restore: it parks on the store read, which awaits the deferred.
       const fiber = yield* Effect.fork(
-        restoreSubscriptions({ subscriptionStore, narrowSet, inbox }),
+        restoreSubscriptions({
+          persisted: subscriptionStore.read(),
+          isBound: () => true,
+          narrowSet,
+          inbox,
+        }),
       )
 
       // Rebooted, deaf: nothing restored while the id is unknown.
@@ -176,10 +191,11 @@ test('deltas racing the load are journaled and replayed onto the restored base',
   Effect.runPromise(
     Effect.gen(function* () {
       const narrowSet = createNarrowSet()
-      // A COMMY_SUBSCRIBE default the persisted set turns out to have dropped.
+      // A COMMY_SUBSCRIBE default this seat has since unsubscribed from: the
+      // realm holds no row for it, so the rebuild does not bring it back.
       narrowSet.add(channelIntent('env-default'))
       narrowSet.beginBuffering()
-      const { inbox } = spyInbox()
+      const { inbox } = spyInbox([DECISIONS_CHANNEL, 'general'])
       const session = yield* Deferred.make<SessionId>()
       const subscriptionStore = inMemorySubscriptionStore(
         session,
@@ -187,7 +203,12 @@ test('deltas racing the load are journaled and replayed onto the restored base',
       )
 
       const fiber = yield* Effect.fork(
-        restoreSubscriptions({ subscriptionStore, narrowSet, inbox }),
+        restoreSubscriptions({
+          persisted: subscriptionStore.read(),
+          isBound: () => true,
+          narrowSet,
+          inbox,
+        }),
       )
 
       // Before the id lands: subscribe something new, unsubscribe a persisted sub.
@@ -205,16 +226,18 @@ test('deltas racing the load are journaled and replayed onto the restored base',
     }),
   ))
 
-// A fresh session (store miss) loads no base: the COMMY_SUBSCRIBE seed stands and
-// buffered deltas replay onto it. Restoring nothing is the whole point — a
-// never-seen session must not inherit another session's persisted set.
-test('a fresh session (store miss) keeps the env seed and replays buffered deltas', () =>
+// A fresh session has no topic record of its own, so the realm's answer is the
+// whole base. The COMMY_SUBSCRIBE seed survives because the seeding put those
+// channels in the realm — not because a local copy of it was kept. And another
+// session's record must not leak in.
+test('a fresh session (no record) rebuilds from the realm and replays buffered deltas', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const narrowSet = createNarrowSet()
       narrowSet.add(channelIntent('env-default'))
       narrowSet.beginBuffering()
-      const { inbox, subscribes } = spyInbox()
+      // The realm already holds the seeded channel: the bootstrap subscribed it.
+      const { inbox, subscribes } = spyInbox(['env-default'])
       const session = yield* Deferred.make<SessionId>()
       // The store holds a DIFFERENT session's data; SID_FRESH is a miss.
       const subscriptionStore = inMemorySubscriptionStore(
@@ -223,26 +246,34 @@ test('a fresh session (store miss) keeps the env seed and replays buffered delta
       )
 
       const fiber = yield* Effect.fork(
-        restoreSubscriptions({ subscriptionStore, narrowSet, inbox }),
+        restoreSubscriptions({
+          persisted: subscriptionStore.read(),
+          isBound: () => true,
+          narrowSet,
+          inbox,
+        }),
       )
       narrowSet.add(channelIntent('fresh-sub'))
 
       yield* Deferred.succeed(session, asSessionId(SID_FRESH))
       yield* Fiber.join(fiber)
 
-      // Env seed kept, buffered delta replayed, nothing re-subscribed, and the
-      // other session's decisions thread was NOT restored.
+      // Realm channel recovered, buffered delta replayed, and the other
+      // session's decisions thread was NOT restored.
       expect(sortIntents(narrowSet.intents())).toEqual(
         sortIntents([channelIntent('env-default'), channelIntent('fresh-sub')]),
       )
+      // Nothing re-declared on the substrate: this process already subscribed
+      // `env-default` on the way in, so the rebuild has no round-trip to make.
       expect(subscribes).toEqual([])
       expect(narrowSet.matches(reactionOnDecisionsThread(), undefined)).toBe(false)
     }),
   ))
 
-// An empty persisted set is honoured verbatim: the resumed seat hears only what
-// it re-subscribed since boot, and a dropped default stays dropped.
-test('an empty persisted set is honoured — the env default is not resurrected', () =>
+// A seat that unsubscribed from everything comes back with nothing: the realm
+// holds no rows for it and its topic record is empty, so a dropped default
+// stays dropped rather than being resurrected from the env.
+test('a seat with no realm rows and no topic record comes back empty', () =>
   Effect.runPromise(
     Effect.gen(function* () {
       const narrowSet = createNarrowSet()
@@ -253,7 +284,12 @@ test('an empty persisted set is honoured — the env default is not resurrected'
       const subscriptionStore = inMemorySubscriptionStore(session, new Map([[SID_RESUME, []]]))
 
       const fiber = yield* Effect.fork(
-        restoreSubscriptions({ subscriptionStore, narrowSet, inbox }),
+        restoreSubscriptions({
+          persisted: subscriptionStore.read(),
+          isBound: () => true,
+          narrowSet,
+          inbox,
+        }),
       )
       yield* Deferred.succeed(session, asSessionId(SID_RESUME))
       yield* Fiber.join(fiber)

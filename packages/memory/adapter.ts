@@ -815,6 +815,22 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         requireBound().pipe(
           Effect.zipRight(Ref.update(subscriptions, HashSet.remove(subscriptionKey(target)))),
         ),
+      // Mirrors the realm's answer: a subscription row names a CHANNEL, so
+      // every narrow over a channel reads back as that channel and `mentions`
+      // (which is not a subscription at all) reads back as nothing. Collapsing
+      // here rather than in the caller keeps the two substrates answering the
+      // same question.
+      subscriptions: () =>
+        requireBound().pipe(
+          Effect.zipRight(Ref.get(subscriptions)),
+          Effect.map((keys) =>
+            Arr.dedupe(
+              Arr.filterMap(Arr.fromIterable(keys), (key) =>
+                key.kind === 'mentions' ? Option.none() : Option.some(key.channelName),
+              ),
+            ),
+          ),
+        ),
       events: () =>
         Stream.asyncPush<InboundEvent>((emit) =>
           Effect.acquireRelease(

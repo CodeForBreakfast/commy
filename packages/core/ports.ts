@@ -693,6 +693,23 @@ export interface MessageInbox {
   subscribe(target: SubscriptionTarget): Effect.Effect<void, BindError | InboxError>
   unsubscribe(target: SubscriptionTarget): Effect.Effect<void, BindError | InboxError>
   /**
+   * The channels the realm currently delivers to this seat, read back from the
+   * subscription rows written under its own principal.
+   *
+   * This is what makes a seat's subscriptions survive a restart without the
+   * plugin keeping its own copy of them: on the way up, a seat asks the realm
+   * what it is subscribed to rather than replaying what it once asked for.
+   * Reading it binds — the answer is per-member state, so there is no answer
+   * before the seat has a principal, and an unbound seat's honest answer is not
+   * "nothing" but "there is no seat yet".
+   *
+   * CHANNELS ONLY, and that ceiling is the substrate's rather than ours: a
+   * subscription row names a channel, so a seat that only wants one topic in a
+   * channel and a seat that wants the whole channel are indistinguishable here.
+   * Narrowing below a channel stays with the caller.
+   */
+  subscriptions(): Effect.Effect<ReadonlyArray<ChannelName>, BindError | InboxError>
+  /**
    * Effect-native Stream of inbound events. Adapters drive this from
    * their substrate's event mechanism (Zulip's events queue, Discord
    * gateway, etc.). The Stream is infinite — consumers cancel by

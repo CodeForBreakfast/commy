@@ -1225,6 +1225,14 @@ export const zulipAdapter = (
 
     const subscriptionsResponseSchema = Schema.Struct({ result: Schema.Literal('success') })
 
+    // GET /users/me/subscriptions — the seat's own subscription rows. Only the
+    // names matter here; the rest of each row describes delivery settings the
+    // plugin does not model.
+    const mySubscriptionsResponseSchema = Schema.Struct({
+      result: Schema.Literal('success'),
+      subscriptions: Schema.Array(Schema.Struct({ name: Schema.NonEmptyString })),
+    })
+
     // POST /users/me/subscriptions response carries a per-user map of
     // names actually subscribed vs already subscribed. For minter-routed
     // calls we only care about the minter's row; defaults to empty so
@@ -1885,6 +1893,20 @@ export const zulipAdapter = (
                 }),
               )
             }).pipe(Effect.mapError((cause) => new InboxError({ operation: 'subscribe', cause }))),
+          ),
+        ),
+      // Reads the seat's own rows, so it goes out on the seat's credential like
+      // the writes do — "me" here has to be the seat, and the minter's answer
+      // would be a different seat's subscriptions wearing this one's name.
+      subscriptions: () =>
+        boundHttp().pipe(
+          Effect.flatMap((http) =>
+            http.get('/users/me/subscriptions', mySubscriptionsResponseSchema).pipe(
+              Effect.flatMap((res) =>
+                Effect.forEach(res.subscriptions, (row) => decodeChannelName(row.name)),
+              ),
+              Effect.mapError((cause) => new InboxError({ operation: 'subscribe', cause })),
+            ),
           ),
         ),
       unsubscribe: (target) =>

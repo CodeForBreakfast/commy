@@ -896,6 +896,7 @@ const buildFakeInbox = (options: { readonly rejectOn?: number } = {}): FakeInbox
         return Effect.void
       }),
     unsubscribe: () => Effect.void,
+    subscriptions: () => Effect.succeed([]),
     settingsChanges: () => Stream.empty,
     events: () => Stream.empty,
     replay: () => Effect.succeed([]),

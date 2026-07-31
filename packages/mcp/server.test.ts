@@ -233,6 +233,14 @@ const buildFakeAdapter = (
         return Effect.void
       }),
     unsubscribe: (_target: SubscriptionTarget) => Effect.void,
+    // What the realm would report back: a subscription row names a channel, so
+    // every narrow this fake was handed reads back as its channel.
+    subscriptions: () =>
+      Effect.succeed(
+        subscribed.map((target) =>
+          typeof target === 'string' ? target : (target.channel as ChannelName),
+        ),
+      ),
     settingsChanges: () => Stream.empty,
     events: () => Stream.empty,
     replay: (_since: TimestampType) => Effect.succeed([]),
