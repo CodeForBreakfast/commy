@@ -2831,21 +2831,85 @@ effectTest('directory.presence runs pre-acquire and routes via minter creds', ()
   }),
 )
 
-effectTest(
-  'inbox.subscribe runs pre-acquire and routes /users/me/subscriptions via minter creds',
-  () =>
-    Effect.gen(function* () {
-      const stub = yield* makeStubHttpClient
-      yield* seedSubscribeOk(stub, 'general')
-      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
-      yield* adapter.inbox.subscribe(generalChannel.name)
-      const subReq = yield* findRequest(stub, 'POST', '/api/v1/users/me/subscriptions')
-      expect(decodeBasicAuth(subReq.headers.get('Authorization'))).toEqual(minterAuth)
-      // The /register that arms the events queue must also be minter-creds —
-      // the queue belongs to the minter so lurking sessions share it.
-      const regReq = yield* findRequest(stub, 'POST', '/api/v1/register')
-      expect(decodeBasicAuth(regReq.headers.get('Authorization'))).toEqual(minterAuth)
-    }),
+// ─── receiving runs on the seat's own principal ──────────────────
+
+// The credentials `buildAdapter`'s acquire binds: HERMES's delivery email
+// with the key `seedRegenerate` hands back. Distinct from `minterAuth` in
+// both fields, so an assertion cannot pass by accident on a shared value.
+const seatAuth = { email: 'hermes-agent-bot@example.com', apiKey: 'fresh-key' }
+
+// Was: "inbox.subscribe runs pre-acquire and routes /users/me/subscriptions
+// via minter creds". Inverted by comms-g5zh.2/.3. Receiving is state the realm
+// holds on the agent's behalf (principle 5), so a subscription belongs under
+// the seat's own principal and the events queue is registered against it.
+//
+// Both halves move together because Zulip couples them: a queue delivers a
+// channel message only to users the channel's subscription rows name
+// (zerver/actions/message_send.py builds the recipient set from those rows),
+// so a seat-owned queue over minter-held subscriptions receives nothing.
+effectTest('inbox.subscribe writes the subscription under the seat own principal', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSubscribeOk(stub, 'general')
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.inbox.subscribe(generalChannel.name)
+    const subReq = yield* findRequest(stub, 'POST', '/api/v1/users/me/subscriptions')
+    expect(decodeBasicAuth(subReq.headers.get('Authorization'))).toEqual(seatAuth)
+  }),
+)
+
+effectTest('inbox.subscribe registers the events queue under the seat own principal', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSubscribeOk(stub, 'general')
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.inbox.subscribe(generalChannel.name)
+    const regReq = yield* findRequest(stub, 'POST', '/api/v1/register')
+    expect(decodeBasicAuth(regReq.headers.get('Authorization'))).toEqual(seatAuth)
+  }),
+)
+
+effectTest('inbox.unsubscribe deletes the subscription under the seat own principal', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSubscribeOk(stub, 'general')
+    yield* stub.respond('DELETE', '/api/v1/users/me/subscriptions', {
+      body: { result: 'success', subscribed: {}, already_subscribed: {}, unauthorized: [] },
+    })
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.inbox.subscribe(generalChannel.name)
+    yield* adapter.inbox.unsubscribe(generalChannel.name)
+    const delReq = yield* findRequest(stub, 'DELETE', '/api/v1/users/me/subscriptions')
+    expect(decodeBasicAuth(delReq.headers.get('Authorization'))).toEqual(seatAuth)
+  }),
+)
+
+// A seat that cannot bind must not fall back to the minter for receiving, for
+// the same reason `publisher.post` must not: the fallback is invisible and
+// leaves the seat reading a surface that is not its own. The refusal is the
+// typed BindError, surfaced rather than swallowed.
+effectTest('inbox.subscribe refuses rather than falling back to minter creds', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedUsers(stub, [])
+    yield* seedSubscribeOk(stub, 'general')
+    const adapter = yield* zulipAdapter(stub, {
+      ...(yield* makeConfig()),
+      bindOnDemand: Effect.fail(
+        new UnboundEphemeralSession({ message: 'commy: ephemeral mode requires a session_id' }),
+      ),
+    })
+    const exit = yield* Effect.exit(adapter.inbox.subscribe(generalChannel.name))
+    expect(Exit.isFailure(exit)).toBe(true)
+    const reqs = yield* stub.captured
+    expect(
+      reqs.filter(
+        (r) =>
+          r.url.pathname === '/api/v1/users/me/subscriptions' ||
+          r.url.pathname === '/api/v1/register',
+      ),
+    ).toHaveLength(0)
+  }),
 )
 
 // Was: "pre-acquire call dies on the 'not acquired' invariant". The invariant

@@ -506,7 +506,7 @@ export const reactionToInboundEvent = (
 export const MAX_QUEUE_TIMEOUT_SECS = 604800
 
 export const registerQueue = (
-  http: ZulipHttp,
+  http: Pick<ZulipHttp, 'post'>,
   idleTimeoutSecs?: number,
 ): Effect.Effect<EventQueueCursor, ZulipApiError | ParseResult.ParseError> => {
   // `realm` carries the realm-wide setting changes that move a consumer's

@@ -663,8 +663,16 @@ export interface MessageInbox {
    *
    * and trust that the post will be observable on the stream.
    */
-  subscribe(target: SubscriptionTarget): Effect.Effect<void, InboxError>
-  unsubscribe(target: SubscriptionTarget): Effect.Effect<void, InboxError>
+  /**
+   * Declaring interest writes realm state under the agent's own principal —
+   * a subscription row, and the event queue that delivers against it — so
+   * these carry {@link BindError} for the same reason the write verbs do.
+   * A seat that cannot bind is refused rather than silently falling back to
+   * a shared principal, which would leave it reading a surface that is not
+   * its own.
+   */
+  subscribe(target: SubscriptionTarget): Effect.Effect<void, BindError | InboxError>
+  unsubscribe(target: SubscriptionTarget): Effect.Effect<void, BindError | InboxError>
   /**
    * Effect-native Stream of inbound events. Adapters drive this from
    * their substrate's event mechanism (Zulip's events queue, Discord

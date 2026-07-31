@@ -53,8 +53,43 @@ const BOUND_HTTP_CALLERS = [
   'react',
   'setChannelDescription',
   'setThreadResolved',
+  'subscribe',
   'unreact',
+  'unsubscribe',
 ] as const
+
+/**
+ * Inbox verbs whose adapter implementation reaches `boundHttp` (comms-g5zh.2 /
+ * .3). Declaring interest writes realm state under the seat's own principal —
+ * a subscription row and the event queue that delivers against it — so these
+ * bind for the same reason the publisher verbs do.
+ *
+ * Held apart from {@link BOUND_VERBS} because the tool-side trace resolves them
+ * through a different receiver (`adapter.inbox.*`, not `adapter.publisher.*`).
+ * That distinction is the whole reason the pre-existing guard could not see
+ * them: it compared over publisher verbs alone, so a binding inbox verb sat
+ * outside the compared set entirely and the suite stayed green.
+ */
+const BOUND_INBOX_VERBS = ['subscribe', 'unsubscribe'] as const
+
+/**
+ * Tools that reach `boundHttp` through an inbox verb while sitting outside the
+ * matcher, so the hook never stamps them and the bind seam sees no session id.
+ *
+ * These are NOT a `comms-tww6`-style attribution accident — they cannot inherit
+ * an earlier call's seat, because `boundHttp` consults the binder on every call
+ * and refuses outright when the context carries no session id
+ * (`adapter.ts`, the "may THIS CALLER use it?" comment). An unstamped
+ * `subscribe` therefore FAILS rather than binding to the wrong seat.
+ *
+ * Emptying this list means widening the `hooks.json` matcher to the seven tools
+ * that declare `session_id`. That change reverses commit `0f0e755` (PR #126),
+ * which deliberately declined it while the shared minter still owned
+ * subscriptions — so it is a ratification call, not a lint fix, and is held
+ * pending that ruling. The list exists so the gap is machine-visible in the
+ * meantime rather than resting on prose.
+ */
+const G5ZH3_MATCHER_PENDING = ['subscribe', 'unsubscribe'] as const
 
 /**
  * Tools that reach `boundHttp` while declaring no `session_id` and sitting
@@ -91,18 +126,25 @@ function adapterVerbsReachingBoundHttp(source: string): ReadonlySet<string> {
 
 interface ToolFacts {
   readonly verbs: ReadonlySet<string>
+  readonly inboxVerbs: ReadonlySet<string>
   readonly declaresSessionId: boolean
 }
 
-/** Per-tool: which publisher verbs its handler calls, and whether it declares `session_id`. */
+/**
+ * Per-tool: which publisher verbs and which inbox verbs its handler calls, and
+ * whether it declares `session_id`.
+ */
 function toolFactsFromToolsSource(source: string): ReadonlyMap<string, ToolFacts> {
-  const facts = new Map<string, { verbs: Set<string>; declaresSessionId: boolean }>()
+  const facts = new Map<
+    string,
+    { verbs: Set<string>; inboxVerbs: Set<string>; declaresSessionId: boolean }
+  >()
   let current: string | undefined
   for (const line of source.split('\n')) {
     const named = line.match(/^ {6}name: '([a-z_]+)',$/)?.[1]
     if (named !== undefined) {
       current = named
-      facts.set(named, { verbs: new Set(), declaresSessionId: false })
+      facts.set(named, { verbs: new Set(), inboxVerbs: new Set(), declaresSessionId: false })
     }
     const entry = current === undefined ? undefined : facts.get(current)
     if (entry === undefined) continue
@@ -110,9 +152,18 @@ function toolFactsFromToolsSource(source: string): ReadonlyMap<string, ToolFacts
       const captured = verb[1]
       if (captured !== undefined) entry.verbs.add(captured)
     }
+    // Inbox verbs bind too (comms-g5zh.2/.3). Traced separately because the
+    // receiver differs; tracing only `adapter.publisher.*` is precisely how a
+    // binding verb stayed outside this suite's compared set.
+    for (const verb of line.matchAll(/adapter\.inbox\.(\w+)/g)) {
+      const captured = verb[1]
+      if (captured !== undefined) entry.inboxVerbs.add(captured)
+    }
     if (line.includes('session_id: sessionIdField')) entry.declaresSessionId = true
   }
-  return new Map([...facts].map(([name, e]) => [name, { ...e, verbs: e.verbs }]))
+  return new Map(
+    [...facts].map(([name, e]) => [name, { ...e, verbs: e.verbs, inboxVerbs: e.inboxVerbs }]),
+  )
 }
 
 function alternationToolsFromMatcher(matcher: string): ReadonlySet<string> {
@@ -175,6 +226,25 @@ test('every tool whose adapter path reaches boundHttp is in the PreToolUse match
   expect(missing).toEqual([])
 })
 
+// The same rule, stated over the INBOX verbs that began binding with
+// comms-g5zh.2/.3. Kept as its own assertion with its own named list so the
+// publisher-side rule above cannot go green on a set that no longer covers
+// every binding path — the failure mode comms-65nj recorded, where a guard
+// filed in May 2026 against exactly this drift stayed green for eight months
+// because its compared set was scoped one level too low.
+test('the tools that bind via an inbox verb but are unstamped are exactly the recorded set', async () => {
+  const facts = toolFactsFromToolsSource(await toolsSource())
+  const matched = alternationToolsFromMatcher(injectSessionIdMatcher(hooksManifest))
+  const unstamped = [...facts]
+    .filter(([, f]) =>
+      [...f.inboxVerbs].some((v) => (BOUND_INBOX_VERBS as ReadonlyArray<string>).includes(v)),
+    )
+    .map(([name]) => name)
+    .filter((name) => !matched.has(name))
+    .sort()
+  expect(unstamped).toEqual([...G5ZH3_MATCHER_PENDING])
+})
+
 // The rule stated over ALL bound verbs, including the two helper-backed ones
 // the tool layer never stamps. This is the assertion `comms-tww6` closes.
 test('comms-tww6: the known unstamped bound-path tools are exactly the recorded exceptions', async () => {
@@ -230,10 +300,29 @@ test('toolFactsFromToolsSource attributes verbs and session_id to the enclosing 
       handler: async () => {
         await run(adapter.history.readChannel(channel))
       },
+      name: 'gamma',
+      handler: async () => {
+        await run(adapter.inbox.subscribe(target))
+      },
   `
   const facts = toolFactsFromToolsSource(synthetic)
-  expect(facts.get('alpha')).toEqual({ verbs: new Set(['post']), declaresSessionId: true })
-  expect(facts.get('beta')).toEqual({ verbs: new Set(), declaresSessionId: false })
+  expect(facts.get('alpha')).toEqual({
+    verbs: new Set(['post']),
+    inboxVerbs: new Set(),
+    declaresSessionId: true,
+  })
+  expect(facts.get('beta')).toEqual({
+    verbs: new Set(),
+    inboxVerbs: new Set(),
+    declaresSessionId: false,
+  })
+  // A read through the inbox is still traced as an inbox verb here; whether it
+  // BINDS is decided by `BOUND_INBOX_VERBS`, not by the receiver.
+  expect(facts.get('gamma')).toEqual({
+    verbs: new Set(),
+    inboxVerbs: new Set(['subscribe']),
+    declaresSessionId: false,
+  })
 })
 
 test('alternationToolsFromMatcher splits the trailing parenthesised group', () => {

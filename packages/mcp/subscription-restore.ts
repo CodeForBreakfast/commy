@@ -1,4 +1,4 @@
-import type { InboxError, MessageInbox } from '@commy/core/ports'
+import type { BindError, InboxError, MessageInbox } from '@commy/core/ports'
 import type { PlatformError } from '@effect/platform/Error'
 import { Effect, Option, type ParseResult } from 'effect'
 import type { ProjectSlug } from './bootstrap.ts'
@@ -37,7 +37,7 @@ export interface SubscriptionRestoreDeps {
 const applyRestored = (
   deps: Pick<SubscriptionRestoreDeps, 'narrowSet' | 'inbox'>,
   intents: ReadonlyArray<SubscribeIntent>,
-): Effect.Effect<void, InboxError> =>
+): Effect.Effect<void, BindError | InboxError> =>
   Effect.sync(() => deps.narrowSet.load(Option.some(intents))).pipe(
     Effect.zipRight(
       Effect.forEach(intents, (intent) => deps.inbox.subscribe(intentToTarget(intent)), {
@@ -96,7 +96,7 @@ export const seedDefaultsIfFresh = (
  */
 export const restoreSubscriptions = (
   deps: Pick<SubscriptionRestoreDeps, 'subscriptionStore' | 'narrowSet' | 'inbox'>,
-): Effect.Effect<void, PlatformError | ParseResult.ParseError | InboxError> =>
+): Effect.Effect<void, PlatformError | ParseResult.ParseError | BindError | InboxError> =>
   deps.subscriptionStore.read().pipe(
     Effect.flatMap(
       Option.match({

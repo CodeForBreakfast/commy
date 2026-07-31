@@ -1747,10 +1747,23 @@ export const zulipAdapter = (
     // registration serves every subscription state and later subscribes
     // reuse it.
     //
-    // The queue is registered against the minter, not the per-session
-    // bot — the inbox is a minter-side surface so lurking
-    // sessions can receive events before any acquire happens.
-    const ensureQueueRegistered = (): Effect.Effect<void, ZulipApiError | ParseResult.ParseError> =>
+    // The queue is registered against THE SEAT, not the minter. An event queue
+    // is state the realm holds on this agent's behalf, so it belongs under the
+    // agent's own principal (docs/agent-experience.md principle 5).
+    //
+    // The seat's subscriptions move with it, and they have to: Zulip delivers a
+    // channel message only to the users the channel's subscription rows name
+    // (`zerver/actions/message_send.py` builds the recipient set from those
+    // rows), so a seat-owned queue over minter-held subscriptions would receive
+    // nothing. Queue ownership and subscription ownership are one unit.
+    //
+    // The caller passes the bound client in rather than this binding for
+    // itself, so the bind round-trip happens OUTSIDE the `inboxRef` lock — a
+    // mint held under that lock would block every concurrent subscribe on a
+    // network call.
+    const ensureQueueRegistered = (
+      http: BotHttp,
+    ): Effect.Effect<void, ZulipApiError | ParseResult.ParseError> =>
       // Atomic read-decide-register-write: the lock is held across registerQueue
       // so two concurrent subscribe() calls can't both read registration=None
       // and double-register the events queue. The snapshot is
@@ -1760,77 +1773,102 @@ export const zulipAdapter = (
         if (Option.isSome(state.registration)) {
           return Effect.succeed([undefined, state] as const)
         }
-        return registerQueue(minterHttp, config.queueIdleTimeoutSecs).pipe(
+        return registerQueue(http, config.queueIdleTimeoutSecs).pipe(
           Effect.tap((q) => config.onQueueRegister?.(q) ?? Effect.void),
           Effect.map((q) => [undefined, { ...state, registration: Option.some(q) }] as const),
         )
       })
 
     const inbox: MessageInbox = {
+      // Bind first, then mutate. A subscription is realm state under the seat's
+      // own principal, so reaching for a bound credential IS the declaration
+      // that the realm is about to hold state on this agent's behalf — the same
+      // seam the write verbs use, with no second list deciding it.
+      //
+      // A bind failure is not a subscribe failure — it is raised before any
+      // narrow is recorded or any call is attempted — so it flows out untouched
+      // rather than being flattened into an InboxError the caller cannot act
+      // on. Same treatment `publish` gives it.
       subscribe: (target) =>
-        Effect.suspend(() => {
-          const channel = channelOf(target)
-          // Record the narrow first, snapshotting whether the channel was
-          // already listened to under any narrow — that decides whether the
-          // remote /users/me/subscriptions call is needed.
-          return SynchronizedRef.modify(inboxRef, (state) => {
-            const wasListening = streamIsListening(state, channel)
-            const next: InboxState = Predicate.hasProperty(target, 'kind')
-              ? {
-                  ...state,
-                  newTopicsChannels: HashSet.add(state.newTopicsChannels, channel),
-                }
-              : {
-                  ...state,
-                  subscribedChannels: HashSet.add(state.subscribedChannels, channel),
-                }
-            return [wasListening, next]
-          }).pipe(
-            Effect.flatMap((wasListening) => {
-              const subscribeRemote = wasListening
-                ? Effect.void
-                : minterHttp
-                    .post('/users/me/subscriptions', subscriptionsResponseSchema, {
-                      subscriptions: JSON.stringify([{ name: channel }]),
-                    })
-                    .pipe(Effect.asVoid)
-              // /users/me/subscriptions is "me" = minter. The
-              // boot-time reconciler covers the universal-listener backstop;
-              // this per-session call still matters for streams created
-              // *after* the plugin booted.
-              return subscribeRemote.pipe(Effect.andThen(ensureQueueRegistered()))
-            }),
-          )
-        }).pipe(Effect.mapError((cause) => new InboxError({ operation: 'subscribe', cause }))),
+        boundHttp().pipe(
+          Effect.flatMap((http) =>
+            Effect.suspend(() => {
+              const channel = channelOf(target)
+              // Record the narrow first, snapshotting whether the channel was
+              // already listened to under any narrow — that decides whether the
+              // remote /users/me/subscriptions call is needed.
+              return SynchronizedRef.modify(inboxRef, (state) => {
+                const wasListening = streamIsListening(state, channel)
+                const next: InboxState = Predicate.hasProperty(target, 'kind')
+                  ? {
+                      ...state,
+                      newTopicsChannels: HashSet.add(state.newTopicsChannels, channel),
+                    }
+                  : {
+                      ...state,
+                      subscribedChannels: HashSet.add(state.subscribedChannels, channel),
+                    }
+                return [wasListening, next]
+              }).pipe(
+                Effect.flatMap((wasListening) => {
+                  // "me" is the SEAT. Zulip's `principals` defaults to self
+                  // (`zerver/views/streams.py` add_subscriptions_backend), so a
+                  // bot subscribing itself is the plain unprivileged case — and
+                  // each seat then lands in its own per-user rate-limit bucket
+                  // instead of contending for the minter's single one.
+                  const subscribeRemote = wasListening
+                    ? Effect.void
+                    : http
+                        .post('/users/me/subscriptions', subscriptionsResponseSchema, {
+                          subscriptions: JSON.stringify([{ name: channel }]),
+                        })
+                        .pipe(Effect.asVoid)
+                  return subscribeRemote.pipe(Effect.andThen(ensureQueueRegistered(http)))
+                }),
+              )
+            }).pipe(Effect.mapError((cause) => new InboxError({ operation: 'subscribe', cause }))),
+          ),
+        ),
       unsubscribe: (target) =>
-        Effect.suspend(() => {
-          const channel = channelOf(target)
-          // Drop the narrow, snapshotting whether the channel is still
-          // listened to afterward — if so, the minter stays subscribed.
-          return SynchronizedRef.modify(inboxRef, (state) => {
-            const next: InboxState = Predicate.hasProperty(target, 'kind')
-              ? {
-                  ...state,
-                  newTopicsChannels: HashSet.remove(state.newTopicsChannels, channel),
-                  seenTopicsByChannel: HashMap.remove(state.seenTopicsByChannel, channel),
-                }
-              : {
-                  ...state,
-                  subscribedChannels: HashSet.remove(state.subscribedChannels, channel),
-                }
-            return [streamIsListening(next, channel), next]
-          }).pipe(
-            Effect.flatMap((stillListening) =>
-              stillListening
-                ? Effect.void
-                : minterHttp
-                    .delete('/users/me/subscriptions', subscriptionsResponseSchema, {
-                      subscriptions: JSON.stringify([channel]),
-                    })
-                    .pipe(Effect.asVoid),
+        boundHttp().pipe(
+          Effect.flatMap((http) =>
+            Effect.suspend(() => {
+              const channel = channelOf(target)
+              // Drop the narrow, snapshotting whether the channel is still
+              // listened to afterward — if so, the seat stays subscribed.
+              return SynchronizedRef.modify(inboxRef, (state) => {
+                const next: InboxState = Predicate.hasProperty(target, 'kind')
+                  ? {
+                      ...state,
+                      newTopicsChannels: HashSet.remove(state.newTopicsChannels, channel),
+                      seenTopicsByChannel: HashMap.remove(state.seenTopicsByChannel, channel),
+                    }
+                  : {
+                      ...state,
+                      subscribedChannels: HashSet.remove(state.subscribedChannels, channel),
+                    }
+                return [streamIsListening(next, channel), next]
+              }).pipe(
+                Effect.flatMap((stillListening) =>
+                  stillListening
+                    ? Effect.void
+                    : // Deletes THIS SEAT's subscription. Under the minter this
+                      // call deafened every other seat sharing it — the
+                      // cross-seat bug comms-g5zh.3 deletes rather than
+                      // mitigates, since there is no longer a shared
+                      // subscription to unwind.
+                      http
+                        .delete('/users/me/subscriptions', subscriptionsResponseSchema, {
+                          subscriptions: JSON.stringify([channel]),
+                        })
+                        .pipe(Effect.asVoid),
+                ),
+              )
+            }).pipe(
+              Effect.mapError((cause) => new InboxError({ operation: 'unsubscribe', cause })),
             ),
-          )
-        }).pipe(Effect.mapError((cause) => new InboxError({ operation: 'unsubscribe', cause }))),
+          ),
+        ),
       events: () =>
         Stream.unwrap(
           Effect.all([
