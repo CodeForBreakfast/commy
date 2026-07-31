@@ -2831,21 +2831,144 @@ effectTest('directory.presence runs pre-acquire and routes via minter creds', ()
   }),
 )
 
-effectTest(
-  'inbox.subscribe runs pre-acquire and routes /users/me/subscriptions via minter creds',
-  () =>
-    Effect.gen(function* () {
-      const stub = yield* makeStubHttpClient
-      yield* seedSubscribeOk(stub, 'general')
-      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
-      yield* adapter.inbox.subscribe(generalChannel.name)
-      const subReq = yield* findRequest(stub, 'POST', '/api/v1/users/me/subscriptions')
-      expect(decodeBasicAuth(subReq.headers.get('Authorization'))).toEqual(minterAuth)
-      // The /register that arms the events queue must also be minter-creds —
-      // the queue belongs to the minter so lurking sessions share it.
-      const regReq = yield* findRequest(stub, 'POST', '/api/v1/register')
-      expect(decodeBasicAuth(regReq.headers.get('Authorization'))).toEqual(minterAuth)
-    }),
+// ─── receiving runs on the seat's own principal ──────────────────
+
+// The credentials `buildAdapter`'s acquire binds: HERMES's delivery email
+// with the key `seedRegenerate` hands back. Distinct from `minterAuth` in
+// both fields, so an assertion cannot pass by accident on a shared value.
+const seatAuth = { email: 'hermes-agent-bot@example.com', apiKey: 'fresh-key' }
+
+// Was: "inbox.subscribe runs pre-acquire and routes /users/me/subscriptions
+// via minter creds". Inverted by comms-g5zh.2/.3. Receiving is state the realm
+// holds on the agent's behalf (principle 5), so a subscription belongs under
+// the seat's own principal and the events queue is registered against it.
+//
+// Both halves move together because Zulip couples them: a queue delivers a
+// channel message only to users the channel's subscription rows name
+// (zerver/actions/message_send.py builds the recipient set from those rows),
+// so a seat-owned queue over minter-held subscriptions receives nothing.
+effectTest('inbox.subscribe writes the subscription under the seat own principal', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSubscribeOk(stub, 'general')
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.inbox.subscribe(generalChannel.name)
+    const subReq = yield* findRequest(stub, 'POST', '/api/v1/users/me/subscriptions')
+    expect(decodeBasicAuth(subReq.headers.get('Authorization'))).toEqual(seatAuth)
+  }),
+)
+
+effectTest('inbox.subscribe registers the events queue under the seat own principal', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSubscribeOk(stub, 'general')
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.inbox.subscribe(generalChannel.name)
+    const regReq = yield* findRequest(stub, 'POST', '/api/v1/register')
+    expect(decodeBasicAuth(regReq.headers.get('Authorization'))).toEqual(seatAuth)
+  }),
+)
+
+effectTest('inbox.unsubscribe deletes the subscription under the seat own principal', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSubscribeOk(stub, 'general')
+    yield* stub.respond('DELETE', '/api/v1/users/me/subscriptions', {
+      body: { result: 'success', subscribed: {}, already_subscribed: {}, unauthorized: [] },
+    })
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.inbox.subscribe(generalChannel.name)
+    yield* adapter.inbox.unsubscribe(generalChannel.name)
+    const delReq = yield* findRequest(stub, 'DELETE', '/api/v1/users/me/subscriptions')
+    expect(decodeBasicAuth(delReq.headers.get('Authorization'))).toEqual(seatAuth)
+  }),
+)
+
+// comms-g5zh.3's acceptance, and the bug it DELETES rather than mitigates.
+//
+// Under the shared minter there was one subscription row for the whole fleet,
+// so seat B's unsubscribe issued a DELETE against the row seat A was receiving
+// through — and deafened A. Nothing refcounted it: `streamIsListening` counts
+// only within one adapter instance across narrow kinds, and `inboxRef` is
+// per-process, so no cross-seat unwinding existed to get wrong.
+//
+// With each seat holding its own row the bug has no shape to take: B's DELETE
+// names B's principal, and A's row is not reachable from it. This asserts the
+// structural fact that makes that true — every write in the exchange goes out
+// under the seat that issued it, and the minter issues none. The behavioural
+// half (A keeps receiving) needs two real principals in a realm and lives in
+// the live suite.
+effectTest('one seat unsubscribing writes only under its own principal, never a shared one', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedUsers(stub, [HERMES, RIQ])
+    yield* seedRegenerate(stub, HERMES.user_id, 'hermes-key')
+    yield* seedRegenerate(stub, RIQ.user_id, 'riq-key')
+    yield* seedRegisterOk(stub)
+    yield* stub.respond('POST', '/api/v1/users/me/subscriptions', {
+      body: { result: 'success', subscribed: {}, already_subscribed: {}, unauthorized: [] },
+    })
+    yield* stub.respond('DELETE', '/api/v1/users/me/subscriptions', {
+      body: { result: 'success', subscribed: {}, already_subscribed: {}, unauthorized: [] },
+    })
+
+    const config = yield* makeConfig()
+    const seatA = yield* zulipAdapter(stub, config)
+    yield* seatA.identity.acquire(decodeBotNameSync('hermes-agent'))
+    const seatB = yield* zulipAdapter(stub, config)
+    yield* seatB.identity.acquire(decodeBotNameSync('riq6r230'))
+
+    const authA = { email: 'hermes-agent-bot@example.com', apiKey: 'hermes-key' }
+    const authB = { email: 'riq-bot@example.com', apiKey: 'riq-key' }
+
+    yield* seatA.inbox.subscribe(generalChannel.name)
+    yield* seatB.inbox.subscribe(generalChannel.name)
+    yield* seatB.inbox.unsubscribe(generalChannel.name)
+
+    const subscriptionWrites = (yield* stub.captured).filter(
+      (r) => r.url.pathname === '/api/v1/users/me/subscriptions',
+    )
+    const byAuth = subscriptionWrites.map((r) => ({
+      method: r.method,
+      auth: decodeBasicAuth(r.headers.get('Authorization')),
+    }))
+    expect(byAuth).toEqual([
+      { method: 'POST', auth: authA },
+      { method: 'POST', auth: authB },
+      { method: 'DELETE', auth: authB },
+    ])
+    // The load-bearing negative: no subscription write in the exchange went out
+    // as the minter. A single minter-issued DELETE here is the whole bug.
+    expect(byAuth.filter((w) => w.auth.email === minterAuth.email)).toEqual([])
+  }),
+)
+
+// A seat that cannot bind must not fall back to the minter for receiving, for
+// the same reason `publisher.post` must not: the fallback is invisible and
+// leaves the seat reading a surface that is not its own. The refusal is the
+// typed BindError, surfaced rather than swallowed.
+effectTest('inbox.subscribe refuses rather than falling back to minter creds', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedUsers(stub, [])
+    yield* seedSubscribeOk(stub, 'general')
+    const adapter = yield* zulipAdapter(stub, {
+      ...(yield* makeConfig()),
+      bindOnDemand: Effect.fail(
+        new UnboundEphemeralSession({ message: 'commy: ephemeral mode requires a session_id' }),
+      ),
+    })
+    const exit = yield* Effect.exit(adapter.inbox.subscribe(generalChannel.name))
+    expect(Exit.isFailure(exit)).toBe(true)
+    const reqs = yield* stub.captured
+    expect(
+      reqs.filter(
+        (r) =>
+          r.url.pathname === '/api/v1/users/me/subscriptions' ||
+          r.url.pathname === '/api/v1/register',
+      ),
+    ).toHaveLength(0)
+  }),
 )
 
 // Was: "pre-acquire call dies on the 'not acquired' invariant". The invariant

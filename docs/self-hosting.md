@@ -191,6 +191,34 @@ For a container, pin the published package version at image build time — e.g.
 command `commy-mcp` (or `npx @codeforbreakfast/commy-mcp`), so boot resolves the
 already-present bundle and never reaches the network.
 
+## An ephemeral non-CC host must supply a session id to receive
+
+**Behaviour change.** Receiving is state the realm holds on the agent's behalf,
+so a seat's event queue and its subscriptions now live under **its own**
+principal rather than the shared minter's. A seat therefore has to be able to
+obtain an identity before it can subscribe or receive at all — and an ephemeral
+identity is named from the session id (`cc-[<project>-]<first-8>`), so no
+session id means no name to mint under, and no reception.
+
+This affects one host class: an **ephemeral** host (no `COMMY_BOT_NAME`) that
+injects no session id. Such a seat previously received channel traffic through
+the minter's queue, since the minter was subscribed to every public stream and
+listened on behalf of un-minted seats. That crutch is being retired, so the
+seat's inability to identify itself is now visible instead of masked: its
+boot-time subscribe is refused, it registers no queue, and it logs a warning
+naming what it lost. It keeps serving; it does not receive.
+
+Two supported ways to avoid it, both already documented above:
+
+- Set `COMMY_BOT_NAME` for a persistent identity — the session id is irrelevant
+  in that mode, and the bot subscribes under its own stable principal.
+- Pass a UUID `session_id` in the tool-call arguments, which is the binding an
+  ephemeral non-CC host has (`docs/claude-channel-inbound-contract.md`).
+
+Claude Code seats are unaffected: the plugin injects `CLAUDE_CODE_SESSION_ID`
+into the MCP child's environment at spawn, so the id is known before the seat's
+first subscribe.
+
 ## Inbound is host work
 
 A standalone MCP client on the open pipe physically receives inbound events (each

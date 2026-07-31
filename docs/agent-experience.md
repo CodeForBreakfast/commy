@@ -140,12 +140,17 @@ Places the current implementation fails this reference.
 
 How a small optimisation becomes a large architecture.
 
-An ephemeral session does not mint a bot until its first attribution-
-producing call, so that a session which never uses commy costs the realm
+An ephemeral session did not mint a bot until its first attribution-
+producing call, so that a session which never used commy cost the realm
 nothing. But a session that has not yet minted still needs to receive — so
-something must listen on its behalf. That something is the minter,
+something must listen on its behalf. That something was the minter,
 subscribed to every public stream, with the event queue registered against
 it rather than the per-session bot.
+
+The example is told in the past tense because the first two steps of the
+chain have since been taken apart: the queue and the subscriptions now
+belong to the seat. The rest of the chain is still standing, and the
+paragraphs below say which parts.
 
 Everything else follows from that one deferral. One shared subscriber means
 per-agent narrowing cannot be a realm subscription, so it becomes a
@@ -156,17 +161,28 @@ a persistent store. That store has no realm principal to key on, so it keys
 on `session_id`. Each step is locally reasonable; the sum is not.
 
 The refcounting step is the one the architecture never took, and its absence
-is live today. `streamIsListening` (`packages/zulip/adapter.ts:506-508`) does
-refcount — but over the narrow *kinds* one seat holds on a channel
-(`channel:X` against `new-topics:X`), within a single `InboxState`. That
-state lives behind an `inboxRef` constructed inside the adapter
-(`adapter.ts:1576`), so its scope is one adapter instance: one process, one
-seat. Nothing counts seats. So `unsubscribe` reaches "nobody is listening"
-on the strength of one seat's own narrows and issues
-`DELETE /users/me/subscriptions` (`adapter.ts:1712-1730`) — where "me" is
-the shared minter. One agent unsubscribing from a channel deafens every
-other agent on it, until some unrelated seat's boot reconciler happens to
-resubscribe.
+was live. `streamIsListening` does refcount — but over the narrow *kinds* one
+seat holds on a channel (`channel:X` against `new-topics:X`), within a single
+`InboxState`. That state lives behind an `inboxRef` constructed inside the
+adapter, so its scope is one adapter instance: one process, one seat. Nothing
+counted seats. So `unsubscribe` reached "nobody is listening" on the strength
+of one seat's own narrows and issued `DELETE /users/me/subscriptions` — where
+"me" was the shared minter. One agent unsubscribing from a channel deafened
+every other agent on it, until some unrelated seat's boot reconciler happened
+to resubscribe.
+
+That bug is now **deleted rather than fixed**, and the distinction is the
+point: nothing counts seats today either. The queue and the subscriptions moved
+to the seat's own principal, so "me" is the seat, and one seat's `DELETE`
+cannot name another's row. The refcounting the architecture never built is not
+owed — there is no shared subscription left to unwind. Queue and subscription
+had to move together, because Zulip builds a channel message's recipient set
+from the channel's subscription rows: a seat-owned queue over minter-held
+subscriptions would have received nothing at all.
+
+What has not moved yet: the minter still holds its blanket public-stream
+subscription, and narrowing is still a client-side filter. Those are the next
+steps of the same unwinding, not exemptions.
 
 Principle 5 catches it at the first step. Principle 3 catches the store.
 Principle 1 catches `session_id` reaching the tool surface.

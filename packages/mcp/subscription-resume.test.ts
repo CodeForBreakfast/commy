@@ -339,7 +339,15 @@ const buildPersistRig = (): Effect.Effect<PersistRig, never, Scope.Scope> =>
     return { client, store, session }
   })
 
-test('subscribe carrying no session_id persists the snapshot when the id is already known', () =>
+// Both of these tests used to assert the opposite, and the premise they rested
+// on has been withdrawn. They read "the matcher never stamps subscribe, so this
+// is the real live shape" — true under commit 0f0e755 (PR #126), which chose
+// id-blind subscribe because a subscription was written under the SHARED MINTER
+// and needed no identity of its own. comms-g5zh.3 retires that: a subscription
+// is realm state under the seat's own principal, so subscribe mints, and the
+// matcher now stamps it. The reversal is deliberate and ratified (Graeme,
+// 2026-07-31); see the commit message.
+test('subscribe carries a stamped session_id and persists the snapshot under it', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -348,34 +356,50 @@ test('subscribe carrying no session_id persists the snapshot when the id is alre
         // shared deferred — the fleet's real state (CC injects the env at boot).
         yield* Deferred.succeed(rig.session, asSessionId(SID_RESUME))
 
-        // A subscribe that carries NO session_id in args: the matcher never
-        // stamps it on subscribe, so this is the real live shape.
         yield* Effect.promise(() =>
-          rig.client.callTool({ name: 'subscribe', arguments: { target: 'other' } }),
+          rig.client.callTool({
+            name: 'subscribe',
+            arguments: { target: 'other', session_id: SID_RESUME },
+          }),
         )
 
-        // Persist fired id-blind: the session-keyed snapshot now holds the new
-        // intent, so a later resume restores it.
+        // The session-keyed snapshot now holds the new intent, so a later
+        // resume restores it.
         const persisted = yield* rig.store.read()
         expect(persisted).toEqual(Option.some([channelOtherIntent]))
       }),
     ),
   ))
 
-test('subscribe carrying no session_id with an unfed deferred returns promptly and does not park', () =>
+test('subscribe carrying no session_id is refused promptly rather than parking', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const rig = yield* buildPersistRig()
-        // Deferred deliberately UNFED: a subscribe-first seat whose id no source
-        // has delivered. An unconditional persist would park on the store's
-        // `Deferred.await`; the poll-guard must no-op and let the call return.
+        // No stamped id and an UNFED deferred: a non-CC host that supplies
+        // neither. Declaring interest needs a principal to hold the
+        // subscription, and this seat cannot name one — so the seam refuses.
+        //
+        // The load-bearing half is the SHAPE of that refusal. It must be a
+        // prompt, typed error and never a park: the whole reason the bind seam
+        // reads its session context rather than awaiting a deferred is that a
+        // caller must never hang waiting for an identity that may never arrive.
         const outcome = yield* Effect.promise(() =>
-          rig.client.callTool({ name: 'subscribe', arguments: { target: 'other' } }),
+          rig.client
+            .callTool({ name: 'subscribe', arguments: { target: 'other' } })
+            .then(() => 'resolved' as const)
+            .catch((err: unknown) => (Predicate.isError(err) ? err.message : String(err))),
         ).pipe(Effect.timeoutOption('2 seconds'))
 
-        // Handler returned rather than hanging on the unfed deferred.
         expect(Option.isSome(outcome)).toBe(true)
+        expect(Option.getOrElse(outcome, () => '')).toMatch(/requires a session_id/)
+
+        // Nothing was written on the way to refusing — no half-applied intent
+        // left behind for a resume to restore. The store is id-keyed and its
+        // read awaits the shared deferred, so the id is revealed only now,
+        // AFTER the refusal, purely to make the store readable.
+        yield* Deferred.succeed(rig.session, asSessionId(SID_RESUME))
+        expect(yield* rig.store.read()).toEqual(Option.none())
       }),
     ),
   ))

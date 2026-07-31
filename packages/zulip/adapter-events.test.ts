@@ -196,6 +196,20 @@ const eventQueue = (
     return queue
   })
 
+const decodeBasicAuth = (header: string | null): { email: string; apiKey: string } => {
+  if (header === null || !header.startsWith('Basic ')) {
+    throw new Error(`expected Basic auth, got ${header ?? '<absent>'}`)
+  }
+  const decoded = Buffer.from(header.slice('Basic '.length), 'base64').toString('utf-8')
+  const idx = decoded.indexOf(':')
+  if (idx < 0) throw new Error(`malformed basic auth payload: ${decoded}`)
+  return { email: decoded.slice(0, idx), apiKey: decoded.slice(idx + 1) }
+}
+
+const minterAuth = { email: 'minter@example.com', apiKey: 'minter-key' }
+/** The credentials `buildAdapter`'s acquire binds — distinct from the minter's in both fields. */
+const seatAuth = { email: 'hermes-agent-bot@example.com', apiKey: 'fresh-key' }
+
 const isEventsPoll = (r: CapturedHttpRequest): boolean =>
   r.method === 'GET' && r.url.pathname === '/api/v1/events'
 
@@ -316,6 +330,130 @@ effectTest(
       expect(polls.length).toBeGreaterThanOrEqual(2)
       expect(polls[0]?.url.searchParams.get('last_event_id')).toBe('0')
       expect(polls[1]?.url.searchParams.get('last_event_id')).toBe('5')
+    }),
+  { layer: TestContext.TestContext },
+)
+
+// comms-g5zh.2. An event queue is a capability handle bound to its owner:
+// Zulip's `access_client_descriptor` rejects a poll whose caller is not the
+// queue's user, so a queue registered by the seat and polled by the minter
+// would fail on every step. Registration and polling must name the same
+// principal, and both must be the seat's — asserted together here so the pair
+// cannot drift apart.
+effectTest(
+  'inbox.events registers and polls the queue under the seat own principal',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* seedRegister(stub)
+      yield* seedSubscribeOk(stub)
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        {
+          body: {
+            result: 'success',
+            events: [messageEvent(5, aZulipMessage({ content: 'first' }))],
+          },
+        },
+        { hang: true },
+      ])
+      yield* adapter.inbox.subscribe(homeChannel.name)
+      const queue = yield* eventQueue(adapter)
+      yield* Queue.take(queue)
+      const registers = yield* registerPosts(stub)
+      const polls = yield* eventPolls(stub)
+      expect(registers).not.toHaveLength(0)
+      expect(polls).not.toHaveLength(0)
+      for (const req of [...registers, ...polls]) {
+        expect(decodeBasicAuth(req.headers.get('Authorization'))).toEqual(seatAuth)
+      }
+    }),
+  { layer: TestContext.TestContext },
+)
+
+// comms-9iro, dissolved rather than mitigated. That bug was a ONE-SHOT: the
+// producer consulted the session once at materialisation, got nothing, and
+// latched — a seat that lost that race stayed deaf for the pump's entire
+// lifetime, with no retry and no way to notice from inside.
+//
+// The property that replaces it is not an await. It is the absence of a latch:
+// a producer that starts unbound keeps its unfold alive and re-reads the
+// inbox's registration each step, so a seat that binds LATER is picked up. This
+// test starts the pump on an unbound seat, binds afterwards, and requires the
+// event to arrive. It fails if any step in that path gives up permanently.
+effectTest(
+  'a producer that starts unbound adopts the queue a later subscribe registers',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* seedUsers(stub, [HERMES])
+      yield* seedRegenerate(stub, HERMES.user_id)
+      yield* seedRegister(stub)
+      yield* seedSubscribeOk(stub)
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        {
+          body: {
+            result: 'success',
+            events: [messageEvent(5, aZulipMessage({ content: 'after binding' }))],
+          },
+        },
+        { hang: true },
+      ])
+      // Deliberately NOT acquired: the producer materialises against a seat
+      // that owns no queue and cannot register one.
+      const adapter = yield* zulipAdapter({
+        realmUrl: yield* RealmUrl(REALM_URL).pipe(Effect.orDie),
+        minterEmail: yield* BotEmail('minter@example.com').pipe(Effect.orDie),
+        minterApiKey: Redacted.make(yield* ApiKey('minter-key').pipe(Effect.orDie)),
+      }).pipe(Effect.provideService(HttpClient.HttpClient, stub.client))
+      const queue = yield* eventQueue(adapter)
+
+      // Let the unbound producer idle through several re-checks. Under a latch
+      // these are the steps during which it would have given up for good.
+      yield* TestClock.adjust(Duration.seconds(30))
+      expect(yield* eventPolls(stub)).toHaveLength(0)
+      expect(yield* registerPosts(stub)).toHaveLength(0)
+
+      yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
+      yield* adapter.inbox.subscribe(homeChannel.name)
+      yield* TestClock.adjust(Duration.seconds(30))
+
+      const event = yield* Queue.take(queue)
+      expect(event.kind).toBe('message-posted')
+      expect(yield* eventPolls(stub)).not.toHaveLength(0)
+    }),
+  { layer: TestContext.TestContext },
+)
+
+// The reads a batch needs — rendered content, reaction targets — stay on the
+// minter. A read leaves no realm-visible trace, so it needs no principal of
+// its own, and routing it through the seat would spend the seat's rate-limit
+// budget on state that belongs to whoever wrote it.
+effectTest(
+  'inbox.events resolves the directory through the minter, not the seat',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* seedRegister(stub)
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        {
+          body: {
+            result: 'success',
+            events: [messageEvent(5, aZulipMessage({ content: 'first' }))],
+          },
+        },
+        { hang: true },
+      ])
+      const queue = yield* eventQueue(adapter)
+      yield* Queue.take(queue)
+      const userReads = (yield* stub.captured).filter(
+        (r) => r.method === 'GET' && r.url.pathname === '/api/v1/users',
+      )
+      expect(userReads).not.toHaveLength(0)
+      for (const req of userReads) {
+        expect(decodeBasicAuth(req.headers.get('Authorization'))).toEqual(minterAuth)
+      }
     }),
   { layer: TestContext.TestContext },
 )

@@ -37,7 +37,13 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { BotName, Credentials, DisplayName, ReleaseOpts } from '@commy/core/ports'
+import type {
+  BotName,
+  Credentials,
+  DisplayName,
+  EventQueueCursor,
+  ReleaseOpts,
+} from '@commy/core/ports'
 import {
   decodeBotNameSync,
   decodeChannelNameSync,
@@ -46,7 +52,7 @@ import {
   decodeThreadNameSync,
 } from '@commy/core/ports'
 import { FetchHttpClient, HttpClient, HttpClientRequest } from '@effect/platform'
-import { Duration, Effect, Encoding, Option, Redacted, Schema } from 'effect'
+import { Duration, Effect, Encoding, Option, Redacted, Schema, Stream } from 'effect'
 import type { ZulipAdapter } from './adapter.ts'
 import { zulipAdapter } from './adapter.ts'
 import { ApiKey, BotEmail, makeZulipHttp, RealmUrl, ZulipApiError, type ZulipHttp } from './http.ts'
@@ -143,6 +149,15 @@ const minterHttp = (e: LiveEnv): Effect.Effect<ZulipHttp> =>
 const sendMessageSchema = Schema.Struct({
   result: Schema.Literal('success'),
   id: Schema.Int,
+})
+
+/**
+ * Just enough of GET /events to tell "the realm accepted this poll" from "the
+ * realm refused it". The events themselves are irrelevant here — the assertion
+ * is about WHO may poll the queue, so the payload stays unmodelled.
+ */
+const anyEventsSchema = Schema.Struct({
+  result: Schema.Literal('success'),
 })
 
 /** Just enough of GET /messages to prove a topic is empty. */
@@ -488,6 +503,191 @@ describeLiveChannel('zulip live resolve-then-post — zulip.example.com', () => 
         }),
       ),
     45_000,
+  )
+})
+
+/**
+ * Per-seat receiving (comms-g5zh.2 / .3), on a real realm because nothing else
+ * can settle it.
+ *
+ * A stub answers whatever it is told to. The two facts this rework turns on are
+ * facts about ZULIP, not about our code: that an event queue is a capability
+ * bound to its owner and refuses anyone else, and that a channel message is
+ * delivered only to principals the channel's subscription rows name. Both are
+ * invisible to a fake — a stub will happily hand the minter a seat's queue, and
+ * will happily deliver to a queue whose owner subscribes to nothing. That is
+ * exactly the shape of failure this suite exists to catch: 1182 green tests
+ * against a configuration nobody deploys.
+ */
+describeLiveChannel('zulip live per-seat receiving — zulip.example.com', () => {
+  // Ownership, proved by REFUSAL rather than by assertion. Registering under
+  // the seat is only meaningful if the minter genuinely cannot use the queue —
+  // so the discriminating check is that the minter's poll is REJECTED while the
+  // seat's succeeds. A queue still registered under the minter passes the
+  // second half and fails the first.
+  test(
+    'the queue a subscribe registers belongs to the seat: the minter cannot poll it',
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const e = liveEnv()
+          const channel = decodeChannelNameSync(liveChannelName ?? '')
+          const registered: EventQueueCursor[] = []
+          const adapter = yield* Effect.provideService(
+            zulipAdapter({
+              realmUrl: yield* RealmUrl(e.site),
+              minterEmail: yield* BotEmail(e.minterEmail),
+              minterApiKey: Redacted.make(yield* ApiKey(e.minterApiKey)),
+              onQueueRegister: (q) => Effect.sync(() => void registered.push(q)),
+            }).pipe(Effect.orDie),
+            HttpClient.HttpClient,
+            httpClient,
+          )
+          yield* Effect.acquireUseRelease(
+            pacedAcquire(adapter, decodeBotNameSync(uniqueName('queue-owner'))),
+            (acquired) =>
+              Effect.gen(function* () {
+                yield* adapter.inbox.subscribe(channel)
+                const queue = registered[0]
+                expect(queue).toBeDefined()
+                if (queue === undefined) return
+
+                // The minter is a real, live, privileged principal on this
+                // realm — it just is not this queue's owner. Zulip answers
+                // BAD_EVENT_QUEUE_ID for a queue belonging to another user
+                // (zerver/tornado/event_queue.py access_client_descriptor).
+                const asMinter = yield* minterHttp(e)
+                const refusal = yield* Effect.flip(
+                  asMinter.get('/events', anyEventsSchema, {
+                    queue_id: queue.queueId,
+                    last_event_id: queue.lastEventId,
+                    // `/events` LONG-POLLS by default, holding ~50s for an
+                    // event that will never come on an idle queue. This probe
+                    // is about whether the realm accepts the caller, not about
+                    // events, so ask it to answer now.
+                    dont_block: true,
+                  }),
+                )
+                expect(refusal).toBeInstanceOf(ZulipApiError)
+                expect((refusal as ZulipApiError).code).toBe('BAD_EVENT_QUEUE_ID')
+
+                // ...and the seat's own credential is accepted for the same
+                // queue, so the refusal above is about WHO asked, not about the
+                // queue being dead.
+                const asSeat = yield* botHttp(e, credentialsOf(acquired.credentials))
+                const ok = yield* asSeat.get('/events', anyEventsSchema, {
+                  queue_id: queue.queueId,
+                  last_event_id: queue.lastEventId,
+                  dont_block: true,
+                })
+                expect(ok.result).toBe('success')
+              }),
+            () => pacedRelease(adapter),
+          )
+        }),
+      ),
+    45_000,
+  )
+
+  // The consequence that makes the queue move worth anything. A seat-owned
+  // queue over minter-held subscriptions receives NOTHING from channels — the
+  // recipient set for a channel message is built from the channel's
+  // subscription rows — so this is the assertion that a deaf seat cannot pass.
+  test(
+    'a channel message reaches the seat own queue, not just its DMs',
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const e = liveEnv()
+          const channel = decodeChannelNameSync(liveChannelName ?? '')
+          const thread = decodeThreadNameSync(
+            `cc-live-perseat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+          )
+          const body = `per-seat delivery probe ${Math.random().toString(36).slice(2, 10)}`
+          const adapter = yield* buildAdapter()
+          yield* Effect.acquireUseRelease(
+            pacedAcquire(adapter, decodeBotNameSync(uniqueName('receiver'))),
+            () =>
+              Effect.gen(function* () {
+                // subscribe resolving is the readiness contract: the queue
+                // exists before we post, so the message cannot race ahead of it.
+                yield* adapter.inbox.subscribe(channel)
+                const asMinter = yield* minterHttp(e)
+                yield* asMinter.post('/messages', sendMessageSchema, {
+                  type: 'channel',
+                  to: channel,
+                  topic: thread,
+                  content: body,
+                })
+                const seen = yield* adapter.inbox.events().pipe(
+                  Stream.filter(
+                    (event) => event.kind === 'message-posted' && event.message.body === body,
+                  ),
+                  Stream.runHead,
+                  Effect.timeout(Duration.seconds(25)),
+                )
+                expect(Option.isSome(seen)).toBe(true)
+              }),
+            () => pacedRelease(adapter),
+          )
+        }),
+      ),
+    45_000,
+  )
+
+  // comms-g5zh.3's acceptance, behaviourally. Under the shared minter this was
+  // a live bug: one subscription row served every seat, so B's unsubscribe
+  // DELETEd the row A was receiving through and A went silently deaf. Two real
+  // principals are the only way to show it is gone — with a row each, B's
+  // unsubscribe cannot reach A's.
+  test(
+    'one seat unsubscribing does not deafen another seat on the same channel',
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const e = liveEnv()
+          const channel = decodeChannelNameSync(liveChannelName ?? '')
+          const thread = decodeThreadNameSync(
+            `cc-live-twoseat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+          )
+          const body = `two-seat probe ${Math.random().toString(36).slice(2, 10)}`
+          const seatA = yield* buildAdapter()
+          const seatB = yield* buildAdapter()
+          yield* Effect.acquireUseRelease(
+            pacedAcquire(seatA, decodeBotNameSync(uniqueName('stayer'))),
+            () =>
+              Effect.acquireUseRelease(
+                pacedAcquire(seatB, decodeBotNameSync(uniqueName('leaver'))),
+                () =>
+                  Effect.gen(function* () {
+                    yield* seatA.inbox.subscribe(channel)
+                    yield* seatB.inbox.subscribe(channel)
+                    // The act that used to deafen A.
+                    yield* seatB.inbox.unsubscribe(channel)
+
+                    const asMinter = yield* minterHttp(e)
+                    yield* asMinter.post('/messages', sendMessageSchema, {
+                      type: 'channel',
+                      to: channel,
+                      topic: thread,
+                      content: body,
+                    })
+                    const seen = yield* seatA.inbox.events().pipe(
+                      Stream.filter(
+                        (event) => event.kind === 'message-posted' && event.message.body === body,
+                      ),
+                      Stream.runHead,
+                      Effect.timeout(Duration.seconds(25)),
+                    )
+                    expect(Option.isSome(seen)).toBe(true)
+                  }),
+                () => pacedRelease(seatB),
+              ),
+            () => pacedRelease(seatA),
+          )
+        }),
+      ),
+    60_000,
   )
 })
 

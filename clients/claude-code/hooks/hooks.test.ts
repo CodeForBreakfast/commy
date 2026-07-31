@@ -4,7 +4,20 @@ import hooks from './hooks.json'
 
 const PLUGIN_SLUG = 'commy'
 const EXPECTED_PREFIX = `mcp__plugin_${PLUGIN_SLUG}_${PLUGIN_SLUG}__`
-const ATTRIBUTION_TOOLS = [['post'], ['react'], ['unreact'], ['current_identity']] as const
+// Every tool the matcher must stamp. `edit_message` was missing here for as
+// long as the list was hand-kept; `subscribe` / `unsubscribe` join it because
+// declaring interest now mints (comms-g5zh.3). The set-level invariant —
+// matcher == the tools whose schema declares session_id — is asserted in
+// `hooks-manifest.test.ts`; this list is the per-name spelling check.
+const ATTRIBUTION_TOOLS = [
+  ['post'],
+  ['edit_message'],
+  ['react'],
+  ['unreact'],
+  ['current_identity'],
+  ['subscribe'],
+  ['unsubscribe'],
+] as const
 
 interface HookEntry {
   readonly matcher: string
@@ -52,7 +65,11 @@ test('matcher does not match arbitrary other MCP tools (no over-broad capture)',
   const matcher = preToolUse[0]?.matcher ?? ''
   const re = new RegExp(`^${matcher}$`)
   expect(re.test('mcp__plugin_discord_discord__reply')).toBe(false)
-  expect(re.test(`${EXPECTED_PREFIX}subscribe`)).toBe(false)
+  // `subscribe` used to stand here as the example of a tool the matcher must
+  // NOT capture. It is now stamped deliberately (comms-g5zh.3 — subscribe
+  // mints), so the guarantee is restated against a tool that genuinely never
+  // binds: `read_thread` is a read, and a read never mints.
+  expect(re.test(`${EXPECTED_PREFIX}read_thread`)).toBe(false)
   expect(re.test(`${EXPECTED_PREFIX}list_agents`)).toBe(false)
   expect(re.test(`${EXPECTED_PREFIX}list_channels`)).toBe(false)
 })

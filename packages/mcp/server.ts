@@ -1,7 +1,13 @@
 import { basename, join } from 'node:path'
 import { stderrLoggerLayer } from '@commy/core/logging'
-import type { AcquiredIdentity, AgentComms, InboxError, MessageInbox } from '@commy/core/ports'
-import { decodeChannelName, decodeThreadName } from '@commy/core/ports'
+import type {
+  AcquiredIdentity,
+  AgentComms,
+  BindError,
+  InboxError,
+  MessageInbox,
+} from '@commy/core/ports'
+import { decodeChannelName, decodeThreadName, isBindError } from '@commy/core/ports'
 import { CommandExecutor, FetchHttpClient, FileSystem, type HttpClient } from '@effect/platform'
 import { NodeContext, NodeRuntime } from '@effect/platform-node'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
@@ -52,6 +58,7 @@ import {
   SessionBinderLive,
   SessionBinder as SessionBinderTag,
 } from './session-binder.ts'
+import { withSessionContext } from './session-context.ts'
 import { SessionIdLive, SessionId as SessionIdTag } from './session-id.ts'
 import type { SubscribeIntent, SubscribeTokenError } from './subscribe-parser.ts'
 import { intentToTarget, intentToToken } from './subscribe-parser.ts'
@@ -177,7 +184,7 @@ const createType2DefaultsOnAcquire = (
   narrowSet: NarrowSet,
   inbox: MessageInbox,
 ): ((project: ProjectSlug | undefined) => Effect.Effect<void>) => {
-  const registerIntent = (intent: SubscribeIntent): Effect.Effect<void, InboxError> =>
+  const registerIntent = (intent: SubscribeIntent): Effect.Effect<void, BindError | InboxError> =>
     Effect.sync(() => narrowSet.add(intent)).pipe(
       Effect.zipRight(inbox.subscribe(intentToTarget(intent))),
     )
@@ -508,10 +515,22 @@ export const makeProgram = (
       // and is swallowed rather than stranding the session. Ephemeral mode only:
       // a persistent COMMY_BOT_NAME pane gets a new session_id every launch, so
       // its store is always absent → the fresh path → COMMY_SUBSCRIBE-only.
+      //
+      // Restoring re-subscribes, and a subscription is realm state under the
+      // seat's own principal, so this needs the seat's naming inputs in context
+      // for the bind to resolve. Awaiting the id here is the same wait the
+      // store's own `read` already performs, and it is safe for the same reason
+      // the fork exists: nothing downstream of a forked fiber is waiting on it.
       const restoreOnResume: Effect.Effect<void> =
         parsed.botName !== undefined
           ? Effect.void
-          : restoreSubscriptions({ subscriptionStore, narrowSet, inbox: adapter.inbox }).pipe(
+          : Deferred.await(sessionIdDeferred).pipe(
+              Effect.flatMap((sessionId) =>
+                withSessionContext(
+                  restoreSubscriptions({ subscriptionStore, narrowSet, inbox: adapter.inbox }),
+                  { sessionId, project: parsed.project },
+                ),
+              ),
               Effect.catchAll((err) =>
                 Effect.logError(
                   `commy plugin: subscription restore failed: ${Predicate.isError(err) ? err.message : String(err)}`,
@@ -699,7 +718,42 @@ export const makeProgram = (
       // Ephemeral mode runs a periodic idle sweep (forked into this scope).
       const runsIdleSweep = parsed.botName === undefined
 
-      const subscribedIntents = yield* subscribeFromEnv(adapter.inbox, narrowSet, parsed)
+      // Boot-time subscribe now binds: a subscription and its events queue are
+      // realm state under the seat's own principal, so the seam needs this
+      // seat's naming inputs in the fiber-local context the bind reads.
+      //
+      // POLLED, NEVER AWAITED, and the ordering is what makes that sound rather
+      // than lucky: the boot-env feeder completes this deferred above (the
+      // `readBootSessionId` step), so by the time boot reaches here the only
+      // zero-action source has already fired. There is no race left to lose, so
+      // an await would buy nothing — and would cost everything, because this
+      // runs on the BOOT fiber. Parking here would leave the MCP child never
+      // finishing boot: a hang, not a seat that is merely deaf.
+      const bootSessionId = yield* Deferred.poll(sessionIdDeferred).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeedNone,
+            onSome: (awaitId) => Effect.asSome(awaitId),
+          }),
+        ),
+      )
+      // A seat with no way to bind cannot hold subscriptions at all — the
+      // ephemeral bot name is derived from the session id, so there is no name
+      // to mint under. Log what was lost and carry on serving: deaf is the
+      // accepted outcome here (the residual gap Graeme's 2026-07-05 ruling
+      // names), a dead MCP child is not.
+      const subscribedIntents = yield* withSessionContext(
+        subscribeFromEnv(adapter.inbox, narrowSet, parsed),
+        { sessionId: Option.getOrUndefined(bootSessionId), project: parsed.project },
+      ).pipe(
+        Effect.catchIf(isBindError, (cause) =>
+          Effect.logWarning(
+            `commy plugin: boot-time subscribe could not bind an identity, so no ` +
+              `subscriptions were applied — this seat will not receive channel traffic. ` +
+              `${Predicate.isError(cause) ? cause.message : String(cause)}`,
+          ).pipe(Effect.provide(loggerLayer), Effect.as<ReadonlyArray<SubscribeIntent>>([])),
+        ),
+      )
 
       // Leave a positive trace of what the boot-time subscribe set actually
       // resolved to. This is the diagnostic whose absence let a clobbered

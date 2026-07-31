@@ -1,4 +1,4 @@
-import type { BotName, InboxError, MessageInbox } from '@commy/core/ports'
+import type { BindError, BotName, InboxError, MessageInbox } from '@commy/core/ports'
 import { decodeBotNameSync } from '@commy/core/ports'
 import type { ZulipAdapter } from '@commy/zulip/adapter'
 import { zulipAdapter } from '@commy/zulip/adapter'
@@ -720,16 +720,20 @@ export const ZulipAdapterLive: Layer.Layer<
  *      to tee only matching events to the MCP host.
  *   2. `inbox.subscribe` keeps the substrate side wired so the
  *      adapter actually receives events. For Zulip this calls
- *      `/users/me/subscriptions` against the minter, ensuring the
- *      stream is in the minter's queue. The boot-time reconciler
- *      covers most streams; this per-session call still
- *      handles streams created after the plugin booted.
+ *      `/users/me/subscriptions` under the SEAT's own principal and
+ *      registers the seat's event queue, so the stream lands in a queue
+ *      the seat owns rather than a shared one.
+ *
+ * Because that is realm state under the agent's own principal, this
+ * binds — hence the `BindError` in the error channel. A seat with no
+ * way to obtain an identity cannot hold subscriptions at all, and is
+ * refused here rather than silently seeded onto someone else's.
  */
 export const subscribeFromEnv = (
   inbox: MessageInbox,
   narrowSet: NarrowSet,
   parsed: ParsedEnv,
-): Effect.Effect<ReadonlyArray<SubscribeIntent>, SubscribeTokenError | InboxError> => {
+): Effect.Effect<ReadonlyArray<SubscribeIntent>, SubscribeTokenError | BindError | InboxError> => {
   if (parsed.subscribe === undefined) return Effect.succeed([])
   return Effect.forEach(parsed.subscribe.split(','), (raw) =>
     parseSubscribeTarget(raw.trim()).pipe(
