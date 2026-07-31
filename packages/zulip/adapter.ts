@@ -635,6 +635,32 @@ export const zulipAdapter = (
         ),
       )
 
+    // The binding as it stands, WITHOUT consulting the binder — the passive
+    // counterpart to `boundHttp`. Asking which credential owns the queue this
+    // seat already registered is not a declaration that the realm is about to
+    // hold state, so it does not mint and does not need a caller's session
+    // context. That is what lets the event pump, which runs on its own daemon
+    // fiber with no tool call behind it, poll the queue it owns.
+    //
+    // Refuses rather than falling back to the minter: a poll issued under the
+    // wrong principal would be rejected by Zulip anyway, and silently reading a
+    // surface that is not this seat's is the failure this whole change removes.
+    const ownerHttp = (): Effect.Effect<BotHttp, UnboundEphemeralSession> =>
+      SynchronizedRef.get(boundRef).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: (): Effect.Effect<BotHttp, UnboundEphemeralSession> =>
+              Effect.fail(
+                new UnboundEphemeralSession({
+                  message:
+                    'commy: this seat holds no identity, so it owns no events queue to poll.',
+                }),
+              ),
+            onSome: (b: BoundState) => Effect.succeed(b.http),
+          }),
+        ),
+      )
+
     const boundHttp = (): Effect.Effect<BotHttp, BindError> =>
       // The binder is consulted on EVERY write, not only when `boundRef` is
       // empty. A short-circuit on `boundRef` would make "is something bound?"
@@ -1896,7 +1922,13 @@ export const zulipAdapter = (
               return reportAbsentResume.pipe(
                 Effect.as(
                   inboxEvents({
+                    // Reads only — rendered content and reaction targets. A
+                    // read leaves no realm-visible trace, so it stays on the
+                    // minter and costs the seat nothing.
                     http: minterHttp,
+                    // The queue itself is the seat's, so polling and
+                    // re-registering it go out under the seat's credential.
+                    queueHttp: ownerHttp(),
                     permalinkBase: base,
                     resolveDirectory: buildDirectoryLookup,
                     // Live registration read. A seat that had no queue when

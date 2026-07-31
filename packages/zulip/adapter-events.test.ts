@@ -196,6 +196,20 @@ const eventQueue = (
     return queue
   })
 
+const decodeBasicAuth = (header: string | null): { email: string; apiKey: string } => {
+  if (header === null || !header.startsWith('Basic ')) {
+    throw new Error(`expected Basic auth, got ${header ?? '<absent>'}`)
+  }
+  const decoded = Buffer.from(header.slice('Basic '.length), 'base64').toString('utf-8')
+  const idx = decoded.indexOf(':')
+  if (idx < 0) throw new Error(`malformed basic auth payload: ${decoded}`)
+  return { email: decoded.slice(0, idx), apiKey: decoded.slice(idx + 1) }
+}
+
+const minterAuth = { email: 'minter@example.com', apiKey: 'minter-key' }
+/** The credentials `buildAdapter`'s acquire binds — distinct from the minter's in both fields. */
+const seatAuth = { email: 'hermes-agent-bot@example.com', apiKey: 'fresh-key' }
+
 const isEventsPoll = (r: CapturedHttpRequest): boolean =>
   r.method === 'GET' && r.url.pathname === '/api/v1/events'
 
@@ -316,6 +330,76 @@ effectTest(
       expect(polls.length).toBeGreaterThanOrEqual(2)
       expect(polls[0]?.url.searchParams.get('last_event_id')).toBe('0')
       expect(polls[1]?.url.searchParams.get('last_event_id')).toBe('5')
+    }),
+  { layer: TestContext.TestContext },
+)
+
+// comms-g5zh.2. An event queue is a capability handle bound to its owner:
+// Zulip's `access_client_descriptor` rejects a poll whose caller is not the
+// queue's user, so a queue registered by the seat and polled by the minter
+// would fail on every step. Registration and polling must name the same
+// principal, and both must be the seat's — asserted together here so the pair
+// cannot drift apart.
+effectTest(
+  'inbox.events registers and polls the queue under the seat own principal',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* seedRegister(stub)
+      yield* seedSubscribeOk(stub)
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        {
+          body: {
+            result: 'success',
+            events: [messageEvent(5, aZulipMessage({ content: 'first' }))],
+          },
+        },
+        { hang: true },
+      ])
+      yield* adapter.inbox.subscribe(homeChannel.name)
+      const queue = yield* eventQueue(adapter)
+      yield* Queue.take(queue)
+      const registers = yield* registerPosts(stub)
+      const polls = yield* eventPolls(stub)
+      expect(registers).not.toHaveLength(0)
+      expect(polls).not.toHaveLength(0)
+      for (const req of [...registers, ...polls]) {
+        expect(decodeBasicAuth(req.headers.get('Authorization'))).toEqual(seatAuth)
+      }
+    }),
+  { layer: TestContext.TestContext },
+)
+
+// The reads a batch needs — rendered content, reaction targets — stay on the
+// minter. A read leaves no realm-visible trace, so it needs no principal of
+// its own, and routing it through the seat would spend the seat's rate-limit
+// budget on state that belongs to whoever wrote it.
+effectTest(
+  'inbox.events resolves the directory through the minter, not the seat',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* seedRegister(stub)
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        {
+          body: {
+            result: 'success',
+            events: [messageEvent(5, aZulipMessage({ content: 'first' }))],
+          },
+        },
+        { hang: true },
+      ])
+      const queue = yield* eventQueue(adapter)
+      yield* Queue.take(queue)
+      const userReads = (yield* stub.captured).filter(
+        (r) => r.method === 'GET' && r.url.pathname === '/api/v1/users',
+      )
+      expect(userReads).not.toHaveLength(0)
+      for (const req of userReads) {
+        expect(decodeBasicAuth(req.headers.get('Authorization'))).toEqual(minterAuth)
+      }
     }),
   { layer: TestContext.TestContext },
 )

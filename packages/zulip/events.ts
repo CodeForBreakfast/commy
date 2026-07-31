@@ -22,6 +22,7 @@ import type {
   MessageRef,
   RealmSettings,
   Timestamp,
+  UnboundEphemeralSession,
 } from '@commy/core/ports'
 import {
   decodeChannelId,
@@ -130,7 +131,31 @@ export const createWatermarkStore = (): Effect.Effect<WatermarkStore> =>
   )
 
 export interface EventsConfig {
+  /**
+   * Minter-credentialled client for the READS this producer performs while
+   * mapping a batch — rendered content and reaction targets. A read leaves no
+   * realm-visible trace, so it needs no principal of its own.
+   */
   readonly http: ZulipHttp
+  /**
+   * Client for the two calls that touch THE QUEUE ITSELF — `GET /events` and
+   * the re-register after a dead queue. An event queue is a capability handle
+   * bound to its owner: Zulip refuses a poll from anyone else
+   * (`zerver/tornado/event_queue.py` `access_client_descriptor` raises
+   * `BadEventQueueIdError` when the caller is not the queue's user), so this
+   * must be the same principal the queue was registered under.
+   *
+   * A PASSIVE read of the existing binding, not the bind seam. Polling a queue
+   * you already own is not a declaration that the realm is about to hold state
+   * — the declaration happened at `subscribe`, which bound. Reading through the
+   * binding that registration established keeps this off the mint path
+   * entirely, which is what lets it run on the pump's own fiber where no
+   * tool-call session context exists.
+   *
+   * Omit for a standalone producer with no seat behind it: {@link http} is used
+   * for these calls too, which is the pre-seat-ownership behaviour.
+   */
+  readonly queueHttp?: Effect.Effect<Pick<ZulipHttp, 'get' | 'post'>, UnboundEphemeralSession>
   /**
    * Human-facing realm origin for narrow permalinks. The adapter
    * resolves it once from its config (public host when a Host-header override
@@ -606,6 +631,17 @@ export const defaultRetrySchedule: Schedule.Schedule<[Duration.Duration, number]
  */
 export const RESUME_VERDICT_FALLBACK: Duration.Duration = Duration.seconds(60)
 
+/**
+ * How long the producer waits before re-checking when the seat holds no
+ * binding, and so owns no queue to poll.
+ *
+ * This is a re-check interval, not a timeout: the wait ends in another read of
+ * the inbox's registration, so a seat that binds later is picked up rather than
+ * written off. Long enough that an unbound seat costs nothing while it waits,
+ * short enough that reception starts promptly once a `subscribe` binds.
+ */
+export const UNBOUND_IDLE_INTERVAL: Duration.Duration = Duration.seconds(5)
+
 type EventEnvelope = {
   readonly id: number
   readonly type: string
@@ -831,22 +867,32 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
         ),
       )
 
+      // The queue's owning principal, resolved per use rather than captured
+      // once: a seat that rebinds (a fresh conversation on the same MCP child)
+      // must not go on polling through the previous bot's credential.
+      const queueHttp: Effect.Effect<
+        Pick<ZulipHttp, 'get' | 'post'>,
+        UnboundEphemeralSession
+      > = config.queueHttp ?? Effect.succeed(config.http)
+
       const registerFreshQueue: Effect.Effect<
         EventQueueCursor,
-        ZulipApiError | ParseResult.ParseError
-      > = registerQueue(config.http, config.queueIdleTimeoutSecs).pipe(
-        Effect.tap((q) => config.onQueueRegister?.(q) ?? Effect.void),
-        // A (re-)register is the one moment a seat can silently lose its
-        // backlog: the new queue starts at the server's current
-        // last_event_id, so anything that arrived while no queue existed
-        // is gone. Recording it means a gap in the record has a visible
-        // cause rather than looking like a quiet realm.
-        Effect.tap((q) =>
-          Effect.logInfo(
-            `commy zulip events: registered queue_id=${q.queueId} last_event_id=${q.lastEventId}`,
+        ZulipApiError | ParseResult.ParseError | UnboundEphemeralSession
+      > = queueHttp
+        .pipe(Effect.flatMap((http) => registerQueue(http, config.queueIdleTimeoutSecs)))
+        .pipe(
+          Effect.tap((q) => config.onQueueRegister?.(q) ?? Effect.void),
+          // A (re-)register is the one moment a seat can silently lose its
+          // backlog: the new queue starts at the server's current
+          // last_event_id, so anything that arrived while no queue existed
+          // is gone. Recording it means a gap in the record has a visible
+          // cause rather than looking like a quiet realm.
+          Effect.tap((q) =>
+            Effect.logInfo(
+              `commy zulip events: registered queue_id=${q.queueId} last_event_id=${q.lastEventId}`,
+            ),
           ),
-        ),
-      )
+        )
 
       const readRegistration: Effect.Effect<Option.Option<EventQueueCursor>> =
         config.currentRegistration ?? Effect.succeedNone
@@ -866,7 +912,10 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
        */
       const handleBadQueue = (
         state: ProducerState,
-      ): Effect.Effect<StepResult, ZulipApiError | ParseResult.ParseError> =>
+      ): Effect.Effect<
+        StepResult,
+        ZulipApiError | ParseResult.ParseError | UnboundEphemeralSession
+      > =>
         Effect.gen(function* () {
           yield* reportResume(false)
           const since = yield* watermark.get()
@@ -928,10 +977,14 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
               ),
           })
           const currentQueue: EventQueueCursor = observed.queue ?? (yield* registerFreshQueue)
-          const res = yield* config.http.get('/events', eventsResponseSchema, {
-            queue_id: currentQueue.queueId,
-            last_event_id: currentQueue.lastEventId,
-          })
+          const res = yield* queueHttp.pipe(
+            Effect.flatMap((http) =>
+              http.get('/events', eventsResponseSchema, {
+                queue_id: currentQueue.queueId,
+                last_event_id: currentQueue.lastEventId,
+              }),
+            ),
+          )
           // The poll returned, so the queue this step polled is live. On the
           // first poll that is the resume verdict: the surviving queue is
           // replaying the backlog — report it so history catch-up stands down.
@@ -1005,6 +1058,19 @@ export const inboxEvents = (config: EventsConfig): Stream.Stream<InboundEvent> =
             }
             return Effect.fail(e)
           }),
+          // The seat holds no binding, so it owns no queue to poll and must not
+          // mint one here — registering belongs to `subscribe`, which binds.
+          //
+          // Idle rather than fail, and idle rather than latch. Failing would
+          // enter the never-give-up retry and hot-spin against the realm;
+          // latching would reproduce comms-9iro, where a seat that lost one
+          // early race stayed deaf for the pump's whole lifetime with no
+          // recovery. Returning an empty step keeps the unfold alive so the
+          // NEXT step re-reads `currentRegistration` — a subscribe that binds
+          // later registers a queue and this producer adopts it.
+          Effect.catchTag('UnboundEphemeralSession', () =>
+            Effect.sleep(UNBOUND_IDLE_INTERVAL).pipe(Effect.as([[], state] as StepResult)),
+          ),
         )
 
       const stepWithRetry = (
