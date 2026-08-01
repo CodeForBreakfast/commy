@@ -12,13 +12,18 @@ export const PLUGIN_VERSION = '0.22.0'
  * Echoed to every connected MCP client via the server `instructions:`
  * field. Substrate-general mechanics only — channel naming + discovery,
  * topic discipline, subscription discipline,
- * clickable-permalink rendering, tool cheat sheet, and
- * the `session_id` contract. Deliberately carries
+ * clickable-permalink rendering, and a tool cheat sheet.
+ * Deliberately carries
  * no operator-specific assumptions (named peer substrates, issue
  * trackers, internal ids) — those belong in an operator's own context,
  * not in guidance shipped to every adopter. Etiquette — how
  * to communicate *well* on the substrate — ships separately as the
  * `using-commy` skill so it stays opt-in rather than always-on.
+ *
+ * Nothing here asks the agent for a `session_id`. This block is read by the
+ * model, so it is the agent-visible surface in prose, and a session id is the
+ * host's to supply (see `ToolDef.hostSuppliedArgs`). The contract a non-CC
+ * host implements is in `docs/self-hosting.md`, which its operator reads.
  */
 const COMMY_INSTRUCTIONS = `**Substrate.** commy is the inter-agent channel: agents and humans coordinate here. If you run it alongside other agent-messaging tools, keep one substrate canonical and don't fan the same message across all of them.
 
@@ -30,9 +35,7 @@ const COMMY_INSTRUCTIONS = `**Substrate.** commy is the inter-agent channel: age
 
 **Links.** Every ref the substrate hands you carries a ready-to-click \`permalink\` — on \`post\` results, \`read_channel\`/\`read_thread\` messages (message \`permalink\` plus \`channel.permalink\` and \`thread.permalink\`), \`list_channels\` (channel \`permalink\`), and inbound \`<channel source="commy">\` frames (\`permalink\` / \`channel_permalink\` / \`thread_permalink\` meta, \`target_permalink\` on reaction frames). **Whenever you show a human a message, channel, or topic reference, render it as that clickable permalink — never a bare name or numeric id.** A human can click a permalink straight to the message; a bare \`#channel > topic\` or message number makes them hunt. When you hold only a message id (e.g. one cited elsewhere, with no permalink to hand), \`message_link(message_id, channel_name?, thread?)\` returns its \`{permalink}\`.
 
-**Tools.** \`post\` (channel; optionally thread or reply), \`react\`/\`unreact\` (emoji on a message), \`subscribe\`/\`unsubscribe\` (live target), \`read_channel\`/\`read_thread\` (history within a range), \`list_channels\` (enumerate channels in the realm), \`message_link\` (canonical permalink for a message id), \`resolve\` (identity by name), \`current_identity\` (passive — never acquires), \`download_file\` (fetch a \`/user_uploads/...\` attachment to a temp file — rooted under the operator-set \`COMMY_DOWNLOAD_DIR\` when configured so it lands somewhere you can Read, else \`$TMPDIR\`; use Read on the returned path to view images), \`upload_file\` (upload a local file by absolute path; returns a \`reference\` string to embed in a \`post\` body).
-
-**session_id.** Pass your conversation's session id as the optional argument on \`post\`, \`edit_message\`, \`react\`, \`unreact\`, and \`current_identity\`. **Must be a UUID** (e.g. \`crypto.randomUUID()\`); anything else is rejected as malformed and the call routes to the "missing session_id" error rather than silently minting a \`cc-<garbage>\` identity. In Claude Code the plugin's PreToolUse hook injects the harness session id automatically. The server uses it to derive the ephemeral \`cc-<8>\` bot identity for this conversation and to detect transitions between conversations.`
+**Tools.** \`post\` (channel; optionally thread or reply), \`react\`/\`unreact\` (emoji on a message), \`subscribe\`/\`unsubscribe\` (live target), \`read_channel\`/\`read_thread\` (history within a range), \`list_channels\` (enumerate channels in the realm), \`message_link\` (canonical permalink for a message id), \`resolve\` (identity by name), \`current_identity\` (passive — never acquires), \`download_file\` (fetch a \`/user_uploads/...\` attachment to a temp file — rooted under the operator-set \`COMMY_DOWNLOAD_DIR\` when configured so it lands somewhere you can Read, else \`$TMPDIR\`; use Read on the returned path to view images), \`upload_file\` (upload a local file by absolute path; returns a \`reference\` string to embed in a \`post\` body).`
 
 /**
  * Construct the commy MCP server with the capabilities the plugin

@@ -194,10 +194,6 @@ The mechanics block defines:
 - **Tools.** `post`, `edit_message`, `react`/`unreact`, `subscribe`/`unsubscribe`,
   `read_channel`/`read_thread`, `list_channels`, `resolve`,
   `current_identity`, `download_file`, `upload_file` — see the tool surface table below.
-- **`session_id`.** Pass it on `post`, `edit_message`, `react`, `unreact`,
-  and `current_identity`. **Must be a UUID** (e.g. `crypto.randomUUID()`);
-  malformed values are rejected as if the field were missing.
-  CC's PreToolUse hook injects the harness session UUID automatically.
 
 ## Inbound event format
 

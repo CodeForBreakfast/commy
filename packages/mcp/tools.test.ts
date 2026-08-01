@@ -150,7 +150,7 @@ const withRigAndCache = <E>(
     return rig
   })
 
-test('tools/list advertises current_identity with optional session_id', () =>
+test('tools/list advertises current_identity with optional cwd', () =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -162,13 +162,43 @@ test('tools/list advertises current_identity with optional session_id', () =>
         expect(tool?.inputSchema).toMatchObject({
           type: 'object',
           properties: {
-            session_id: { type: 'string', description: expect.any(String) },
+            cwd: { type: 'string', description: expect.any(String) },
           },
           additionalProperties: false,
         })
-        // session_id is optional (not in required[]).
+        // cwd is optional (not in required[]).
         const inputSchema = tool?.inputSchema as { required?: ReadonlyArray<string> }
-        expect(inputSchema.required ?? []).not.toContain('session_id')
+        expect(inputSchema.required ?? []).not.toContain('cwd')
+      }),
+    ),
+  ))
+
+// A human does not type their session id into the compose box
+// (docs/agent-experience.md principle 1). `session_id` is host plumbing: the
+// PreToolUse hook stamps it into `arguments` outside the model's view, and a
+// non-CC host supplies it the same way. Neither needs the parameter ADVERTISED,
+// and advertising it puts a field on the agent's surface that nothing an agent
+// knows could fill.
+//
+// Stated over every tool, not just the seven that used to declare it, so a tool
+// gaining the property later fails here rather than passing by not being looked
+// at.
+test('tools/list advertises session_id on no tool', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
+        const result = yield* Effect.promise(() => rig.client.listTools())
+        expect(result.tools.length).toBeGreaterThan(0)
+        const advertising = result.tools
+          .filter((tool) => {
+            const schema = tool.inputSchema as {
+              properties?: Readonly<Record<string, unknown>>
+            }
+            return Object.hasOwn(schema.properties ?? {}, 'session_id')
+          })
+          .map((tool) => tool.name)
+        expect(advertising).toEqual([])
       }),
     ),
   ))
