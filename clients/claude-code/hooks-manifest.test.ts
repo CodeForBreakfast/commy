@@ -15,7 +15,7 @@ import hooksManifest from './hooks/hooks.json'
  * So the derivation is traced from there instead, which is also what
  * `comms-tww6` specifies:
  *
- *   A TOOL WHOSE ADAPTER PATH REACHES `boundHttp` MUST DECLARE `session_id`
+ *   A TOOL WHOSE ADAPTER PATH REACHES `boundHttp` MUST RECEIVE `session_id`
  *   AND BE IN THE `hooks.json` MATCHER.
  *
  * That is a stronger rule than the old one. The old test could only catch a
@@ -23,12 +23,27 @@ import hooksManifest from './hooks/hooks.json'
  * see a tool that reached `boundHttp` while appearing in neither set — which is
  * exactly the live P1 that `comms-tww6` is open about.
  *
+ * RECEIVES, NOT DECLARES (comms-tg70). The rule used to say DECLARE, and traced
+ * a `session_id` property on the tool's advertised `inputSchema`. No tool
+ * declares one now: `session_id` is host plumbing the model has no way to fill,
+ * so it is supplied into `arguments` and accepted by the guard without being
+ * advertised (`ToolDef.hostSuppliedArgs`). What a bound-path tool must have is
+ * unchanged in substance — the id has to REACH it — so the trace moved to the
+ * accept-side marker.
+ *
+ * THAT MOVE IS WHY {@link SESSION_ID_RECEIVING_TOOLS} EXISTS. A test that
+ * derives a property from a source scan goes green when the scan stops matching
+ * — every rule below reads "no tool violates it" and a scan finding nothing
+ * satisfies all of them by looking at nothing. Pinning the receiving set makes
+ * the scan itself the thing under test: rename the marker and the pin fails
+ * loudly instead of the suite passing quietly.
+ *
  * KNOWN VIOLATIONS ARE NAMED, NOT PAPERED OVER. Three tools violate the rule at
- * HEAD (see `TWW6_EXCEPTIONS`). Fixing them means adding `session_id` to their
- * schemas, which is `comms-tg70`'s ground and out of scope here. Encoding the
- * real rule with a visible exception list beats asserting a weaker rule that
- * passes: the day `comms-tww6` lands, its author deletes entries from that list
- * and this test proves the fix.
+ * HEAD (see `TWW6_EXCEPTIONS`). Fixing them means giving them the host-supplied
+ * `session_id`, which is out of scope here. Encoding the real rule with a
+ * visible exception list beats asserting a weaker rule that passes: the day
+ * `comms-tww6` lands, its author deletes entries from that list and this test
+ * proves the fix.
  */
 
 /**
@@ -100,7 +115,7 @@ const BOUND_INBOX_VERBS = ['subscribe', 'subscriptions', 'unsubscribe'] as const
 const G5ZH3_MATCHER_PENDING = [] as const
 
 /**
- * Tools that reach `boundHttp` while declaring no `session_id` and sitting
+ * Tools that reach `boundHttp` while receiving no `session_id` and sitting
  * outside the matcher — the open P1 `comms-tww6`. They run under whatever seat
  * an EARLIER call happened to bind, so their attribution is inherited by
  * accident of ordering rather than established by the call itself.
@@ -109,6 +124,26 @@ const G5ZH3_MATCHER_PENDING = [] as const
  * then holds it to the rule.
  */
 const TWW6_EXCEPTIONS = ['resolve_thread', 'set_channel_description', 'unresolve_thread'] as const
+
+/**
+ * Every tool that accepts a host-supplied `session_id`. SEVEN, which is wider
+ * than the five in the PreToolUse matcher: `subscribe` and `unsubscribe` are
+ * here for a non-CC ephemeral host that supplies the UUID itself, and a
+ * listen-first seat reaches an identity through no other tool. Do not read a
+ * statement about one of these sets as a statement about the other.
+ *
+ * Pinned, not derived, and that is the point — see the file header. This set is
+ * what proves the scan below still sees anything at all.
+ */
+const SESSION_ID_RECEIVING_TOOLS = [
+  'current_identity',
+  'edit_message',
+  'post',
+  'react',
+  'subscribe',
+  'unreact',
+  'unsubscribe',
+] as const
 
 /** Enclosing declaration names in the adapter source that call `boundHttp()`. */
 function adapterVerbsReachingBoundHttp(source: string): ReadonlySet<string> {
@@ -135,24 +170,37 @@ function adapterVerbsReachingBoundHttp(source: string): ReadonlySet<string> {
 interface ToolFacts {
   readonly verbs: ReadonlySet<string>
   readonly inboxVerbs: ReadonlySet<string>
-  readonly declaresSessionId: boolean
+  readonly receivesSessionId: boolean
+  readonly advertisesSessionId: boolean
 }
 
 /**
- * Per-tool: which publisher verbs and which inbox verbs its handler calls, and
- * whether it declares `session_id`.
+ * Per-tool: which publisher verbs and which inbox verbs its handler calls,
+ * whether it accepts a host-supplied `session_id`, and whether it advertises
+ * one on its `inputSchema`. The last is traced only so the assertions can show
+ * it is nowhere — the two facts are separate and stay separately measured.
  */
 function toolFactsFromToolsSource(source: string): ReadonlyMap<string, ToolFacts> {
   const facts = new Map<
     string,
-    { verbs: Set<string>; inboxVerbs: Set<string>; declaresSessionId: boolean }
+    {
+      verbs: Set<string>
+      inboxVerbs: Set<string>
+      receivesSessionId: boolean
+      advertisesSessionId: boolean
+    }
   >()
   let current: string | undefined
   for (const line of source.split('\n')) {
     const named = line.match(/^ {6}name: '([a-z_]+)',$/)?.[1]
     if (named !== undefined) {
       current = named
-      facts.set(named, { verbs: new Set(), inboxVerbs: new Set(), declaresSessionId: false })
+      facts.set(named, {
+        verbs: new Set(),
+        inboxVerbs: new Set(),
+        receivesSessionId: false,
+        advertisesSessionId: false,
+      })
     }
     const entry = current === undefined ? undefined : facts.get(current)
     if (entry === undefined) continue
@@ -167,7 +215,11 @@ function toolFactsFromToolsSource(source: string): ReadonlyMap<string, ToolFacts
       const captured = verb[1]
       if (captured !== undefined) entry.inboxVerbs.add(captured)
     }
-    if (line.includes('session_id: sessionIdField')) entry.declaresSessionId = true
+    // The accept-side marker: an argument the host stamps in, admitted by the
+    // guard in `registerTools` and absent from `inputSchema`.
+    if (line.includes('hostSuppliedArgs: hostSuppliedSessionId')) entry.receivesSessionId = true
+    // The advertise-side property, which no tool should have (comms-tg70).
+    if (/^ +session_id: /.test(line)) entry.advertisesSessionId = true
   }
   return new Map(
     [...facts].map(([name, e]) => [name, { ...e, verbs: e.verbs, inboxVerbs: e.inboxVerbs }]),
@@ -210,13 +262,39 @@ test('the set of adapter declarations reaching boundHttp is the pinned one', asy
   ])
 })
 
-test('every tool whose adapter path reaches boundHttp declares session_id', async () => {
+// The pin that keeps the four rules below from holding by not looking. Each of
+// them reads "no tool violates this", which a scan that matches nothing
+// satisfies trivially — so assert first that the scan finds the set it is
+// supposed to find.
+test('the tools accepting a host-supplied session_id are exactly the pinned seven', async () => {
+  const facts = toolFactsFromToolsSource(await toolsSource())
+  const receiving = [...facts]
+    .filter(([, f]) => f.receivesSessionId)
+    .map(([name]) => name)
+    .sort()
+  expect(receiving).toEqual([...SESSION_ID_RECEIVING_TOOLS])
+})
+
+// comms-tg70: `session_id` is supplied, never advertised. A human does not type
+// their session id into the compose box (docs/agent-experience.md principle 1),
+// and the model has no way to fill the field, so putting it on the schema only
+// ever put plumbing on the agent's surface.
+test('no tool advertises session_id on its inputSchema', async () => {
+  const facts = toolFactsFromToolsSource(await toolsSource())
+  const advertising = [...facts]
+    .filter(([, f]) => f.advertisesSessionId)
+    .map(([name]) => name)
+    .sort()
+  expect(advertising).toEqual([])
+})
+
+test('every tool whose adapter path reaches boundHttp receives session_id', async () => {
   const facts = toolFactsFromToolsSource(await toolsSource())
   const offenders = [...facts]
     .filter(
       ([, f]) =>
         [...f.verbs].some((v) => (BOUND_VERBS as ReadonlyArray<string>).includes(v)) &&
-        !f.declaresSessionId,
+        !f.receivesSessionId,
     )
     .map(([name]) => name)
     .sort()
@@ -259,7 +337,7 @@ test('comms-tww6: the known unstamped bound-path tools are exactly the recorded 
   const facts = toolFactsFromToolsSource(await toolsSource())
   const boundHttpVerbs = new Set(['resolveThread', 'unresolveThread', 'setChannelDescription'])
   const unstamped = [...facts]
-    .filter(([, f]) => [...f.verbs].some((v) => boundHttpVerbs.has(v)) && !f.declaresSessionId)
+    .filter(([, f]) => [...f.verbs].some((v) => boundHttpVerbs.has(v)) && !f.receivesSessionId)
     .map(([name]) => name)
     .sort()
   expect(unstamped).toEqual([...TWW6_EXCEPTIONS])
@@ -302,9 +380,7 @@ test('adapterVerbsReachingBoundHttp ignores commented-out mentions of boundHttp'
 test('toolFactsFromToolsSource attributes verbs and session_id to the enclosing tool', () => {
   const synthetic = `
       name: 'alpha',
-      inputSchema: {
-        properties: { session_id: sessionIdField },
-      },
+      hostSuppliedArgs: hostSuppliedSessionId,
       handler: async (args) => {
         await run(adapter.publisher.post(channel, body))
       },
@@ -316,24 +392,41 @@ test('toolFactsFromToolsSource attributes verbs and session_id to the enclosing 
       handler: async () => {
         await run(adapter.inbox.subscribe(target))
       },
+      name: 'delta',
+      inputSchema: {
+        properties: {
+          session_id: sessionIdField,
+        },
+      },
   `
   const facts = toolFactsFromToolsSource(synthetic)
   expect(facts.get('alpha')).toEqual({
     verbs: new Set(['post']),
     inboxVerbs: new Set(),
-    declaresSessionId: true,
+    receivesSessionId: true,
+    advertisesSessionId: false,
   })
   expect(facts.get('beta')).toEqual({
     verbs: new Set(),
     inboxVerbs: new Set(),
-    declaresSessionId: false,
+    receivesSessionId: false,
+    advertisesSessionId: false,
   })
   // A read through the inbox is still traced as an inbox verb here; whether it
   // BINDS is decided by `BOUND_INBOX_VERBS`, not by the receiver.
   expect(facts.get('gamma')).toEqual({
     verbs: new Set(),
     inboxVerbs: new Set(['subscribe']),
-    declaresSessionId: false,
+    receivesSessionId: false,
+    advertisesSessionId: false,
+  })
+  // The advertise-side trace catches a schema property coming back, and does
+  // not confuse it with the accept-side marker.
+  expect(facts.get('delta')).toEqual({
+    verbs: new Set(),
+    inboxVerbs: new Set(),
+    receivesSessionId: false,
+    advertisesSessionId: true,
   })
 })
 

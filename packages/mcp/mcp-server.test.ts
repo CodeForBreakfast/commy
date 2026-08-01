@@ -69,13 +69,29 @@ test('initialize response declares a tools capability that supports list changes
   }
 })
 
-test('initialize response carries instructions explaining the session_id contract', async () => {
+test('initialize response carries instructions covering the tool surface', async () => {
   const { client, close } = await pairAndConnect()
   try {
     const instructions = client.getInstructions()
     expect(instructions).toBeDefined()
-    expect(instructions).toMatch(/session_id/)
     expect(instructions).toMatch(/post|react|unreact|current_identity/)
+  } finally {
+    await close()
+  }
+})
+
+// The instructions block is read by the model, so it is the agent-visible
+// surface in prose (comms-tg70). It used to carry a `session_id` paragraph
+// telling the agent to pass its conversation's session id — plumbing a host
+// supplies, not something an agent has or could produce. Removing the schema
+// property while leaving that paragraph would have left the model instructed to
+// send an argument no tool advertises.
+test('initialize instructions never ask the agent for a session id', async () => {
+  const { client, close } = await pairAndConnect()
+  try {
+    const instructions = client.getInstructions()
+    expect(instructions).not.toMatch(/session_id/)
+    expect(instructions).not.toMatch(/session id/i)
   } finally {
     await close()
   }

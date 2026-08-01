@@ -63,6 +63,22 @@ interface ToolDef {
   readonly name: string
   readonly description: string
   readonly inputSchema: ToolInputSchema
+  /**
+   * Arguments the MCP HOST stamps into `arguments` out of band — accepted by
+   * the guard in `registerTools`, never advertised in `inputSchema`.
+   *
+   * The two are separate on purpose. `session_id` is per-conversation host
+   * plumbing: Claude Code's PreToolUse hook injects it before the call leaves
+   * the client, and a non-CC host supplies it the same way. Neither route
+   * needs the model to see a parameter, and advertising one put a field on the
+   * agent's surface that nothing an agent knows could fill
+   * (docs/agent-experience.md principle 1).
+   *
+   * Declaring it here rather than widening the guard globally keeps the
+   * relaxation per-tool: a tool that lists nothing still rejects `session_id`,
+   * and every tool still rejects everything else.
+   */
+  readonly hostSuppliedArgs?: ReadonlyArray<string>
   readonly handler: (args: Readonly<Record<string, unknown>>) => Promise<unknown>
 }
 
@@ -426,9 +442,10 @@ const rangeSchemaFields = {
  * fields inside the handler via the `decode*` decoders in `core/ports.ts`.
  *
  * The MCP-advertised `inputSchema` on each `ToolDef` stays hand-written: it is
- * what `tools/list` exposes to clients and what the central unknown-argument
- * guard in `registerTools` checks against. The schemas here govern the
- * handler-side parse only.
+ * what `tools/list` exposes to clients, and — together with that tool's
+ * `hostSuppliedArgs` — what the central unknown-argument guard in
+ * `registerTools` checks against. The schemas here govern the handler-side
+ * parse only.
  */
 const RangeArgs = {
   since: Schema.optional(Schema.Number),
@@ -486,11 +503,19 @@ const UploadFileArgs = Schema.Struct({ path: Schema.String })
 const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyArray<ToolDef> => {
   const { adapter, identityCache, narrowSet } = deps
   const projectForCwd = deps.projectForCwd ?? (() => Effect.succeed(undefined))
-  const sessionIdField = {
-    type: 'string',
-    description:
-      "Per-conversation identifier (UUID). In Claude Code, the plugin's PreToolUse hook injects this from the harness session id; non-CC MCP clients must supply a UUID (e.g. via crypto.randomUUID()). Anything that fails UUID validation is treated as missing — the server returns the unbound-stub error rather than minting a malformed cc-* identity. Drives ephemeral identity minting.",
-  } as const
+  /**
+   * The tools that accept a host-supplied `session_id` (see
+   * {@link ToolDef.hostSuppliedArgs}). SEVEN tools carry it, not the five in
+   * Claude Code's PreToolUse matcher: `subscribe` and `unsubscribe` are here
+   * for the non-CC ephemeral host that supplies the UUID itself, which is a
+   * listen-first seat's only route to an identity. A host stamping the arg on
+   * a tool CC never stamps must not be told the argument is unknown.
+   *
+   * The value is a UUID. A raw value that isn't routes through the cache's
+   * unbound stub rather than minting a malformed `cc-<project>-<garbage>`
+   * identity — see `readSessionId` below.
+   */
+  const hostSuppliedSessionId: ReadonlyArray<string> = ['session_id']
   const cwdField = {
     type: 'string',
     description:
@@ -591,9 +616,10 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         'Return the identity this session is bound to. Passive — never triggers acquire. Returns {state: "unbound", identity: null} for ephemeral sessions that have not yet performed an attribution-producing action; {state: "bound", identity: {id, name, kind}, recent_threads?} once acquire has resolved. recent_threads is a best-effort orientation list of {channel, thread, last_post_ts, last_post_body} for the threads this identity most recently posted in; it is omitted when the enrichment lookup fails — the binding self-check itself never fails on it.',
       inputSchema: {
         type: 'object',
-        properties: { session_id: sessionIdField, cwd: cwdField },
+        properties: { cwd: cwdField },
         additionalProperties: false,
       },
+      hostSuppliedArgs: hostSuppliedSessionId,
       handler: async (args): Promise<CurrentIdentityResult> => {
         const run = runFor(args)
         // Passive: reads whether this session is bound, never binds. The
@@ -712,12 +738,12 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             type: 'string',
             description: 'Message id of a prior message to reply to',
           },
-          session_id: sessionIdField,
           cwd: cwdField,
         },
         required: ['channel_name', 'body'],
         additionalProperties: false,
       },
+      hostSuppliedArgs: hostSuppliedSessionId,
       handler: async (args) => {
         const run = runFor(args)
         const ref = await run(
@@ -775,12 +801,12 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             type: 'string',
             description: 'Thread / topic name (for thread-scoped messages)',
           },
-          session_id: sessionIdField,
           cwd: cwdField,
         },
         required: ['message_id', 'body'],
         additionalProperties: false,
       },
+      hostSuppliedArgs: hostSuppliedSessionId,
       handler: async (args) => {
         const run = runFor(args)
         const ref = await run(
@@ -813,12 +839,12 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             type: 'string',
             description: 'Thread / topic name (for thread-scoped messages)',
           },
-          session_id: sessionIdField,
           cwd: cwdField,
         },
         required: ['message_id', 'emoji'],
         additionalProperties: false,
       },
+      hostSuppliedArgs: hostSuppliedSessionId,
       handler: async (args) => {
         const run = runFor(args)
         const { ref, threadName } = await run(
@@ -855,12 +881,12 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           emoji: { type: 'string', description: 'Substrate-native emoji name' },
           channel_name: { type: 'string', description: 'Channel name (required on cache miss)' },
           thread: { type: 'string', description: 'Thread / topic name' },
-          session_id: sessionIdField,
           cwd: cwdField,
         },
         required: ['message_id', 'emoji'],
         additionalProperties: false,
       },
+      hostSuppliedArgs: hostSuppliedSessionId,
       handler: async (args) => {
         const run = runFor(args)
         await run(
@@ -885,12 +911,12 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             description:
               'Subscribe-target token: "<channel>", "<channel>/<thread>", or "new-topics:<channel>"',
           },
-          session_id: sessionIdField,
           cwd: cwdField,
         },
         required: ['target'],
         additionalProperties: false,
       },
+      hostSuppliedArgs: hostSuppliedSessionId,
       handler: async (args) => {
         const run = runFor(args)
         await run(
@@ -937,12 +963,12 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             description:
               'Subscribe-target token: "<channel>", "<channel>/<thread>", or "new-topics:<channel>"',
           },
-          session_id: sessionIdField,
           cwd: cwdField,
         },
         required: ['target'],
         additionalProperties: false,
       },
+      hostSuppliedArgs: hostSuppliedSessionId,
       handler: async (args) => {
         const run = runFor(args)
         await run(
@@ -1326,11 +1352,18 @@ export const registerTools = (server: Server, deps: RegisterToolsDeps): ToolsCac
       throw new Error(`unknown tool: ${request.params.name}`)
     }
     const args = (request.params.arguments ?? {}) as Readonly<Record<string, unknown>>
-    const knownKeys = new Set(Record.keys(def.inputSchema.properties))
-    const unknownKeys = Record.keys(args).filter((k) => !knownKeys.has(k))
+    // Two sets, and the difference between them is the point. What the tool
+    // ADVERTISES is what a caller may write; what it ACCEPTS additionally
+    // includes the arguments the host stamps in out of band. So the guard
+    // admits `hostSuppliedArgs` while the error still names only the advertised
+    // ones — an unknown-argument message that listed `session_id` as valid
+    // would put the parameter back on the surface this removed it from.
+    const advertisedKeys = Record.keys(def.inputSchema.properties)
+    const acceptedKeys = new Set([...advertisedKeys, ...(def.hostSuppliedArgs ?? [])])
+    const unknownKeys = Record.keys(args).filter((k) => !acceptedKeys.has(k))
     if (unknownKeys.length > 0) {
       throw new Error(
-        `${def.name}: unknown argument(s): ${unknownKeys.join(', ')}. Valid arguments: ${[...knownKeys].join(', ')}`,
+        `${def.name}: unknown argument(s): ${unknownKeys.join(', ')}. Valid arguments: ${advertisedKeys.join(', ')}`,
       )
     }
     try {

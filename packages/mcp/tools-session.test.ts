@@ -525,3 +525,90 @@ test('post with cwd from a non-project directory falls back to bare cc-<8>', () 
       }),
     ),
   ))
+
+// --- session_id is supplied, not advertised (comms-tg70) ---
+//
+// The declaration the model reads and the argument the server reads are
+// separate things. `session_id` is on no advertised `inputSchema` — a host
+// stamps it into `arguments` out of band, so the model never sees a field it
+// has no way to fill. The tests above all exercise this already; the three
+// below state the property directly, because the argument check derives its
+// accepted set from the ADVERTISED one and would otherwise reject the very
+// supply channel every test here depends on.
+
+test('post accepts a host-supplied session_id that no schema advertises', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* buildSessionRig()
+        const listed = yield* Effect.promise(() => rig.client.listTools())
+        const post = listed.tools.find((tool) => tool.name === 'post')
+        const properties = (post?.inputSchema as { properties?: Readonly<Record<string, unknown>> })
+          .properties
+        expect(Object.hasOwn(properties ?? {}, 'session_id')).toBe(false)
+
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: {
+              channel_name: 'home',
+              body: 'stamped by the host, not typed by the model',
+              session_id: SID_A,
+            },
+          }),
+        )
+        expect(result.isError).toBeFalsy()
+        const current = yield* rig.adapter.identity.currentIdentity()
+        expect(current.name).toBe(decodeDisplayNameSync('cc-aaaaaaaa'))
+      }),
+    ),
+  ))
+
+test('a tool that takes no host-supplied session_id still rejects one', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        // The relaxation is per-tool, not a hole in the check. `read_thread` is
+        // outside the hook matcher and binds nothing, so a `session_id` reaching
+        // it is a caller error and still says so.
+        const rig = yield* buildSessionRig()
+        const error = yield* Effect.flip(
+          Effect.tryPromise({
+            try: () =>
+              rig.client.callTool({
+                name: 'read_thread',
+                arguments: { channel_name: 'home', thread: 'orientation', session_id: SID_A },
+              }),
+            catch: (e) => e as { message: string },
+          }),
+        )
+        expect(error.message).toContain('session_id')
+      }),
+    ),
+  ))
+
+test('a genuinely unknown argument is still rejected on a tool that takes session_id', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* buildSessionRig()
+        const error = yield* Effect.flip(
+          Effect.tryPromise({
+            try: () =>
+              rig.client.callTool({
+                name: 'post',
+                arguments: {
+                  channel_name: 'home',
+                  body: 'hello',
+                  session_id: SID_A,
+                  thread_name: 'oops',
+                },
+              }),
+            catch: (e) => e as { message: string },
+          }),
+        )
+        expect(error.message).toContain('thread_name')
+        expect(error.message).not.toContain('session_id')
+      }),
+    ),
+  ))

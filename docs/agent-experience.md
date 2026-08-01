@@ -110,9 +110,6 @@ identity are the same moment.
 
 Places the current implementation fails this reference.
 
-- **`session_id` is a parameter on seven tool schemas** (`packages/mcp/tools.ts`).
-  A human does not type their session id into the compose box. Plumbing has
-  surfaced in the agent-visible surface. Principle 1.
 - **Full message content is pushed into the agent's turn**
   (`packages/mcp/events.ts`, and the inbound format in the plugin README).
   The agent has paid for the content before deciding it was relevant.
