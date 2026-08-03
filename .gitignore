@@ -5,6 +5,7 @@ result
 result-*
 .bun-result
 .env.local
+.envrc.local
 .worktrees/
 CLAUDE.local.md
 

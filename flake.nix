@@ -3,10 +3,17 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+
+    # Reached only by `devShells.maintainer`. Nix fetches flake inputs per
+    # output, so `nix develop` and `nix develop .#ci` — everything a
+    # contributor and CI touch — never fetch, evaluate or build this. No
+    # `inputs.nixpkgs.follows`: beads needs Go 1.26 and this flake's nixpkgs
+    # carries 1.25.
+    beads.url = "github:gastownhall/beads/v1.1.2";
   };
 
   outputs =
-    { nixpkgs, ... }:
+    { nixpkgs, beads, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -86,7 +93,7 @@
       };
 
       devShells = forAllSystems (
-        { pkgs, ... }:
+        { pkgs, system }:
         let
           # Tooling the gate needs: bun runs the TS gate, uv drives the
           # clients/hermes Python gate (//#test:hermes → scripts/test.sh).
@@ -107,6 +114,18 @@
           # the gate needs.
           ci = pkgs.mkShell {
             packages = gateTools;
+          };
+          # The default shell plus `bd`, the client for the maintainers' issue
+          # tracker. That tracker is not part of this repository — external
+          # contributors don't need it and file GitHub issues instead (see
+          # AGENTS.md) — so `bd` lives here rather than in `default`, and
+          # entering this shell is opt-in. Select it locally with an untracked
+          # `.envrc.local` containing `use flake .#maintainer`.
+          maintainer = pkgs.mkShell {
+            packages = gateTools ++ [
+              pkgs.typescript-language-server
+              beads.packages.${system}.bd
+            ];
           };
         }
       );
