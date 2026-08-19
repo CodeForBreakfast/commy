@@ -712,3 +712,72 @@ describeLive('zulip live upload round-trip — zulip.example.com', () => {
       }),
     ))
 })
+
+describeLiveChannel('zulip live attachment claim — zulip.example.com', () => {
+  // The regression comms-qpup exists to catch. `uploadFile` used to go out
+  // through the MINTER while `post` went out through the bound bot, so Zulip's
+  // `do_claim_attachments` — which validates each attachment against the
+  // MESSAGE SENDER — skipped the row that grants read access, logged a warning,
+  // and sent the message anyway. The link rendered and nobody could open it.
+  //
+  // WHY THE READER IS A SECOND BOT AND NOT THE ADAPTER'S OWN `downloadFile`.
+  // `downloadFile` reads through the minter, and the minter is subscribed to
+  // every channel on this realm, so it holds a `UserMessage` for the
+  // referencing message and its read succeeds on a ground this fix does not
+  // touch. That instrument cannot tell a claimed attachment from an unclaimed
+  // one. A FRESHLY MINTED BOT CAN: it owns nothing and is subscribed to
+  // nothing, so it fails the ownership test and the `UserMessage` test, and
+  // `is_realm_public` is its only remaining route — and that flag is stamped
+  // onto the `Attachment` row only when the claim SUCCEEDS.
+  //
+  // So this reads 403 before the fix and returns the bytes after it.
+  test(
+    'a file uploaded and posted by one bot is readable by a second bot that owns nothing and is subscribed to nothing',
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const channel = decodeChannelNameSync(liveChannelName ?? '')
+          const thread = decodeThreadNameSync(
+            `cc-live-attach-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+          )
+          // Four bytes. The upload is permanent realm state, so the test keeps
+          // its own footprint to the smallest thing that still proves a
+          // round-trip.
+          const bytes = new Uint8Array([0x71, 0x70, 0x75, 0x70])
+          const filename = `cc-live-attach-${Date.now()}.bin`
+
+          const owner = yield* buildAdapter()
+          const uploaded = yield* Effect.acquireUseRelease(
+            pacedAcquire(owner, decodeBotNameSync(uniqueName('attach-owner'))),
+            () =>
+              Effect.gen(function* () {
+                const up = yield* owner.uploadFile(filename, bytes)
+                // The post is what triggers the claim, so it is part of the
+                // setup rather than an assertion — an upload nobody references
+                // is never claimed by anyone.
+                yield* owner.publisher.post(
+                  channel,
+                  decodeMessageBodySync(`attachment claim probe ${up.reference}`),
+                  { thread },
+                )
+                return up
+              }),
+            () => pacedRelease(owner),
+          )
+
+          const reader = yield* buildAdapter()
+          yield* Effect.acquireUseRelease(
+            pacedAcquire(reader, decodeBotNameSync(uniqueName('attach-reader'))),
+            (acquired) =>
+              Effect.gen(function* () {
+                const http = yield* botHttp(liveEnv(), credentialsOf(acquired.credentials))
+                const back = yield* http.downloadRaw(uploaded.ref)
+                expect(new Uint8Array(back.data)).toEqual(bytes)
+              }),
+            () => pacedRelease(reader),
+          )
+        }),
+      ),
+    60_000,
+  )
+})

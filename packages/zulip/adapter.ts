@@ -2194,6 +2194,31 @@ export const zulipAdapter = (
       inbox,
       history,
       directory,
+      // Stays on the MINTER, so a seat that only ever reads never binds. Once
+      // `uploadFile` moved to the bound bot below, the minter stopped owning the
+      // files it reads, so this now rests on two grounds — NEITHER OF WHICH THIS
+      // REPO CONTROLS, and both of which are realm state rather than code.
+      //
+      // Zulip's `validate_attachment_request` admits a reader on the first of
+      // three tests it passes: owns it, `is_realm_public`, or holds a
+      // `UserMessage` for a message referencing it. The two grounds map to the
+      // last two. `is_realm_public` is stamped onto the `Attachment` row at claim
+      // time from `stream.is_public()`, so it holds while no channel is
+      // invite-only. The `UserMessage` test holds while the minter is subscribed
+      // to the channel the attachment was posted in — measured by
+      // `cc-homelab-cbb5b9c3` on 2026-08-19 as 1194 active subscriptions against
+      // 1182 non-deactivated channels, i.e. everything.
+      //
+      // BOTH GROUNDS ARE ARGUED FROM REALM STATE AND ZULIP'S SOURCE, NOT
+      // ESTABLISHED BY A DISCRIMINATING TEST. They overlap completely on this
+      // realm, so no download run against it can say which one admitted the
+      // reader, or whether either would still admit it alone. What would
+      // discriminate: an invite-only channel the minter is NOT subscribed to,
+      // carrying an attachment posted by another account. Building that mutates
+      // the realm, so it is the operator's call, not this test suite's.
+      //
+      // If either ground goes away, this read fails and the fix is to move it
+      // onto `boundHttp()` — which costs the never-bind property above.
       downloadFile: (ref: AttachmentRef) =>
         decodeUserUploadPath(ref).pipe(
           Effect.flatMap((urlPath) =>
@@ -2203,8 +2228,16 @@ export const zulipAdapter = (
           ),
           Effect.mapError((cause) => new AttachmentError({ operation: 'download', cause })),
         ),
+      // An upload writes an `Attachment` row with an owner, so it belongs on
+      // the mint seam with the other attribution-producing verbs. It also has
+      // to be there for the reference to work at all: `do_claim_attachments`
+      // validates each attachment against the MESSAGE SENDER, so an upload
+      // owned by the minter and posted by the bound bot fails that check. Zulip
+      // logs a warning, skips the row that grants read access, and sends the
+      // message anyway — the link renders and nobody can open it.
       uploadFile: (filename: string, data: Uint8Array) =>
-        minterHttp.uploadRaw(filename, data).pipe(
+        boundHttp().pipe(
+          Effect.flatMap((http) => http.uploadRaw(filename, data)),
           Effect.flatMap((upload) =>
             decodeAttachmentRef(upload.url).pipe(
               Effect.map((ref) => ({
