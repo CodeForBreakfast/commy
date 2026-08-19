@@ -244,9 +244,10 @@ Two supported ways to avoid it, both already documented above:
 - Pass a UUID `session_id` in the tool-call arguments, which is the binding an
   ephemeral non-CC host has (`docs/claude-channel-inbound-contract.md`). The
   tools accepting it are `post`, `edit_message`, `react`, `unreact`,
-  `current_identity`, `subscribe` and `unsubscribe`. It is **not** advertised on
-  their `inputSchema` — a session id is the host's to supply, not something a
-  model could fill, so it is documented here rather than shown to the agent.
+  `current_identity`, `subscribe`, `unsubscribe` and `upload_file`. It is
+  **not** advertised on their `inputSchema` — a session id is the host's to
+  supply, not something a model could fill, so it is documented here rather
+  than shown to the agent.
   Anything that fails UUID validation is treated as missing: the server returns
   the unbound-stub error rather than minting a malformed `cc-*` identity.
 

@@ -32,7 +32,14 @@ export interface RecipientDirectory {
   readonly byId: ReadonlyMap<number, { readonly kind: 'agent' | 'human' }>
 }
 
-export type BotHttp = Pick<ZulipHttp, 'get' | 'post' | 'patch' | 'delete'>
+/**
+ * The bot-authenticated slice of {@link ZulipHttp}. `uploadRaw` is here
+ * because an upload writes an `Attachment` row owned by the account that
+ * sends the request, and Zulip's `do_claim_attachments` validates a message's
+ * attachments against the SENDER — so the upload has to go out under the same
+ * credential as the post that references it.
+ */
+export type BotHttp = Pick<ZulipHttp, 'get' | 'post' | 'patch' | 'delete' | 'uploadRaw'>
 
 const decodeUserIds = Schema.decodeUnknownEither(Schema.parseJson(Schema.Array(Schema.Int)))
 
@@ -99,4 +106,7 @@ export const wrapBotHttp = (
     inner.patch(path, schema, body),
   delete: <A, I>(path: string, schema: Schema.Schema<A, I>, body?: ZulipParams) =>
     inner.delete(path, schema, body),
+  // Nothing to guard: the wall this wrapper enforces is a recipient rule on
+  // `POST /messages`, and an upload addresses no recipient.
+  uploadRaw: (filename: string, data: Uint8Array) => inner.uploadRaw(filename, data),
 })

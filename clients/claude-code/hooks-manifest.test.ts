@@ -72,6 +72,7 @@ const BOUND_HTTP_CALLERS = [
   'subscriptions',
   'unreact',
   'unsubscribe',
+  'uploadFile',
 ] as const
 
 /**
@@ -94,6 +95,37 @@ const BOUND_HTTP_CALLERS = [
  * outside the compared set entirely and the suite stayed green.
  */
 const BOUND_INBOX_VERBS = ['subscribe', 'subscriptions', 'unsubscribe'] as const
+
+/**
+ * Adapter ATTACHMENT verbs that reach `boundHttp` (comms-qpup). An upload
+ * writes an `Attachment` row with an owner, and Zulip grants a reader access to
+ * it only when that owner is also the sender of the referencing message — so
+ * the upload goes out under the seat's own bot, like every other write.
+ *
+ * Held apart from the two sets above for the same reason they are held apart
+ * from each other: the tool layer reaches these through a THIRD receiver. It
+ * never names `adapter.uploadFile` — it receives a closure as a dep — which is
+ * why the trace needs {@link ATTACHMENT_DEP_ADAPTER_MEMBER} to see this path at
+ * all.
+ */
+const BOUND_ATTACHMENT_VERBS = ['uploadFile'] as const
+
+/**
+ * Which adapter member backs each attachment dep in `RegisterToolsDeps`, as
+ * `server.ts` wires them.
+ *
+ * PINNED, NOT PARSED, and the limit of that is worth stating: nothing here
+ * reads `server.ts`, so a rewire of `upload` onto a different member would
+ * leave this map lying. Every other pin in this file carries the same limit
+ * (see `BOUND_VERBS`), and resolving a closure across a second source file is a
+ * different kind of test than this one. What the map buys is the thing that was
+ * missing: a tool whose only route to `boundHttp` is a dep now sits INSIDE the
+ * compared set instead of outside it.
+ */
+const ATTACHMENT_DEP_ADAPTER_MEMBER: Readonly<Record<string, string>> = {
+  upload: 'uploadFile',
+  downloadFile: 'downloadFile',
+}
 
 /**
  * Tools that reach `boundHttp` through an inbox verb while sitting outside the
@@ -126,9 +158,10 @@ const G5ZH3_MATCHER_PENDING = [] as const
 const TWW6_EXCEPTIONS = ['resolve_thread', 'set_channel_description', 'unresolve_thread'] as const
 
 /**
- * Every tool that accepts a host-supplied `session_id`. SEVEN, which is wider
- * than the five in the PreToolUse matcher: `subscribe` and `unsubscribe` are
- * here for a non-CC ephemeral host that supplies the UUID itself, and a
+ * Every tool that accepts a host-supplied `session_id`. EIGHT, the same eight
+ * the PreToolUse matcher stamps today — but the two sets answer different
+ * questions and are allowed to diverge again: `subscribe` and `unsubscribe`
+ * are here for a non-CC ephemeral host that supplies the UUID itself, and a
  * listen-first seat reaches an identity through no other tool. Do not read a
  * statement about one of these sets as a statement about the other.
  *
@@ -143,6 +176,7 @@ const SESSION_ID_RECEIVING_TOOLS = [
   'subscribe',
   'unreact',
   'unsubscribe',
+  'upload_file',
 ] as const
 
 /** Enclosing declaration names in the adapter source that call `boundHttp()`. */
@@ -170,15 +204,35 @@ function adapterVerbsReachingBoundHttp(source: string): ReadonlySet<string> {
 interface ToolFacts {
   readonly verbs: ReadonlySet<string>
   readonly inboxVerbs: ReadonlySet<string>
+  readonly attachmentVerbs: ReadonlySet<string>
   readonly receivesSessionId: boolean
   readonly advertisesSessionId: boolean
 }
 
 /**
- * Per-tool: which publisher verbs and which inbox verbs its handler calls,
- * whether it accepts a host-supplied `session_id`, and whether it advertises
- * one on its `inputSchema`. The last is traced only so the assertions can show
- * it is nowhere — the two facts are separate and stay separately measured.
+ * `const <alias> = deps.<field>` bindings in the tools source — the hop that
+ * hides an attachment tool's adapter path from a line-wise scan. `upload_file`'s
+ * handler calls `upload(path)`; only this binding says `upload` is
+ * `deps.upload`, and only {@link ATTACHMENT_DEP_ADAPTER_MEMBER} says
+ * `deps.upload` is `adapter.uploadFile`.
+ */
+function depAliases(source: string): ReadonlyMap<string, string> {
+  const aliases = new Map<string, string>()
+  for (const line of source.split('\n')) {
+    const m = line.match(/^ {4}const ([a-zA-Z]+) = deps\.([a-zA-Z]+)$/)
+    const alias = m?.[1]
+    const field = m?.[2]
+    if (alias !== undefined && field !== undefined) aliases.set(alias, field)
+  }
+  return aliases
+}
+
+/**
+ * Per-tool: which publisher verbs, inbox verbs and attachment verbs its handler
+ * reaches, whether it accepts a host-supplied `session_id`, and whether it
+ * advertises one on its `inputSchema`. The last is traced only so the
+ * assertions can show it is nowhere — the two facts are separate and stay
+ * separately measured.
  */
 function toolFactsFromToolsSource(source: string): ReadonlyMap<string, ToolFacts> {
   const facts = new Map<
@@ -186,10 +240,12 @@ function toolFactsFromToolsSource(source: string): ReadonlyMap<string, ToolFacts
     {
       verbs: Set<string>
       inboxVerbs: Set<string>
+      attachmentVerbs: Set<string>
       receivesSessionId: boolean
       advertisesSessionId: boolean
     }
   >()
+  const aliases = depAliases(source)
   let current: string | undefined
   for (const line of source.split('\n')) {
     const named = line.match(/^ {6}name: '([a-z_]+)',$/)?.[1]
@@ -198,6 +254,7 @@ function toolFactsFromToolsSource(source: string): ReadonlyMap<string, ToolFacts
       facts.set(named, {
         verbs: new Set(),
         inboxVerbs: new Set(),
+        attachmentVerbs: new Set(),
         receivesSessionId: false,
         advertisesSessionId: false,
       })
@@ -215,6 +272,19 @@ function toolFactsFromToolsSource(source: string): ReadonlyMap<string, ToolFacts
       const captured = verb[1]
       if (captured !== undefined) entry.inboxVerbs.add(captured)
     }
+    // Attachment verbs bind too (comms-qpup). Traced through the dep alias
+    // because the tool layer never names the adapter member: `upload_file`
+    // calls a closure `server.ts` handed it. Tracing only the two receivers
+    // above is how a binding tool would sit outside this suite's compared set —
+    // the comms-65nj failure this file's header names.
+    for (const [alias, field] of aliases) {
+      const member = ATTACHMENT_DEP_ADAPTER_MEMBER[field]
+      if (member === undefined) continue
+      // Skip the binding line itself; it sits between two tool defs and would
+      // otherwise be attributed to whichever one the scan is currently inside.
+      if (new RegExp(`^ {4}const ${alias} = deps\\.`).test(line)) continue
+      if (new RegExp(`(?<![\\w.])${alias}(?![\\w])`).test(line)) entry.attachmentVerbs.add(member)
+    }
     // The accept-side marker: an argument the host stamps in, admitted by the
     // guard in `registerTools` and absent from `inputSchema`.
     if (line.includes('hostSuppliedArgs: hostSuppliedSessionId')) entry.receivesSessionId = true
@@ -222,7 +292,10 @@ function toolFactsFromToolsSource(source: string): ReadonlyMap<string, ToolFacts
     if (/^ +session_id: /.test(line)) entry.advertisesSessionId = true
   }
   return new Map(
-    [...facts].map(([name, e]) => [name, { ...e, verbs: e.verbs, inboxVerbs: e.inboxVerbs }]),
+    [...facts].map(([name, e]) => [
+      name,
+      { ...e, verbs: e.verbs, inboxVerbs: e.inboxVerbs, attachmentVerbs: e.attachmentVerbs },
+    ]),
   )
 }
 
@@ -266,7 +339,7 @@ test('the set of adapter declarations reaching boundHttp is the pinned one', asy
 // them reads "no tool violates this", which a scan that matches nothing
 // satisfies trivially — so assert first that the scan finds the set it is
 // supposed to find.
-test('the tools accepting a host-supplied session_id are exactly the pinned seven', async () => {
+test('the tools accepting a host-supplied session_id are exactly the pinned eight', async () => {
   const facts = toolFactsFromToolsSource(await toolsSource())
   const receiving = [...facts]
     .filter(([, f]) => f.receivesSessionId)
@@ -312,6 +385,55 @@ test('every tool whose adapter path reaches boundHttp is in the PreToolUse match
   expect(missing).toEqual([])
 })
 
+// The same rule again, over the ATTACHMENT verbs that began binding with
+// comms-qpup. Its own assertion with its own named set, for the reason the
+// inbox rule has one: a rule that compares over a set which no longer covers
+// every binding path goes green by not looking.
+test('every tool whose adapter path reaches boundHttp via an attachment dep receives session_id', async () => {
+  const facts = toolFactsFromToolsSource(await toolsSource())
+  const offenders = [...facts]
+    .filter(
+      ([, f]) =>
+        [...f.attachmentVerbs].some((v) =>
+          (BOUND_ATTACHMENT_VERBS as ReadonlyArray<string>).includes(v),
+        ) && !f.receivesSessionId,
+    )
+    .map(([name]) => name)
+    .sort()
+  expect(offenders).toEqual([])
+})
+
+test('every tool whose adapter path reaches boundHttp via an attachment dep is in the matcher', async () => {
+  const facts = toolFactsFromToolsSource(await toolsSource())
+  const matched = alternationToolsFromMatcher(injectSessionIdMatcher(hooksManifest))
+  const missing = [...facts]
+    .filter(([, f]) =>
+      [...f.attachmentVerbs].some((v) =>
+        (BOUND_ATTACHMENT_VERBS as ReadonlyArray<string>).includes(v),
+      ),
+    )
+    .map(([name]) => name)
+    .filter((name) => !matched.has(name))
+    .sort()
+  expect(missing).toEqual([])
+})
+
+// The pin that keeps the two rules above from holding by not looking. The
+// attachment trace runs through an alias hop, so it has more ways to stop
+// matching than the other two — assert it still finds the tool it is for.
+test('the tools reaching a bound attachment verb are exactly upload_file', async () => {
+  const facts = toolFactsFromToolsSource(await toolsSource())
+  const reaching = [...facts]
+    .filter(([, f]) =>
+      [...f.attachmentVerbs].some((v) =>
+        (BOUND_ATTACHMENT_VERBS as ReadonlyArray<string>).includes(v),
+      ),
+    )
+    .map(([name]) => name)
+    .sort()
+  expect(reaching).toEqual(['upload_file'])
+})
+
 // The same rule, stated over the INBOX verbs that began binding with
 // comms-g5zh.2/.3. Kept as its own assertion with its own named list so the
 // publisher-side rule above cannot go green on a set that no longer covers
@@ -354,12 +476,15 @@ test('the matcher carries no tool that never reaches boundHttp and never binds',
     .filter((name) => {
       const f = facts.get(name)
       if (f === undefined) return true
-      // Either receiver counts. A tool binds through the publisher verbs or
-      // through the inbox verbs; asking only about the first would call a
-      // legitimately-stamped `subscribe` an orphan.
+      // Any receiver counts. A tool binds through the publisher verbs, the
+      // inbox verbs or an attachment dep; asking only about the first would
+      // call a legitimately-stamped `subscribe` an orphan.
       return (
         ![...f.verbs].some((v) => (BOUND_VERBS as ReadonlyArray<string>).includes(v)) &&
-        ![...f.inboxVerbs].some((v) => (BOUND_INBOX_VERBS as ReadonlyArray<string>).includes(v))
+        ![...f.inboxVerbs].some((v) => (BOUND_INBOX_VERBS as ReadonlyArray<string>).includes(v)) &&
+        ![...f.attachmentVerbs].some((v) =>
+          (BOUND_ATTACHMENT_VERBS as ReadonlyArray<string>).includes(v),
+        )
       )
     })
     .sort()
@@ -398,17 +523,25 @@ test('toolFactsFromToolsSource attributes verbs and session_id to the enclosing 
           session_id: sessionIdField,
         },
       },
+    const upload = deps.upload
+      name: 'epsilon',
+      hostSuppliedArgs: hostSuppliedSessionId,
+      handler: async (args) => {
+        const result = await run(upload(path))
+      },
   `
   const facts = toolFactsFromToolsSource(synthetic)
   expect(facts.get('alpha')).toEqual({
     verbs: new Set(['post']),
     inboxVerbs: new Set(),
+    attachmentVerbs: new Set(),
     receivesSessionId: true,
     advertisesSessionId: false,
   })
   expect(facts.get('beta')).toEqual({
     verbs: new Set(),
     inboxVerbs: new Set(),
+    attachmentVerbs: new Set(),
     receivesSessionId: false,
     advertisesSessionId: false,
   })
@@ -417,16 +550,31 @@ test('toolFactsFromToolsSource attributes verbs and session_id to the enclosing 
   expect(facts.get('gamma')).toEqual({
     verbs: new Set(),
     inboxVerbs: new Set(['subscribe']),
+    attachmentVerbs: new Set(),
     receivesSessionId: false,
     advertisesSessionId: false,
   })
   // The advertise-side trace catches a schema property coming back, and does
-  // not confuse it with the accept-side marker.
+  // not confuse it with the accept-side marker. `delta` also sits immediately
+  // before the `const upload = deps.upload` binding, so its empty
+  // `attachmentVerbs` is what proves the binding line is not attributed to
+  // whichever tool the scan is currently inside.
   expect(facts.get('delta')).toEqual({
     verbs: new Set(),
     inboxVerbs: new Set(),
+    attachmentVerbs: new Set(),
     receivesSessionId: false,
     advertisesSessionId: true,
+  })
+  // The alias hop, end to end: `upload` resolves through the binding to
+  // `deps.upload`, and `ATTACHMENT_DEP_ADAPTER_MEMBER` resolves that to
+  // `adapter.uploadFile` — the member the tool source never names.
+  expect(facts.get('epsilon')).toEqual({
+    verbs: new Set(),
+    inboxVerbs: new Set(),
+    attachmentVerbs: new Set(['uploadFile']),
+    receivesSessionId: true,
+    advertisesSessionId: false,
   })
 })
 
