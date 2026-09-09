@@ -134,6 +134,12 @@ Places the current implementation fails this reference.
   `read_thread` and `list_channels`; a human member also gets search and
   unread state. Principle 1, prospectively — this is a gap to fill, not
   something to cut.
+- **A capped read does not say it was capped.** A human scrolling back sees
+  where they stopped. An agent whose read hits `limit` gets a page that looks
+  the same as a complete one, with the old end of its window silently missing.
+  The bounds themselves are honest — a window is read out of history rather
+  than filtered off the newest page — but the cap is not. Principle 1, and a
+  gap to fill.
 
 ## Worked example: lazy acquire
 
