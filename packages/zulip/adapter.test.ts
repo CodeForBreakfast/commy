@@ -2169,6 +2169,147 @@ effectTest('history.readChannel filters by range.until (epoch seconds, inclusive
   }),
 )
 
+const historyRow = (id: number, subject = 'a'): Record<string, unknown> => ({
+  id,
+  sender_id: 5,
+  sender_full_name: 'Robin Reyes',
+  stream_id: 1234,
+  display_recipient: 'general',
+  subject,
+  content: `m${id}`,
+  timestamp: 1714000000 + id * 100,
+})
+
+const rowTs = (id: number) => decodeTimestampSync(1714000000 + id * 100)
+
+/**
+ * Answer consecutive `/messages` reads with the given pages, then with an
+ * empty one. Zulip's anchor is inclusive, so a page anchored on the id below
+ * the last one re-offers that row — the overlap these pages reproduce.
+ */
+const seedMessagePages = (
+  stub: StubHttpClient,
+  pages: ReadonlyArray<ReadonlyArray<Record<string, unknown>>>,
+): Effect.Effect<void> =>
+  stub
+    .respond('GET', '/api/v1/messages', messagesPage([]))
+    .pipe(Effect.zipRight(stub.respondSequence('GET', '/api/v1/messages', pages.map(messagesPage))))
+
+const historyAnchors = (stub: StubHttpClient) =>
+  stub.captured.pipe(
+    Effect.map((reqs) =>
+      reqs
+        .filter((r) => r.method === 'GET' && r.url.pathname === '/api/v1/messages')
+        .map((r) => r.url.searchParams.get('anchor')),
+    ),
+  )
+
+// The defect this fix removes. Every message in the window sits below a page
+// selected purely by recency, so filtering that page empties it and the read
+// returns an authoritative-looking nothing.
+effectTest('history.readChannel pages back to a window that lies below the newest page', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
+    yield* seedMessagePages(stub, [
+      [7, 8, 9].map((id) => historyRow(id)),
+      [4, 5, 6, 7].map((id) => historyRow(id)),
+      [1, 2, 3, 4].map((id) => historyRow(id)),
+    ])
+    const messages = yield* adapter.history.readChannel(generalChannel.name, {
+      until: rowTs(3),
+      limit: 3,
+    })
+    expect(messages.map((m) => m.body)).toEqual([
+      decodeMessageBodySync('m1'),
+      decodeMessageBodySync('m2'),
+      decodeMessageBodySync('m3'),
+    ])
+    expect(yield* historyAnchors(stub)).toEqual(['newest', '7', '4'])
+  }),
+)
+
+effectTest('history.readThread pages back to a window that lies below the newest page', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
+    yield* seedMessagePages(stub, [
+      [7, 8, 9].map((id) => historyRow(id, 'planning')),
+      [4, 5, 6, 7].map((id) => historyRow(id, 'planning')),
+      [1, 2, 3, 4].map((id) => historyRow(id, 'planning')),
+    ])
+    const messages = yield* adapter.history.readThread(
+      generalChannel.name,
+      decodeThreadNameSync('planning'),
+      { until: rowTs(3), limit: 3 },
+    )
+    expect(messages.map((m) => m.body)).toEqual([
+      decodeMessageBodySync('m1'),
+      decodeMessageBodySync('m2'),
+      decodeMessageBodySync('m3'),
+    ])
+  }),
+)
+
+// A row Zulip re-offers on the next page because the anchor is inclusive must
+// not be counted twice, and the window must come back in ascending order.
+effectTest('history.readChannel collects a row that spans two pages exactly once', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
+    yield* seedMessagePages(stub, [
+      [7, 8, 9].map((id) => historyRow(id)),
+      [4, 5, 6, 7].map((id) => historyRow(id)),
+      [1, 2, 3, 4].map((id) => historyRow(id)),
+    ])
+    const messages = yield* adapter.history.readChannel(generalChannel.name, {
+      since: rowTs(1),
+      limit: 50,
+    })
+    expect(messages.map((m) => m.body)).toEqual(
+      [1, 2, 3, 4, 5, 6, 7, 8, 9].map((id) => decodeMessageBodySync(`m${id}`)),
+    )
+  }),
+)
+
+// A read with no bounds is answered by the newest page and nothing more —
+// the walk exists to reach a window, and there is no window to reach.
+effectTest('history.readChannel with no bounds reads a single page', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
+    yield* seedMessagePages(stub, [[7, 8, 9].map((id) => historyRow(id))])
+    const messages = yield* adapter.history.readChannel(generalChannel.name, { limit: 3 })
+    expect(messages).toHaveLength(3)
+    expect(yield* historyAnchors(stub)).toEqual(['newest'])
+  }),
+)
+
+// `limit` stays a cap that truncates from the old end: the walk stops once it
+// holds that many, and keeps the newest of them.
+effectTest('history.readChannel keeps the newest messages when the window overruns limit', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
+    yield* seedMessagePages(stub, [
+      [7, 8, 9].map((id) => historyRow(id)),
+      [4, 5, 6, 7].map((id) => historyRow(id)),
+    ])
+    const messages = yield* adapter.history.readChannel(generalChannel.name, {
+      since: rowTs(1),
+      limit: 4,
+    })
+    expect(messages.map((m) => m.body)).toEqual(
+      [6, 7, 8, 9].map((id) => decodeMessageBodySync(`m${id}`)),
+    )
+  }),
+)
+
 effectTest('history.readThread narrows by both channel and topic', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
@@ -2640,6 +2781,26 @@ effectTest('inbox.replay(since) returns message-posted events for messages with 
   }),
 )
 
+// Boot catch-up carries the same defect independently: a seat offline across
+// more realm traffic than one page holds silently lost the overflow.
+effectTest('inbox.replay pages back until it reaches the catch-up bound', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, MAINTAINER])
+    yield* seedMessagePages(stub, [
+      [7, 8, 9].map((id) => historyRow(id, 'lobby')),
+      [4, 5, 6, 7].map((id) => historyRow(id, 'lobby')),
+      [1, 2, 3, 4].map((id) => historyRow(id, 'lobby')),
+    ])
+    const events = yield* adapter.inbox.replay(rowTs(2))
+    expect(events.flatMap((e) => (e.kind === 'message-posted' ? [e.message.body] : []))).toEqual(
+      [2, 3, 4, 5, 6, 7, 8, 9].map((id) => decodeMessageBodySync(`m${id}`)),
+    )
+    expect(yield* historyAnchors(stub)).toEqual(['newest', '7', '4'])
+  }),
+)
+
 effectTest('inbox.replay calls /messages with anchor=newest and a generous num_before', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
@@ -2730,6 +2891,9 @@ effectTest(
           history_limited: false,
         },
       })
+      // Catch-up walks back until a page adds nothing new, so the realm has
+      // to keep answering past the raw page and its rendered twin.
+      yield* stub.respond('GET', '/api/v1/messages', messagesPage([]))
       yield* stub.respondSequence('GET', '/api/v1/messages', [
         replayPage('@**hermes-agent** wake up'),
         replayPage(
