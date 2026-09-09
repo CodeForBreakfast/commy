@@ -6,14 +6,10 @@ import type { ZulipParams } from './http.ts'
  *
  * `GET /messages` selects a page by anchor and count and has no timestamp
  * predicate at all, so a caller holding a `since`/`until` window cannot ask
- * for it. Asking for the newest page and filtering it is what produces the
- * silent false zero this module exists to remove: when every message on the
- * recency-selected page lies outside the window, the filter empties it and
- * the caller sees an authoritative-looking nothing.
- *
- * So the window is reached by walking back to it, one anchored page at a
- * time, until the window's lower bound is crossed, the caller's cap is met,
- * or history runs out.
+ * for it. Filtering the newest page instead is what produces a silent false
+ * zero: when every message on a recency-selected page lies outside the
+ * window, the filter empties it and the caller sees an authoritative-looking
+ * nothing.
  */
 
 /** The only two fields the walk reads off a message row. */
@@ -62,12 +58,9 @@ type Walk<Out> = {
  * The walk stops on the first of: a page carrying a row older than `since`,
  * so the window's start has been passed; `cap` results collected; a page that
  * adds no row the walk has not already seen, which covers both exhausted
- * history and an anchor naming no live message; or the `maxPages` budget. The
- * last two make a short read possible, and a short read is truthful in a way
- * the post-filtered page was not.
+ * history and an anchor naming no live message; or the `maxPages` budget.
  *
- * `cap` truncates from the old end, keeping the newest results — the same
- * thing a `limit` meant before there was a walk.
+ * `cap` truncates from the old end, keeping the newest results.
  */
 export const readWindow = <Row extends PagedRow, Out, E, R>(options: {
   /** Query fields shared by every page — the narrow, and nothing anchored. */
@@ -93,16 +86,18 @@ export const readWindow = <Row extends PagedRow, Out, E, R>(options: {
       num_before: options.pageSize,
       num_after: 0,
     }
-    const stop: Walk<Out> = { ...state, more: false }
     return options.fetchPage(query).pipe(
       Effect.flatMap((rows): Effect.Effect<Walk<Out>, E, R> => {
-        if (!Arr.isNonEmptyReadonlyArray(rows)) return Effect.succeed(stop)
+        const exhausted: Walk<Out> = { ...state, more: false }
+        if (!Arr.isNonEmptyReadonlyArray(rows)) return Effect.succeed(exhausted)
         const fresh = rows.filter((r) => !HashSet.has(state.seen, r.id))
-        if (!Arr.isNonEmptyReadonlyArray(fresh)) return Effect.succeed(stop)
+        if (!Arr.isNonEmptyReadonlyArray(fresh)) return Effect.succeed(exhausted)
         const kept = fresh.filter(keep)
         const oldestId = Arr.min(Order.number)(Arr.map(rows, (r) => r.id))
         const oldestTs = Arr.min(Order.number)(Arr.map(rows, (r) => r.timestamp))
-        // A page holding nothing in the window costs no mapping, and for the
+        const crossedLowerBound =
+          options.window.since !== undefined && oldestTs < options.window.since
+        // A page holding nothing in the window is not mapped, and for the
         // rendered-content read that means no request.
         const mapped = Arr.isEmptyReadonlyArray(kept)
           ? Effect.succeed<ReadonlyArray<Out>>([])
@@ -110,16 +105,14 @@ export const readWindow = <Row extends PagedRow, Out, E, R>(options: {
         return mapped.pipe(
           Effect.map((out) => {
             const collected = state.collected + out.length
+            const capMet = options.cap !== undefined && collected >= options.cap
             return {
               anchor: oldestId,
               pagesLeft: state.pagesLeft - 1,
               seen: rows.reduce((s, r) => HashSet.add(s, r.id), state.seen),
               byPage: [...state.byPage, out],
               collected,
-              more:
-                state.pagesLeft > 1 &&
-                !(options.window.since !== undefined && oldestTs < options.window.since) &&
-                !(options.cap !== undefined && collected >= options.cap),
+              more: state.pagesLeft > 1 && !crossedLowerBound && !capMet,
             }
           }),
         )
@@ -127,17 +120,16 @@ export const readWindow = <Row extends PagedRow, Out, E, R>(options: {
     )
   }
 
-  return Effect.iterate(
-    {
-      anchor: 'newest',
-      pagesLeft: options.maxPages,
-      seen: HashSet.empty<number>(),
-      byPage: [],
-      collected: 0,
-      more: options.maxPages > 0,
-    } satisfies Walk<Out> as Walk<Out>,
-    { while: (state) => state.more, body: step },
-  ).pipe(
+  const start: Walk<Out> = {
+    anchor: 'newest',
+    pagesLeft: options.maxPages,
+    seen: HashSet.empty<number>(),
+    byPage: [],
+    collected: 0,
+    more: options.maxPages > 0,
+  }
+
+  return Effect.iterate(start, { while: (state) => state.more, body: step }).pipe(
     Effect.map((state) => {
       const all = Arr.flatten(Arr.reverse(state.byPage))
       return options.cap === undefined ? all : Arr.takeRight(all, options.cap)

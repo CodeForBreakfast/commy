@@ -2310,6 +2310,25 @@ effectTest('history.readChannel keeps the newest messages when the window overru
   }),
 )
 
+// The directory read runs alongside the walk, so a window that turns out
+// empty never consumes it. It must still be waited on, or a realm that has
+// stopped answering /users reads as a channel with nothing in the window.
+effectTest('history.readChannel surfaces a directory failure on an empty window', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedMessagePages(stub, [])
+    yield* stub.respond('GET', '/api/v1/users', {
+      body: { result: 'error', msg: 'realm unavailable' },
+      status: 503,
+    })
+    const err = yield* Effect.flip(
+      adapter.history.readChannel(generalChannel.name, { since: rowTs(1), limit: 10 }),
+    )
+    expect(err._tag).toBe('HistoryError')
+  }),
+)
+
 effectTest('history.readThread narrows by both channel and topic', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient

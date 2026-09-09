@@ -829,7 +829,7 @@ export const zulipAdapter = (
         // the first page rather than in front of it. Joined on the first page
         // that has anything to map.
         const directoryFiber = yield* Effect.fork(buildDirectoryLookup())
-        return yield* readWindow({
+        const messages = yield* readWindow({
           query: { narrow: JSON.stringify(narrow), apply_markdown: false },
           window: { since: range.since, until: range.until },
           // An unbounded read is answered by the newest page, so its page is
@@ -854,6 +854,11 @@ export const zulipAdapter = (
               )
             }),
         })
+        // A walk that found nothing never mapped a page, so nothing has
+        // joined the directory yet. Join it anyway: a failed directory read
+        // must not pass for an empty window.
+        yield* Fiber.join(directoryFiber)
+        return messages
       })
 
     // Zulip constructs bot delivery emails as `<short_name>-bot@<bot_domain>`
@@ -2069,6 +2074,10 @@ export const zulipAdapter = (
                 })
               }),
           })
+          // A catch-up that found nothing never mapped a page, so nothing has
+          // joined the directory yet. Join it anyway: a failed directory read
+          // must not pass for a seat that missed nothing.
+          yield* Fiber.join(directoryFiber)
           const out: InboundEvent[] = []
           for (const mapped of perMessage) {
             for (const ev of mapped) {
