@@ -426,7 +426,11 @@ const parseRange = (range: {
 const rangeSchemaFields = {
   since: { type: 'number', description: 'Inclusive lower bound in epoch seconds' },
   until: { type: 'number', description: 'Inclusive upper bound in epoch seconds' },
-  limit: { type: 'number', description: 'Hard cap on returned messages' },
+  limit: {
+    type: 'number',
+    description:
+      "Hard cap on returned messages, cut from the window's old end. A result holding exactly this many may omit older messages inside the window — compare the oldest message returned against since to tell one from the other.",
+  },
 } as const
 
 /**
@@ -996,7 +1000,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     {
       name: 'read_channel',
       description:
-        'Read recent messages from a channel by name. Returns {messages: Message[]} bounded by optional since/until/limit. Each message carries a clickable permalink (and channel.permalink / thread.permalink) — when you cite one of these to a human, render it as that permalink, not a bare name or id.',
+        "Read messages from a channel by name. Returns {messages: Message[]}. since/until name a window and are read out of history, so a window further back than the newest messages still comes back; limit then caps the result and cuts from the window's old end. Each message carries a clickable permalink (and channel.permalink / thread.permalink) — when you cite one of these to a human, render it as that permalink, not a bare name or id.",
       inputSchema: {
         type: 'object',
         properties: {
@@ -1025,7 +1029,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     {
       name: 'read_thread',
       description:
-        'Read recent messages from a thread (topic) within a channel. Returns {messages: Message[]} bounded by optional since/until/limit. Each message carries a clickable permalink (and channel.permalink / thread.permalink) — when you cite one of these to a human, render it as that permalink, not a bare name or id.',
+        "Read messages from a thread (topic) within a channel. Returns {messages: Message[]}. since/until name a window and are read out of history, so a window further back than the newest messages still comes back; limit then caps the result and cuts from the window's old end. Each message carries a clickable permalink (and channel.permalink / thread.permalink) — when you cite one of these to a human, render it as that permalink, not a bare name or id.",
       inputSchema: {
         type: 'object',
         properties: {
