@@ -505,9 +505,10 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
   const projectForCwd = deps.projectForCwd ?? (() => Effect.succeed(undefined))
   /**
    * The tools that accept a host-supplied `session_id` (see
-   * {@link ToolDef.hostSuppliedArgs}). SEVEN tools carry it, not the five in
-   * Claude Code's PreToolUse matcher: `subscribe` and `unsubscribe` are here
-   * for the non-CC ephemeral host that supplies the UUID itself, which is a
+   * {@link ToolDef.hostSuppliedArgs}). EIGHT tools carry it. That is the same
+   * eight Claude Code's PreToolUse matcher stamps today, but the two sets are
+   * separate questions and are allowed to differ: this one also serves the
+   * non-CC ephemeral host that supplies the UUID itself, which is a
    * listen-first seat's only route to an identity. A host stamping the arg on
    * a tool CC never stamps must not be told the argument is unknown.
    *
@@ -1293,10 +1294,16 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             type: 'string',
             description: 'Absolute path to the local file to upload (e.g. /tmp/chart.png)',
           },
+          cwd: cwdField,
         },
         required: ['path'],
         additionalProperties: false,
       },
+      // An upload binds (comms-qpup). The file it writes carries an owner, and
+      // Zulip grants readers access to it only when that owner is also the
+      // account that sends the referencing message — so the upload has to go out
+      // under the calling session's own bot, which needs the session id here.
+      hostSuppliedArgs: hostSuppliedSessionId,
       handler: async (args) => {
         const run = runFor(args)
         const { path } = await run(Schema.decodeUnknown(UploadFileArgs)(args))
