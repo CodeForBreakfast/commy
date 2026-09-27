@@ -34,12 +34,27 @@ Sweep merged PRs since the last release tag:
 
 ```bash
 git fetch origin --tags
-last=$(git describe --tags --match 'commy-v*' --abbrev=0)
+last=$(git describe --tags --match 'commy-v*' --exclude '*-rc.*' --abbrev=0)
 git log --oneline "${last}..origin/main"
 ```
 
+The `--exclude` skips release-candidate tags, so a full release sweeps
+everything since the last full release rather than since its own rc.
+
 Pick `MAJOR.MINOR.PATCH` per semver against what landed (behaviour change →
 minor; fix only → patch; breaking → major). The previous version is `${last#commy-v}`.
+
+#### A release candidate
+
+To soak a build before its full release, cut it as `MAJOR.MINOR.PATCH-rc.N`,
+numbered for the full release it leads to: `0.24.0-rc.1` comes before `0.24.0`.
+It goes through every step below unchanged. CI publishes it to npm under
+`next`, not `latest`, and marks its GitHub Release as a prerelease. Pin a
+marketplace to its `commy-v<version>` tag to run it.
+
+`rc.N` is the only prerelease shape the release path accepts. `uv.lock`
+records it in PEP 440 form, as `0.24.0rc1`, and the lockstep test compares it
+that way.
 
 ### 2. Bump the 7 lockstep version sites
 

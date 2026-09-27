@@ -1,10 +1,12 @@
 import { expect, test } from 'bun:test'
 
 import { PLUGIN_VERSION } from '@commy/mcp/mcp-server'
+import { RELEASE_VERSION_SHAPE } from '../../scripts/release-detection.ts'
 import pluginManifest from './.claude-plugin/plugin.json'
 import packageManifest from './package.json'
 
-const SEMVER_SHAPE = /^\d+\.\d+\.\d+$/
+// uv.lock records the PEP 440 normal form, which spells 0.24.0-rc.1 as 0.24.0rc1.
+const pep440 = (version: string): string => version.replace('-rc.', 'rc')
 
 /**
  * Seven sites, one truth. `.claude-plugin/plugin.json` is what Claude
@@ -72,33 +74,29 @@ test('the hermes plugin.yaml version matches plugin.json', () => {
 })
 
 test('the hermes uv.lock self-entry version matches plugin.json (uv sync was run)', () => {
-  expect(hermesLockSelfEntry?.version).toBe(pluginManifest.version)
+  expect(hermesLockSelfEntry?.version).toBe(pep440(pluginManifest.version))
 })
 
-test('plugin.json version matches semver MAJOR.MINOR.PATCH shape', () => {
-  expect(pluginManifest.version).toMatch(SEMVER_SHAPE)
+test('plugin.json version matches the release version shape', () => {
+  expect(pluginManifest.version).toMatch(RELEASE_VERSION_SHAPE)
 })
 
-test('plugin package.json version matches semver MAJOR.MINOR.PATCH shape', () => {
-  expect(packageManifest.version).toMatch(SEMVER_SHAPE)
+test('plugin package.json version matches the release version shape', () => {
+  expect(packageManifest.version).toMatch(RELEASE_VERSION_SHAPE)
 })
 
-test('mcp package.json version matches semver MAJOR.MINOR.PATCH shape', () => {
-  expect(mcpPackageManifest.version).toMatch(SEMVER_SHAPE)
+test('mcp package.json version matches the release version shape', () => {
+  expect(mcpPackageManifest.version).toMatch(RELEASE_VERSION_SHAPE)
 })
 
-test('mcp-server.ts PLUGIN_VERSION matches semver MAJOR.MINOR.PATCH shape', () => {
-  expect(PLUGIN_VERSION).toMatch(SEMVER_SHAPE)
+test('mcp-server.ts PLUGIN_VERSION matches the release version shape', () => {
+  expect(PLUGIN_VERSION).toMatch(RELEASE_VERSION_SHAPE)
 })
 
-test('hermes pyproject.toml version matches semver MAJOR.MINOR.PATCH shape', () => {
-  expect(hermesPyproject.project.version).toMatch(SEMVER_SHAPE)
+test('hermes pyproject.toml version matches the release version shape', () => {
+  expect(hermesPyproject.project.version).toMatch(RELEASE_VERSION_SHAPE)
 })
 
-test('hermes plugin.yaml version matches semver MAJOR.MINOR.PATCH shape', () => {
-  expect(hermesPluginManifest.version).toMatch(SEMVER_SHAPE)
-})
-
-test('hermes uv.lock self-entry version matches semver MAJOR.MINOR.PATCH shape', () => {
-  expect(hermesLockSelfEntry?.version).toMatch(SEMVER_SHAPE)
+test('hermes plugin.yaml version matches the release version shape', () => {
+  expect(hermesPluginManifest.version).toMatch(RELEASE_VERSION_SHAPE)
 })

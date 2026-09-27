@@ -19,6 +19,10 @@ name: Release
 #      OIDC trusted publishing (no NPM_TOKEN).
 #   5. release     — cut the GitHub Release from the checked-in notes file.
 #
+# A release candidate (X.Y.Z-rc.N) takes the same path, but publishes to npm
+# under `next` and marks its GitHub Release as a prerelease, so `latest` on both
+# keeps pointing at the last full release.
+#
 # Two load-bearing constraints:
 #   * npm's Trusted Publisher (OIDC) is pinned to this workflow's filename
 #     (`release.yml`). The publish step must stay in this file — renaming or
@@ -68,13 +72,15 @@ jobs:
       release: ${{ steps.detect.outputs.release }}
       version: ${{ steps.detect.outputs.version }}
       tag: ${{ steps.detect.outputs.tag }}
+      prerelease: ${{ steps.detect.outputs.prerelease }}
+      npm_dist_tag: ${{ steps.detect.outputs.npm_dist_tag }}
     steps:
       # SHA-pinned like ci.yml; Renovate (.github/renovate.json5) bumps it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
       # Same module the unit tests cover, run with the flake-pinned bun. It reads
       # plugin.json, checks the notes file, queries the remote for the tag, and
-      # writes release/version/tag to $GITHUB_OUTPUT.
+      # writes release/version/tag/prerelease/npm_dist_tag to $GITHUB_OUTPUT.
       - id: detect
         env:
           FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force }}
@@ -90,6 +96,8 @@ jobs:
     env:
       TAG: ${{ needs.detect.outputs.tag }}
       VERSION: ${{ needs.detect.outputs.version }}
+      PRERELEASE: ${{ needs.detect.outputs.prerelease }}
+      NPM_DIST_TAG: ${{ needs.detect.outputs.npm_dist_tag }}
     steps:
       # SHA-pinned like ci.yml; Renovate (.github/renovate.json5) bumps them.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -141,7 +149,7 @@ jobs:
       # This step stays in release.yml (filename unchanged) — the OIDC pin is on
       # the workflow filename.
       - name: Publish to npm via OIDC trusted publishing
-        run: npm publish packages/mcp/dist
+        run: npm publish packages/mcp/dist --tag "${NPM_DIST_TAG}"
 
       # Cut the curated GitHub Release from the notes the bump PR checked in —
       # not raw git-log notes. --verify-tag refuses if the record tag is missing.
@@ -153,4 +161,5 @@ jobs:
           gh release create "${TAG}" \
             --title "commy ${VERSION}" \
             --notes-file "RELEASE-NOTES/${VERSION}.md" \
+            --prerelease="${PRERELEASE}" \
             --verify-tag
