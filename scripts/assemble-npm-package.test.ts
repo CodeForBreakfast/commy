@@ -28,7 +28,7 @@ test('assembles a dependency-free @codeforbreakfast/commy-mcp whose version trac
     // surface carries @codeforbreakfast.
     expect(manifest.name).toBe('@codeforbreakfast/commy-mcp')
     expect(NPM_PACKAGE_NAME).toBe('@codeforbreakfast/commy-mcp')
-    // Version is generated from plugin.json — the head of the six-site
+    // Version is generated from plugin.json — the head of the eight-site
     // lockstep (manifests.test.ts) — so it can never drift from a release.
     expect(manifest.version).toBe(PLUGIN_VERSION)
 

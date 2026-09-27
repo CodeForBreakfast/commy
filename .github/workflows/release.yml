@@ -12,7 +12,7 @@ name: Release
 #      yet (idempotency — every later push to main re-runs detect, and the tag is
 #      what stops a re-publish). Logic lives in scripts/release-detection.ts and
 #      is unit-tested (scripts/release-detection.test.ts).
-#   2. verify parity — re-run the seven-site lockstep test so the artifact, tag,
+#   2. verify parity — re-run the eight-site lockstep test so the artifact, tag,
 #      and Release can't ship a partially-bumped version.
 #   3. tag         — create+push the commy-v<version> tag as the record.
 #   4. publish-npm — build and publish @codeforbreakfast/commy-mcp to npm via
@@ -107,11 +107,12 @@ jobs:
           node-version: '24.18.0'
           registry-url: 'https://registry.npmjs.org'
 
-      # Re-check the seven-site version lockstep on the commit being released,
+      # Re-check the eight-site version lockstep on the commit being released,
       # before any outward act — a partially-bumped commit must never reach the
-      # registry. manifests.test.ts asserts all seven sites agree with
-      # plugin.json (the six hand-edited sites plus the uv.lock self-entry).
-      - name: Verify seven-site version parity
+      # registry. manifests.test.ts asserts all eight sites agree with
+      # plugin.json (six hand-edited sites, plus pyproject.toml and the uv.lock
+      # self-entry that `uv version` sets together).
+      - name: Verify eight-site version parity
         run: nix develop .#ci --command bash -euo pipefail -c 'bun install --frozen-lockfile && bun test clients/claude-code/manifests.test.ts'
 
       # The record tag, created from the released commit. checkout persists the

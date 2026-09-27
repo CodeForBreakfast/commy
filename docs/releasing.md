@@ -15,10 +15,10 @@ so there is no maintainer-local "release-plugin" skill to depend on.
 WORKER (this runbook)                         MAINTAINER    CI (release.yml)
 ─────────────────────                         ──────        ────────────────
 1. decide the bump (semver)
-2. edit the 7 lockstep version sites
+2. edit the 8 lockstep version sites
 3. write RELEASE-NOTES/<version>.md
 4. open PR, drive `bun run check` green  ──►  merge PR  ──► detect release
-                                                            verify 7-site parity
+                                                            verify 8-site parity
                                                             push commy-v<version> tag
                                                             publish npm (OIDC)
                                                             cut GitHub Release
@@ -56,9 +56,9 @@ marketplace to its `commy-v<version>` tag to run it.
 and `uv.lock` both record it in PEP 440 form, as `0.24.0rc1`, and the lockstep
 test compares them that way.
 
-### 2. Bump the 7 lockstep version sites
+### 2. Bump the 8 lockstep version sites
 
-All seven must read the new version. Five are hand-edited; the other two
+All eight must read the new version. Six are hand-edited; the other two
 (`clients/hermes/pyproject.toml` and `clients/hermes/uv.lock`) are set together
 by `uv version`, never hand-edited.
 
@@ -68,8 +68,10 @@ by `uv version`, never hand-edited.
 3. `packages/mcp/package.json`
 4. `packages/mcp/mcp-server.ts` — the `PLUGIN_VERSION` export
 5. `clients/hermes/commy/plugin.yaml`
-6. `clients/hermes/pyproject.toml`
-7. `clients/hermes/uv.lock` — set together with `pyproject.toml` by running
+6. `clients/claude-code/.mcp.json` — the `@codeforbreakfast/commy-mcp@<version>`
+   launcher pin, so the plugin and the server it starts move as one artefact
+7. `clients/hermes/pyproject.toml`
+8. `clients/hermes/uv.lock` — set together with `pyproject.toml` by running
 
    ```bash
    cd clients/hermes && uv version <version>
@@ -80,12 +82,11 @@ by `uv version`, never hand-edited.
    step. Never hand-edit either — the hermes gate runs `uv sync` and a stale
    lock fails CI. `uv` lives in the flake dev shell (`nix develop`).
 
-The first five are asserted in lockstep by
-[`clients/claude-code/manifests.test.ts`](../clients/claude-code/manifests.test.ts);
-that test also asserts the `pyproject.toml` version and the `uv.lock`
-self-entry against the PEP 440 form of the canonical version, so a forgotten
-or hand-edited bump fails at the unit-test bar. A partial bump cannot land
-green.
+All eight are asserted in lockstep by
+[`clients/claude-code/manifests.test.ts`](../clients/claude-code/manifests.test.ts).
+It checks the `pyproject.toml` version and the `uv.lock` self-entry against the
+PEP 440 form of the canonical version, so a forgotten or hand-edited bump fails
+at the unit-test bar. A partial bump cannot land green.
 
 ### 3. Write the release notes
 
@@ -124,7 +125,7 @@ When the bump commit lands on `main`, `release.yml`:
    [`scripts/release-detection.ts`](../scripts/release-detection.ts), unit-tested
    in `scripts/release-detection.test.ts`. An ordinary main push (no notes file,
    or already tagged) is a no-op.
-2. **verify parity** — re-runs the seven-site lockstep test on the merged commit.
+2. **verify parity** — re-runs the eight-site lockstep test on the merged commit.
 3. **tag** — creates and pushes `commy-v<version>` as the record.
 4. **publish** — builds and publishes `@codeforbreakfast/commy-mcp` to npm via
    OIDC trusted publishing (no token).

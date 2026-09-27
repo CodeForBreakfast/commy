@@ -2,7 +2,7 @@
   "mcpServers": {
     "commy": {
       "command": "npx",
-      "args": ["-y", "@codeforbreakfast/commy-mcp"],
+      "args": ["-y", "@codeforbreakfast/commy-mcp@0.22.0"],
       "cwd": "${CLAUDE_PLUGIN_ROOT}",
       "env": {
         "ZULIP_SITE": "${user_config.ZULIP_SITE}",
