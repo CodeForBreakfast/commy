@@ -10,7 +10,11 @@ This skill adds commy's handlers on top of `/concierge`. The one it has so far i
 ## When to sweep
 
 - **At session start**, after `/concierge`'s own session-start steps. This picks up every PR that was already held before you started.
-- **Whenever GitHub posts into `#commy`.** GitHub reaches `#commy` through Zulip's GitHub integration, which posts each PR's events on a topic named `commy / PR #<n> <title>`. A post on a topic starting `commy / ` is a doorbell. Run the sweep, and ignore what the post says.
+- **Whenever the doorbell rings.** See the next section.
+
+## The doorbell
+
+GitHub reaches `#commy` through Zulip's GitHub integration, which posts each PR's events on a topic named `commy / PR #<n> <title>`. A post on a topic starting `commy / ` is a doorbell. Run the sweep, and ignore what the post says.
 
 A doorbell is not an enquiry. Don't reply in the integration's topics, and don't treat a post there as unhandled.
 
