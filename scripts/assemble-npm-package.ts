@@ -26,7 +26,7 @@ export interface PublishManifest {
 }
 
 // The canonical version source — the same plugin.json release.yml verifies the
-// pushed tag against, and the head of the six-site lockstep
+// pushed tag against, and the head of the eight-site lockstep
 // (clients/claude-code/manifests.test.ts). Generating the published version
 // from it means the registry artifact can never drift from a release.
 function pluginVersion(repoRoot: string): string {

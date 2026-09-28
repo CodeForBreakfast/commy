@@ -63,7 +63,7 @@ Work on a branch and open a pull request against `main`. CI runs the same
 merge. File bugs and feature requests as GitHub issues.
 
 Cutting a release is its own flow — see [docs/releasing.md](docs/releasing.md):
-bump the seven lockstep version sites, write `RELEASE-NOTES/<version>.md`, open
+bump the eight lockstep version sites, write `RELEASE-NOTES/<version>.md`, open
 the bump PR. The maintainer's merge is the single trigger; CI tags, publishes to
 npm, and cuts the GitHub Release.
 

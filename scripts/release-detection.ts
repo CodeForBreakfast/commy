@@ -7,25 +7,38 @@ import { join } from 'node:path'
 // the `commy-v*` glob the workflow and the existing tag history use.
 export const RELEASE_TAG_PREFIX = 'commy-v'
 
-const SEMVER_SHAPE = /^\d+\.\d+\.\d+$/
+// A release is MAJOR.MINOR.PATCH, or MAJOR.MINOR.PATCH-rc.N for a release
+// candidate. rc.N is the only prerelease shape because the hermes uv.lock
+// records the PEP 440 spelling, and rc.N is the one that maps to it cleanly.
+export const RELEASE_VERSION_SHAPE = /^\d+\.\d+\.\d+(-rc\.\d+)?$/
 
 export function releaseTagName(version: string): string {
   return `${RELEASE_TAG_PREFIX}${version}`
 }
 
 // The canonical version source — `clients/claude-code/.claude-plugin/plugin.json`,
-// the head of the seven-site lockstep (clients/claude-code/manifests.test.ts).
+// the head of the eight-site lockstep (clients/claude-code/manifests.test.ts).
 // Reading the version from it here means the tag, the npm artifact, and the
 // GitHub Release all derive from the one truth the lockstep test guards.
 export function extractVersion(pluginManifestText: string): string {
   const manifest = JSON.parse(pluginManifestText) as { readonly version?: unknown }
   const version = manifest.version
-  if (typeof version !== 'string' || !SEMVER_SHAPE.test(version)) {
+  if (typeof version !== 'string' || !RELEASE_VERSION_SHAPE.test(version)) {
     throw new Error(
-      `plugin.json version is not a MAJOR.MINOR.PATCH string: ${JSON.stringify(version)}`,
+      `plugin.json version is not MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-rc.N: ${JSON.stringify(version)}`,
     )
   }
   return version
+}
+
+export function isPrerelease(version: string): boolean {
+  return version.includes('-')
+}
+
+// A release candidate goes to `next` so `npx @codeforbreakfast/commy-mcp`
+// keeps resolving the last full release.
+export function npmDistTag(version: string): 'latest' | 'next' {
+  return isPrerelease(version) ? 'next' : 'latest'
 }
 
 export interface ReleaseDecisionInputs {
@@ -96,6 +109,9 @@ if (import.meta.main) {
 
   const githubOutput = process.env['GITHUB_OUTPUT']
   if (githubOutput) {
-    appendFileSync(githubOutput, `release=${decision.release}\nversion=${version}\ntag=${tag}\n`)
+    appendFileSync(
+      githubOutput,
+      `release=${decision.release}\nversion=${version}\ntag=${tag}\nprerelease=${isPrerelease(version)}\nnpm_dist_tag=${npmDistTag(version)}\n`,
+    )
   }
 }
