@@ -543,8 +543,9 @@ test('post accepts a host-supplied session_id that no schema advertises', () =>
         const rig = yield* buildSessionRig()
         const listed = yield* Effect.promise(() => rig.client.listTools())
         const post = listed.tools.find((tool) => tool.name === 'post')
-        const properties = (post?.inputSchema as { properties?: Readonly<Record<string, unknown>> })
-          .properties
+        const properties = (
+          post?.inputSchema as { properties?: Readonly<Record<string, unknown>> } | undefined
+        )?.properties
         expect(Object.hasOwn(properties ?? {}, 'session_id')).toBe(false)
 
         const result = yield* Effect.promise(() =>

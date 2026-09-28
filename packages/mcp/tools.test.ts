@@ -1108,26 +1108,25 @@ test('subscribe with malformed target surfaces a protocol error', () =>
 // A caller reaching for the old grammar gets an error rather than a narrow on a
 // channel whose name happens to start with `channel:` — the failure mode is a
 // seat that subscribes successfully and then hears nothing.
-test.each([
-  'channel:home',
-  'thread:home/payments',
-  'mentions',
-])('subscribe rejects the retired token form %p', (retired) =>
-  Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
-        const error = yield* Effect.flip(
-          Effect.tryPromise({
-            try: () => rig.client.callTool({ name: 'subscribe', arguments: { target: retired } }),
-            catch: (e) => e as { message: string },
-          }),
-        )
-        expect(error.message).toContain('SubscribeTokenError')
-        expect(rig.narrowSet.size()).toBe(0)
-      }),
+test.each(['channel:home', 'thread:home/payments', 'mentions'])(
+  'subscribe rejects the retired token form %p',
+  (retired) =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
+          const error = yield* Effect.flip(
+            Effect.tryPromise({
+              try: () => rig.client.callTool({ name: 'subscribe', arguments: { target: retired } }),
+              catch: (e) => e as { message: string },
+            }),
+          )
+          expect(error.message).toContain('SubscribeTokenError')
+          expect(rig.narrowSet.size()).toBe(0)
+        }),
+      ),
     ),
-  ))
+)
 
 test('unsubscribe routes through inbox.unsubscribe with the parsed target', () =>
   Effect.runPromise(
@@ -1876,7 +1875,8 @@ test('read_thread schema uses thread not thread_name', () =>
         const props = tool?.inputSchema.properties as Record<string, unknown>
         expect(props['thread']).toBeDefined()
         expect(props['thread_name']).toBeUndefined()
-        const required = (tool?.inputSchema as { required?: ReadonlyArray<string> }).required ?? []
+        const required =
+          (tool?.inputSchema as { required?: ReadonlyArray<string> } | undefined)?.required ?? []
         expect(required).toContain('thread')
         expect(required).not.toContain('thread_name')
       }),

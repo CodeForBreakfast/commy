@@ -977,23 +977,22 @@ test('subscribeFromEnv aborts on a malformed token (and stops before later token
 // A config carrying a retired token form must stop the boot rather than reach
 // the substrate: `channel:home` would otherwise be a channel *named*
 // `channel:home`, and the operator's first symptom would be a silent seat.
-test.each([
-  'channel:home',
-  'thread:home/payments',
-  'mentions',
-])('subscribeFromEnv aborts on the retired token form %p', (retired) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fake = buildFakeInbox()
-      const narrowSet = createNarrowSet()
-      const baseRequiredEnv = yield* baseRequiredEnvEffect
-      const parsed: ParsedEnv = { ...baseRequiredEnv, subscribe: retired }
-      const err = yield* Effect.flip(subscribeFromEnv(fake.inbox, narrowSet, parsed))
-      expect(err).toBeInstanceOf(SubscribeTokenError)
-      expect(fake.calls.subscribed).toEqual([])
-      expect(narrowSet.size()).toBe(0)
-    }),
-  ))
+test.each(['channel:home', 'thread:home/payments', 'mentions'])(
+  'subscribeFromEnv aborts on the retired token form %p',
+  (retired) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const fake = buildFakeInbox()
+        const narrowSet = createNarrowSet()
+        const baseRequiredEnv = yield* baseRequiredEnvEffect
+        const parsed: ParsedEnv = { ...baseRequiredEnv, subscribe: retired }
+        const err = yield* Effect.flip(subscribeFromEnv(fake.inbox, narrowSet, parsed))
+        expect(err).toBeInstanceOf(SubscribeTokenError)
+        expect(fake.calls.subscribed).toEqual([])
+        expect(narrowSet.size()).toBe(0)
+      }),
+    ),
+)
 
 test('subscribeFromEnv propagates inbox.subscribe rejections and stops calling', () =>
   Effect.runPromise(
