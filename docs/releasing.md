@@ -34,40 +34,58 @@ Sweep merged PRs since the last release tag:
 
 ```bash
 git fetch origin --tags
-last=$(git describe --tags --match 'commy-v*' --abbrev=0)
+last=$(git describe --tags --match 'commy-v*' --exclude '*-rc.*' --abbrev=0)
 git log --oneline "${last}..origin/main"
 ```
+
+The `--exclude` skips release-candidate tags, so a full release sweeps
+everything since the last full release rather than since its own rc.
 
 Pick `MAJOR.MINOR.PATCH` per semver against what landed (behaviour change →
 minor; fix only → patch; breaking → major). The previous version is `${last#commy-v}`.
 
+#### A release candidate
+
+To soak a build before its full release, cut it as `MAJOR.MINOR.PATCH-rc.N`,
+numbered for the full release it leads to: `0.24.0-rc.1` comes before `0.24.0`.
+It goes through every step below unchanged. CI publishes it to npm under
+`next`, not `latest`, and marks its GitHub Release as a prerelease. Pin a
+marketplace to its `commy-v<version>` tag to run it.
+
+`rc.N` is the only prerelease shape the release path accepts. `pyproject.toml`
+and `uv.lock` both record it in PEP 440 form, as `0.24.0rc1`, and the lockstep
+test compares them that way.
+
 ### 2. Bump the 7 lockstep version sites
 
-All seven must read the new version. Six are hand-edited; the seventh
-(`uv.lock`) is regenerated, never hand-edited.
+All seven must read the new version. Five are hand-edited; the other two
+(`clients/hermes/pyproject.toml` and `clients/hermes/uv.lock`) are set together
+by `uv version`, never hand-edited.
 
 1. `clients/claude-code/.claude-plugin/plugin.json` — **canonical**; the tag,
    the npm artifact, and the detection logic all derive from this one.
 2. `clients/claude-code/package.json`
 3. `packages/mcp/package.json`
 4. `packages/mcp/mcp-server.ts` — the `PLUGIN_VERSION` export
-5. `clients/hermes/pyproject.toml`
-6. `clients/hermes/commy/plugin.yaml`
-7. `clients/hermes/uv.lock` — **regenerate**: after editing `pyproject.toml`,
-   run
+5. `clients/hermes/commy/plugin.yaml`
+6. `clients/hermes/pyproject.toml`
+7. `clients/hermes/uv.lock` — set together with `pyproject.toml` by running
 
    ```bash
-   cd clients/hermes && uv sync
+   cd clients/hermes && uv version <version>
    ```
 
-   which updates the `commy-hermes` self-entry in `uv.lock`. Never hand-edit the
-   lock — the hermes gate runs `uv sync` and a stale lock fails CI. `uv` lives
-   in the flake dev shell (`nix develop`).
+   passing the PEP 440 form for a release candidate, e.g. `uv version
+   0.24.0rc1`. This writes `pyproject.toml` and re-locks `uv.lock` in one
+   step. Never hand-edit either — the hermes gate runs `uv sync` and a stale
+   lock fails CI. `uv` lives in the flake dev shell (`nix develop`).
 
-The first six are asserted in lockstep by
+The first five are asserted in lockstep by
 [`clients/claude-code/manifests.test.ts`](../clients/claude-code/manifests.test.ts);
-that test now also asserts the `uv.lock` self-entry, so a forgotten `uv sync`
-fails at the unit-test bar. A partial bump cannot land green.
+that test also asserts the `pyproject.toml` version and the `uv.lock`
+self-entry against the PEP 440 form of the canonical version, so a forgotten
+or hand-edited bump fails at the unit-test bar. A partial bump cannot land
+green.
 
 ### 3. Write the release notes
 

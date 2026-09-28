@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import {
   decideRelease,
   extractVersion,
+  npmDistTag,
   RELEASE_TAG_PREFIX,
   releaseTagName,
 } from './release-detection.ts'
@@ -21,10 +22,26 @@ test('extractVersion reads the version from a plugin.json string', () => {
   expect(extractVersion('{ "name": "commy", "version": "1.20.300" }')).toBe('1.20.300')
 })
 
+test('extractVersion reads a release-candidate version', () => {
+  expect(extractVersion('{"version":"0.24.0-rc.1"}')).toBe('0.24.0-rc.1')
+  expect(releaseTagName('0.24.0-rc.12')).toBe('commy-v0.24.0-rc.12')
+})
+
 test('extractVersion rejects a non-semver version', () => {
   expect(() => extractVersion('{"version":"0.16"}')).toThrow()
   expect(() => extractVersion('{"version":"v0.16.0"}')).toThrow()
   expect(() => extractVersion('{"version":"latest"}')).toThrow()
+})
+
+test('extractVersion rejects a prerelease that is not rc.N', () => {
+  expect(() => extractVersion('{"version":"0.24.0-rc"}')).toThrow()
+  expect(() => extractVersion('{"version":"0.24.0-beta.1"}')).toThrow()
+  expect(() => extractVersion('{"version":"0.24.0-rc.1.2"}')).toThrow()
+})
+
+test('npmDistTag publishes a plain version to latest and a release candidate to next', () => {
+  expect(npmDistTag('0.24.0')).toBe('latest')
+  expect(npmDistTag('0.24.0-rc.1')).toBe('next')
 })
 
 test('extractVersion rejects a missing or non-string version', () => {
