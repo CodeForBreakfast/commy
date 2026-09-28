@@ -60,13 +60,13 @@ class _RecordingFactory:
 
 
 def _config(**overrides) -> SpawnConfig:
-    base = dict(
-        repo_dir="/opt/commy",
-        zulip_site="https://zulip.example",
-        minter_email="minter-bot@example.com",
-        minter_api_key="secret-key",
-        idle_timeout_seconds=300.0,
-    )
+    base = {
+        "repo_dir": "/opt/commy",
+        "zulip_site": "https://zulip.example",
+        "minter_email": "minter-bot@example.com",
+        "minter_api_key": "secret-key",
+        "idle_timeout_seconds": 300.0,
+    }
     base.update(overrides)
     return SpawnConfig(**base)
 

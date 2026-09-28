@@ -10,8 +10,9 @@ MCP notification method, and the ``MessageEvent`` construction, live in the
 adapter.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional
+from typing import Any
 
 NOTIFICATION_METHOD = "notifications/claude/channel"
 
@@ -29,23 +30,23 @@ class ChannelFrame:
     meta: Mapping[str, str]
 
     @property
-    def message_id(self) -> Optional[str]:
+    def message_id(self) -> str | None:
         return self.meta.get("message_id")
 
     @property
-    def channel_name(self) -> Optional[str]:
+    def channel_name(self) -> str | None:
         return self.meta.get("channel_name")
 
     @property
-    def thread(self) -> Optional[str]:
+    def thread(self) -> str | None:
         return self.meta.get("thread")
 
     @property
-    def sender_id(self) -> Optional[str]:
+    def sender_id(self) -> str | None:
         return self.meta.get("sender_id")
 
     @property
-    def sender_name(self) -> Optional[str]:
+    def sender_name(self) -> str | None:
         return self.meta.get("sender_name")
 
 

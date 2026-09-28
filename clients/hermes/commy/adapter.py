@@ -31,7 +31,8 @@ the test environment via a ``--no-deps`` install of ``hermes-agent``.
 
 import asyncio
 import contextlib
-from typing import Any, Dict, Mapping, Optional, Set
+from collections.abc import Mapping
+from typing import Any
 
 from gateway.config import Platform
 from gateway.platforms.base import (
@@ -74,17 +75,17 @@ class CommyAdapter(BasePlatformAdapter):
         self,
         config,
         *,
-        connection_manager: Optional[TopicConnectionManager] = None,
-        listener: Optional[ChannelListener] = None,
-        reap_interval_seconds: Optional[float] = None,
+        connection_manager: TopicConnectionManager | None = None,
+        listener: ChannelListener | None = None,
+        reap_interval_seconds: float | None = None,
         **kwargs,
     ):
         super().__init__(config=config, platform=Platform(PLATFORM_NAME))
-        self._seen_message_ids: Set[str] = set()
+        self._seen_message_ids: set[str] = set()
         self._connection_manager = connection_manager
         self._listener = listener
         self._reap_interval_seconds = reap_interval_seconds
-        self._reaper_task: Optional[asyncio.Task[None]] = None
+        self._reaper_task: asyncio.Task[None] | None = None
 
     @property
     def name(self) -> str:
@@ -208,8 +209,8 @@ class CommyAdapter(BasePlatformAdapter):
         self,
         chat_id: str,
         content: str,
-        reply_to: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        reply_to: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> SendResult:
         """Deliver the turn's composed prose reply into its originating topic.
 
@@ -255,7 +256,7 @@ class CommyAdapter(BasePlatformAdapter):
         await self._connection_manager.deliver(chat_id, str(topic), content)
         return SendResult(success=True)
 
-    async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
+    async def get_chat_info(self, chat_id: str) -> dict[str, Any]:
         """Benign default: the gateway never calls this for commy.
 
         ``get_chat_info`` is an abstractmethod (so the override must exist for

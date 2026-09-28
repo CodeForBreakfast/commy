@@ -247,7 +247,7 @@ def test_send_with_blank_content_does_not_post():
 def test_send_to_a_topic_without_a_live_connection_is_a_graceful_noop():
     # A reap between the inbound turn and delivery (or any unknown topic) must
     # not crash the turn — there is simply no live connection to ride.
-    adapter, factory = _adapter_with_fake_manager()
+    adapter, _factory = _adapter_with_fake_manager()
 
     async def scenario():
         await adapter.connect()

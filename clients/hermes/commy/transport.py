@@ -34,7 +34,7 @@ import json
 import sys
 import time
 from collections.abc import Mapping
-from typing import IO, Any, Optional
+from typing import IO, Any
 
 from .connection import (
     Clock,
@@ -50,7 +50,7 @@ from .listener import ChannelListener, OwnedKeys, SpawnTrigger, build_listener_s
 _STOP_GRACE_SECONDS = 5.0
 
 
-def _mcp_transport_factory(errlog: Optional[IO[str]]) -> TransportFactory:
+def _mcp_transport_factory(errlog: IO[str] | None) -> TransportFactory:
     """A factory that builds real ``McpTopicTransport`` subprocess connections."""
 
     def factory(spec: ConnectionSpec, frame_sink: FrameSink) -> McpTopicTransport:
@@ -64,7 +64,7 @@ def make_manager(
     sink: FrameSink,
     *,
     clock: Clock = time.monotonic,
-    errlog: Optional[IO[str]] = None,
+    errlog: IO[str] | None = None,
 ) -> TopicConnectionManager:
     """A ``TopicConnectionManager`` whose transports are real MCP subprocesses."""
     return TopicConnectionManager(config, _mcp_transport_factory(errlog), sink, clock=clock)
@@ -75,7 +75,7 @@ def make_listener(
     *,
     trigger: SpawnTrigger,
     owned: OwnedKeys,
-    errlog: Optional[IO[str]] = None,
+    errlog: IO[str] | None = None,
 ) -> ChannelListener:
     """The boot listener over a real MCP subprocess, subscribed ``config.channel``.
 
@@ -94,17 +94,17 @@ class McpTopicTransport:
         spec: ConnectionSpec,
         sink: FrameSink,
         *,
-        errlog: Optional[IO[str]] = None,
+        errlog: IO[str] | None = None,
         stop_grace_seconds: float = _STOP_GRACE_SECONDS,
     ) -> None:
         self._spec = spec
         self._sink = sink
         self._errlog = errlog if errlog is not None else sys.stderr
         self._stop_grace_seconds = stop_grace_seconds
-        self._task: Optional[asyncio.Task[None]] = None
+        self._task: asyncio.Task[None] | None = None
         self._ready = asyncio.Event()
         self._closing = asyncio.Event()
-        self._session: Optional[Any] = None
+        self._session: Any | None = None
 
     async def _on_log(self, params: object) -> None:
         """Forward a ``notifications/message`` frame (``params.data``) to the sink."""
@@ -126,15 +126,17 @@ class McpTopicTransport:
             cwd=self._spec.cwd,
         )
         try:
-            async with stdio_client(server, errlog=self._errlog) as (read, write):
-                async with ChannelAwareClientSession(read, write, logging_callback=self._on_log) as session:
-                    await session.initialize()
-                    # Hold the live session so `post` can deliver outbound replies
-                    # over the same connection. Concurrent requests
-                    # from another task are safe — the SDK routes responses by id.
-                    self._session = session
-                    self._ready.set()
-                    await self._closing.wait()
+            async with (
+                stdio_client(server, errlog=self._errlog) as (read, write),
+                ChannelAwareClientSession(read, write, logging_callback=self._on_log) as session,
+            ):
+                await session.initialize()
+                # Hold the live session so `post` can deliver outbound replies
+                # over the same connection. Concurrent requests
+                # from another task are safe — the SDK routes responses by id.
+                self._session = session
+                self._ready.set()
+                await self._closing.wait()
         finally:
             # Unblock a `start()` that is still waiting even if connect failed,
             # so the caller observes the failure rather than hanging.
@@ -164,13 +166,13 @@ class McpTopicTransport:
         self._closing.set()
         try:
             await asyncio.wait_for(asyncio.shield(self._task), self._stop_grace_seconds)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
         except asyncio.CancelledError:
             pass
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             # A commanded teardown can race the subprocess/pipe close: an
             # in-flight server notification hitting a stream the SDK is already
             # tearing down surfaces as a BrokenResourceError out of stdio_client.
@@ -180,7 +182,7 @@ class McpTopicTransport:
         finally:
             self._task = None
 
-    async def post(self, body: str, channel: str, topic: str) -> Optional[str]:
+    async def post(self, body: str, channel: str, topic: str) -> str | None:
         """Deliver an outbound reply by calling the commy ``post`` MCP tool.
 
         Rides the live per-topic session this connection already holds, so the
@@ -198,7 +200,7 @@ class McpTopicTransport:
         return _message_id_from_result(result)
 
 
-def _message_id_from_result(result: object) -> Optional[str]:
+def _message_id_from_result(result: object) -> str | None:
     """Best-effort extraction of ``message_id`` from a ``post`` tool result.
 
     The commy ``post`` tool returns ``{message_id, channel_id, channel_name,
