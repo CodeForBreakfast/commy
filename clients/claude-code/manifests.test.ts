@@ -10,6 +10,7 @@ import packageManifest from './package.json'
 // spells 0.24.0-rc.1 as 0.24.0rc1. A plain X.Y.Z has no '-rc.' to replace,
 // so it passes through unchanged.
 const toPep440 = (version: string): string => version.replace('-rc.', 'rc')
+const PEP440_RELEASE_VERSION_SHAPE = /^\d+\.\d+\.\d+(rc\d+)?$/
 
 /**
  * Eight sites, one truth. `.claude-plugin/plugin.json` is what Claude
@@ -108,8 +109,8 @@ test('mcp-server.ts PLUGIN_VERSION matches the release version shape', () => {
   expect(PLUGIN_VERSION).toMatch(RELEASE_VERSION_SHAPE)
 })
 
-test('hermes pyproject.toml version matches the release version shape', () => {
-  expect(hermesPyproject.project.version).toMatch(RELEASE_VERSION_SHAPE)
+test('hermes pyproject.toml version matches the PEP 440 release version shape', () => {
+  expect(hermesPyproject.project.version).toMatch(PEP440_RELEASE_VERSION_SHAPE)
 })
 
 test('hermes plugin.yaml version matches the release version shape', () => {
