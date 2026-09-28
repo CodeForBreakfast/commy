@@ -95,7 +95,12 @@ Create `RELEASE-NOTES/<version>.md` — see
 template. This file is required: its presence is how CI decides the merge is
 a release, and it is the body of the GitHub Release. Write it user-facing and
 impact-classified, matching PRs [#90](https://github.com/CodeForBreakfast/commy/pull/90)
-and [#93](https://github.com/CodeForBreakfast/commy/pull/93).
+and [#93](https://github.com/CodeForBreakfast/commy/pull/93). Write for the
+people running the plugin and server, not for commy's own developers: one
+plain sentence per thing that now works or behaves differently for them, and
+anything they must do. Leave out a dependency bump unless it changes
+something for a user, such as a security fix. No internals, file names, or
+PR-by-PR detail.
 
 ### 4. Open the PR and go green
 
