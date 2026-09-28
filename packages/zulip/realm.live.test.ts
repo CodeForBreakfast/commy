@@ -714,7 +714,7 @@ describeLive('zulip live upload round-trip — zulip.example.com', () => {
 })
 
 describeLiveChannel('zulip live attachment claim — zulip.example.com', () => {
-  // The regression comms-qpup exists to catch. `uploadFile` used to go out
+  // The regression this test exists to catch. `uploadFile` used to go out
   // through the MINTER while `post` went out through the bound bot, so Zulip's
   // `do_claim_attachments` — which validates each attachment against the
   // MESSAGE SENDER — skipped the row that grants read access, logged a warning,
