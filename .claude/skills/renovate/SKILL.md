@@ -80,18 +80,14 @@ force.
 When research surfaces that the new version lets us delete a workaround, adopt a
 simpler API, drop a deprecated call, or use a new capability worth adopting —
 **don't do it in the upgrade PR.** File a separate follow-up bead for each
-opportunity (`bd create`) and keep the bump PR to the minimum that makes it
-mergeable. This keeps the upgrade reviewable and decouples "upgrade the
-dependency" from "adopt its new features."
+opportunity and keep the bump PR to the minimum that makes it mergeable. This
+keeps the upgrade reviewable and decouples "upgrade the dependency" from "adopt
+its new features."
 
 Dedup follow-up beads by **package name, not PR number** — Renovate closes and
 reopens PRs for the same update under new numbers, so a PR-number key
 double-files. Put the package name in the bead title, because `bd search`
-matches titles, and search before filing:
-
-```bash
-bd search "<package>"
-```
+matches titles, and search for it before filing.
 
 ## 6. Gate, then merge or report
 
