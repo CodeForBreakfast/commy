@@ -3,15 +3,17 @@ import { expect, test } from 'bun:test'
 import { PLUGIN_VERSION } from '@commy/mcp/mcp-server'
 import { RELEASE_VERSION_SHAPE } from '../../scripts/release-detection.ts'
 import pluginManifest from './.claude-plugin/plugin.json'
+import mcpConfig from './.mcp.json'
 import packageManifest from './package.json'
 
 // pyproject.toml and uv.lock both record the PEP 440 normal form, which
 // spells 0.24.0-rc.1 as 0.24.0rc1. A plain X.Y.Z has no '-rc.' to replace,
 // so it passes through unchanged.
 const toPep440 = (version: string): string => version.replace('-rc.', 'rc')
+const PEP440_RELEASE_VERSION_SHAPE = /^\d+\.\d+\.\d+(rc\d+)?$/
 
 /**
- * Seven sites, one truth. `.claude-plugin/plugin.json` is what Claude
+ * Eight sites, one truth. `.claude-plugin/plugin.json` is what Claude
  * Code reads for plugin discovery; the plugin's `package.json` is the
  * Node artefact bun consumes for installs and scripts; the `mcp`
  * package's `package.json` is the universal MCP server's published
@@ -21,7 +23,9 @@ const toPep440 = (version: string): string => version.replace('-rc.', 'rc')
  * pins its flake input to (the tag carrying this version is what
  * `CodeForBreakfast/hermes-agent` rebuilds against); the Hermes
  * `pyproject.toml` version and its `uv.lock` self-entry are both set by
- * `uv version <version>` (the hermes gate fails on a stale lock). When
+ * `uv version <version>` (the hermes gate fails on a stale lock); the
+ * `.mcp.json` launcher pins the published server at the same version,
+ * so the plugin and the server it starts move as one artefact. When
  * any drifts, `claude plugin update`, MCP clients, or the pod image
  * see a stale version.
  *
@@ -32,10 +36,16 @@ const toPep440 = (version: string): string => version.replace('-rc.', 'rc')
  * hooks-manifest.test.ts). The Hermes manifests live in the sibling
  * `clients/hermes` Python project — read as text and parsed via Bun's
  * native `TOML` / `YAML` (no new deps, no module-resolution coupling
- * to a non-TS package). `commy/plugin.yaml` is hand-edited; `pyproject.toml`
- * and `uv.lock` are set together by `uv version`, never hand-edited — see
- * `docs/releasing.md` for the worker release flow that drives all seven.
+ * to a non-TS package). `commy/plugin.yaml` and `.mcp.json` are
+ * hand-edited; `pyproject.toml` and `uv.lock` are set together by
+ * `uv version`, never hand-edited — see `docs/releasing.md` for the
+ * worker release flow that drives all eight.
  */
+
+const LAUNCHER_PIN = /^@codeforbreakfast\/commy-mcp@(.+)$/
+const launcherPinnedVersion = mcpConfig.mcpServers['commy'].args
+  .map((arg) => LAUNCHER_PIN.exec(arg)?.[1])
+  .find((version) => version !== undefined)
 
 const mcpPackageManifest = (await Bun.file(
   Bun.resolveSync('@commy/mcp/package.json', import.meta.dir),
@@ -79,6 +89,10 @@ test('the hermes uv.lock self-entry version matches plugin.json (uv version was 
   expect(hermesLockSelfEntry?.version).toBe(toPep440(pluginManifest.version))
 })
 
+test('the .mcp.json launcher pins the published server at the plugin.json version', () => {
+  expect(launcherPinnedVersion).toBe(pluginManifest.version)
+})
+
 test('plugin.json version matches the release version shape', () => {
   expect(pluginManifest.version).toMatch(RELEASE_VERSION_SHAPE)
 })
@@ -95,8 +109,8 @@ test('mcp-server.ts PLUGIN_VERSION matches the release version shape', () => {
   expect(PLUGIN_VERSION).toMatch(RELEASE_VERSION_SHAPE)
 })
 
-test('hermes pyproject.toml version matches the release version shape', () => {
-  expect(hermesPyproject.project.version).toMatch(RELEASE_VERSION_SHAPE)
+test('hermes pyproject.toml version matches the PEP 440 release version shape', () => {
+  expect(hermesPyproject.project.version).toMatch(PEP440_RELEASE_VERSION_SHAPE)
 })
 
 test('hermes plugin.yaml version matches the release version shape', () => {

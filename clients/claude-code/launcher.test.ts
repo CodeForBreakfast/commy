@@ -11,13 +11,22 @@ import mcpConfig from './.mcp.json'
  *
  * Two contracts these tests pin:
  *
+ *  - The package is pinned at the plugin's own version, so the manifest and
+ *    the server it launches move as one artefact: a marketplace ref bump moves
+ *    both, and the combination "new manifest, old server" (or the reverse)
+ *    cannot arise. `manifests.test.ts` holds the pin in lockstep with the
+ *    other version sites. A bare name would float to whatever npx last
+ *    cached — npx writes a caret range from its first resolution and never
+ *    re-resolves it — so an unpinned seat silently keeps an old server across
+ *    releases.
+ *
  *  - `cwd` is `${CLAUDE_PLUGIN_ROOT}`. npx resolves a package from its cwd's
  *    `node_modules` (walking up) before the registry, so an install whose
  *    frozen marketplace stages the bundle there runs its local copy with zero
- *    registry hits (the local-run guarantee), while a consumer with no
- *    such local install resolves the published build from npm. The name on the
- *    command line is bare — no `@<version>` — because a command-line version pin
- *    forces a registry round-trip and defeats the local override.
+ *    registry hits (the local-run guarantee), while a consumer with no such
+ *    local install resolves the published build from npm. The version pin does
+ *    not defeat that: npx 11 runs a staged copy of the pinned version offline
+ *    (measured 2026-09-27 with `npx --offline -y <name>@<version>`).
  *
  *  - The server must be claude's child with claude's pipe as its stdin so it
  *    exits when claude disconnects (orphan-leak). npx does not
@@ -36,14 +45,9 @@ test('the launcher runs the published bundle via npx — no bun, no nix, no laun
   expect(configText).not.toMatch(/\bbun\b/)
 })
 
-test('npx is pointed at the bare @codeforbreakfast/commy-mcp package — no version pin on the command line', () => {
+test('npx is pointed at @codeforbreakfast/commy-mcp pinned at the plugin version', () => {
   expect(commyServer.args).toContain('-y')
-  expect(commyServer.args).toContain('@codeforbreakfast/commy-mcp')
-  // A `@<version>` suffix would force a registry hit and defeat the local
-  // override such installs rely on — the version pin lives in the staged
-  // dependency, never on the command line.
-  const pinned = commyServer.args.find((arg) => /@codeforbreakfast\/commy-mcp@/.test(arg))
-  expect(pinned).toBeUndefined()
+  expect(commyServer.args).toContain(`@codeforbreakfast/commy-mcp@${pluginManifest.version}`)
 })
 
 test('cwd anchors npx resolution at the plugin root so the local override wins', () => {

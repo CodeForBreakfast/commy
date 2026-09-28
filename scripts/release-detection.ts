@@ -17,7 +17,7 @@ export function releaseTagName(version: string): string {
 }
 
 // The canonical version source — `clients/claude-code/.claude-plugin/plugin.json`,
-// the head of the seven-site lockstep (clients/claude-code/manifests.test.ts).
+// the head of the eight-site lockstep (clients/claude-code/manifests.test.ts).
 // Reading the version from it here means the tag, the npm artifact, and the
 // GitHub Release all derive from the one truth the lockstep test guards.
 export function extractVersion(pluginManifestText: string): string {
