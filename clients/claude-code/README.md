@@ -16,10 +16,12 @@ launches the server.) Bun and Nix are how this repo is *developed*, not how the
 plugin *runs* — neither is needed to consume it.
 
 The plugin's `.mcp.json` launches the server with `npx -y
-@codeforbreakfast/commy-mcp` and `cwd` set to `${CLAUDE_PLUGIN_ROOT}`. `npx`
-resolves the published, self-contained node bundle from the registry (a single
-`server.js` with every dependency inlined) and runs it under node — there is no
-install step and no `node_modules` to stage. The PreToolUse hook
+@codeforbreakfast/commy-mcp@<version>`, pinned at the plugin's own version, and
+`cwd` set to `${CLAUDE_PLUGIN_ROOT}`. `npx` resolves the published,
+self-contained node bundle from the registry (a single `server.js` with every
+dependency inlined) and runs it under node — there is no install step and no
+`node_modules` to stage. Because the pin moves with the plugin, updating the
+plugin updates the server; neither half can run ahead of the other. The PreToolUse hook
 (`inject-session-id.ts`) runs the same way Claude Code runs every plugin hook:
 under `node`, which type-strips the `.ts` directly. It imports no packages, so it
 needs nothing staged either.

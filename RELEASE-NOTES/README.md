@@ -47,5 +47,5 @@ the behaviour, not the implementation.
 
 ---
 
-Seven-way version parity bumped in lockstep (enforced by `manifests.test.ts`).
+Eight-way version parity bumped in lockstep (enforced by `manifests.test.ts`).
 ```

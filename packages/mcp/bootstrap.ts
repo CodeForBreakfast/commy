@@ -285,18 +285,12 @@ const USER_CONFIG_SUFFIX = '_USER_CONFIG'
  * Optional operator-supplied value, read from the two paths that can carry one:
  * the plugin manifest's `KEY_USER_CONFIG` first, then an inherited bare `KEY`.
  *
- * The precedence direction is safe because of how the two artefacts ship, not
- * because of anything visible in this file. The MCP server goes out via
- * `npx @codeforbreakfast/commy-mcp` with no version spec, so it floats to npm
- * latest at every seat start; the plugin manifest ships via a pinned
- * marketplace ref that moves only when an operator runs `/plugin`. The server
- * therefore always moves first and the manifest lags arbitrarily. New server +
- * old manifest is the skew that will happen: the manifest still writes the bare
- * name, this read finds nothing under the suffixed one and falls through to the
- * inherited value — which is the clobbered-empty string, i.e. no worse than
- * before the fix. The inverse skew, which would ignore a working operator's
- * plugin config, cannot occur because the manifest cannot outrun the server.
- * Reverse the precedence and that reasoning no longer holds.
+ * The suffixed key exists because the manifest is static JSON and writes every
+ * `${user_config.*}` substitution unconditionally, so an unsupplied field lands
+ * as an empty string; writing it under its own name keeps that empty string
+ * from clobbering a bare `KEY` the operator set by other means (a pane env, a
+ * systemd unit). A host that is not the plugin sets only the bare key and is
+ * served by the fallback.
  */
 const optionalUserConfig = (key: string): Config.Config<Option.Option<string>> =>
   Config.option(

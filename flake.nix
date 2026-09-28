@@ -9,7 +9,7 @@
     # contributor and CI touch — never fetch, evaluate or build this. No
     # `inputs.nixpkgs.follows`: beads needs Go 1.26 and this flake's nixpkgs
     # carries 1.25.
-    beads.url = "github:gastownhall/beads/v1.1.2";
+    beads.url = "github:gastownhall/beads/v1.3.0";
   };
 
   outputs =
