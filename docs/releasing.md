@@ -88,6 +88,10 @@ It checks the `pyproject.toml` version and the `uv.lock` self-entry against the
 PEP 440 form of the canonical version, so a forgotten or hand-edited bump fails
 at the unit-test bar. A partial bump cannot land green.
 
+Then run `bun install` to carry the two workspace versions into `bun.lock`, and
+commit the lockfile with the bump. Nothing fails if you forget, so nothing will
+remind you.
+
 ### 3. Write the release notes
 
 Create `RELEASE-NOTES/<version>.md` — see
