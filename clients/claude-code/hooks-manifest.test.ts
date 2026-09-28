@@ -97,7 +97,7 @@ const BOUND_HTTP_CALLERS = [
 const BOUND_INBOX_VERBS = ['subscribe', 'subscriptions', 'unsubscribe'] as const
 
 /**
- * Adapter ATTACHMENT verbs that reach `boundHttp` (comms-qpup). An upload
+ * Adapter ATTACHMENT verbs that reach `boundHttp`. An upload
  * writes an `Attachment` row with an owner, and Zulip grants a reader access to
  * it only when that owner is also the sender of the referencing message — so
  * the upload goes out under the seat's own bot, like every other write.
@@ -272,11 +272,12 @@ function toolFactsFromToolsSource(source: string): ReadonlyMap<string, ToolFacts
       const captured = verb[1]
       if (captured !== undefined) entry.inboxVerbs.add(captured)
     }
-    // Attachment verbs bind too (comms-qpup). Traced through the dep alias
+    // Attachment verbs bind too. Traced through the dep alias
     // because the tool layer never names the adapter member: `upload_file`
     // calls a closure `server.ts` handed it. Tracing only the two receivers
     // above is how a binding tool would sit outside this suite's compared set —
-    // the comms-65nj failure this file's header names.
+    // the same failure mode the file's header describes, where a guard's
+    // compared set stayed scoped one level too low.
     for (const [alias, field] of aliases) {
       const member = ATTACHMENT_DEP_ADAPTER_MEMBER[field]
       if (member === undefined) continue
@@ -385,10 +386,10 @@ test('every tool whose adapter path reaches boundHttp is in the PreToolUse match
   expect(missing).toEqual([])
 })
 
-// The same rule again, over the ATTACHMENT verbs that began binding with
-// comms-qpup. Its own assertion with its own named set, for the reason the
-// inbox rule has one: a rule that compares over a set which no longer covers
-// every binding path goes green by not looking.
+// The same rule again, over the ATTACHMENT verbs that began binding when
+// `uploadFile` moved onto the bound bot. Its own assertion with its own named
+// set, for the reason the inbox rule has one: a rule that compares over a set
+// which no longer covers every binding path goes green by not looking.
 test('every tool whose adapter path reaches boundHttp via an attachment dep receives session_id', async () => {
   const facts = toolFactsFromToolsSource(await toolsSource())
   const offenders = [...facts]

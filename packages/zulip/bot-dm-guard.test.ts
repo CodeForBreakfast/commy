@@ -261,7 +261,7 @@ effectTest(
 /**
  * `BotHttp` carries `uploadRaw` because an upload has to go out under the same
  * account that sends the referencing message — Zulip validates a message's
- * attachments against the SENDER (comms-qpup). Widening a security-adjacent
+ * attachments against the SENDER. Widening a security-adjacent
  * type is the move that gets accepted once and then cited for the next member,
  * so the reasoning is pinned here rather than left in a PR body: THE WALL THIS
  * WRAPPER ENFORCES IS A RECIPIENT RULE ON `POST /messages`, and an upload

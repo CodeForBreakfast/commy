@@ -1303,7 +1303,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         required: ['path'],
         additionalProperties: false,
       },
-      // An upload binds (comms-qpup). The file it writes carries an owner, and
+      // An upload binds. The file it writes carries an owner, and
       // Zulip grants readers access to it only when that owner is also the
       // account that sends the referencing message — so the upload has to go out
       // under the calling session's own bot, which needs the session id here.
