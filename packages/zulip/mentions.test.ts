@@ -74,15 +74,12 @@ test('does not spend a request on a silent mention, which notifies nobody', () =
 
 // Zero false negatives is the whole contract: a form that fails to become a
 // candidate never reaches the render, and no later stage can recover it.
-test.each([
-  'all',
-  'everyone',
-  'stream',
-  'channel',
-  'topic',
-])('treats the @**%s** wildcard as a candidate', (wildcard) => {
-  expect(isCandidate(`heads up @**${wildcard}** — deploying`)).toBe(true)
-})
+test.each(['all', 'everyone', 'stream', 'channel', 'topic'])(
+  'treats the @**%s** wildcard as a candidate',
+  (wildcard) => {
+    expect(isCandidate(`heads up @**${wildcard}** — deploying`)).toBe(true)
+  },
+)
 
 test('treats a group mention as a candidate despite its single-asterisk markup', () => {
   expect(candidates('@*backend* please review')).toEqual([
@@ -150,16 +147,13 @@ test('unresolvedMentions deduplicates a repeated dead token', () => {
 // constructs, not dead forms — the write path must not reject a post that
 // carries one. The full Zulip set (zerver/lib/mention.py): stream wildcards
 // all/everyone/stream/channel plus the topic wildcard, case-sensitive.
-test.each([
-  'all',
-  'everyone',
-  'stream',
-  'channel',
-  'topic',
-])('unresolvedMentions exempts the @**%s** wildcard', (wildcard) => {
-  const dir = directoryFor(GRAEME)
-  expect(unresolvedMentions(`heads up @**${wildcard}** — deploying`, dir)).toEqual([])
-})
+test.each(['all', 'everyone', 'stream', 'channel', 'topic'])(
+  'unresolvedMentions exempts the @**%s** wildcard',
+  (wildcard) => {
+    const dir = directoryFor(GRAEME)
+    expect(unresolvedMentions(`heads up @**${wildcard}** — deploying`, dir)).toEqual([])
+  },
+)
 
 test('unresolvedMentions still reports a dead form alongside a wildcard', () => {
   const dir = directoryFor(GRAEME)

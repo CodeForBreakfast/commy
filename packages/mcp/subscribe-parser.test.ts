@@ -144,14 +144,12 @@ test('intentToTarget maps a thread intent to the port-shaped thread record', () 
 // rendering has to be the parser's exact inverse — a line an operator compares
 // against their COMMY_SUBSCRIBE by eye is worth nothing if the two spell the
 // same subscription differently.
-test.each([
-  'home',
-  'home/payments',
-  'home/a/b',
-  'new-topics:home',
-])('intentToToken round-trips %p back to the token that produced it', (token) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      expect(intentToToken(yield* parseSubscribeTarget(token))).toBe(token)
-    }),
-  ))
+test.each(['home', 'home/payments', 'home/a/b', 'new-topics:home'])(
+  'intentToToken round-trips %p back to the token that produced it',
+  (token) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        expect(intentToToken(yield* parseSubscribeTarget(token))).toBe(token)
+      }),
+    ),
+)
