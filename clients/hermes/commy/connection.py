@@ -23,8 +23,9 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Mapping, Optional, Protocol
+from typing import Protocol
 
 from .naming import deterministic_bot_name
 
@@ -57,13 +58,13 @@ class SpawnConfig:
     args: tuple[str, ...] = ("packages/mcp/server.ts",)
     idle_timeout_seconds: float = 300.0
     reap_interval_seconds: float = 60.0
-    catchup_window_seconds: Optional[int] = None
-    bot_name: Optional[str] = None
-    bot_api_key: Optional[str] = None
+    catchup_window_seconds: int | None = None
+    bot_name: str | None = None
+    bot_api_key: str | None = None
     extra_env: Mapping[str, str] = field(default_factory=dict)
 
     @staticmethod
-    def from_env(env: Optional[Mapping[str, str]] = None) -> "SpawnConfig":
+    def from_env(env: Mapping[str, str] | None = None) -> SpawnConfig:
         """Build from the pod's environment.
 
         ``COMMY_SERVER_DIR`` is the commy checkout root the server runs from
@@ -159,7 +160,7 @@ class TopicTransport(Protocol):
 
     async def stop(self) -> None: ...
 
-    async def post(self, body: str, channel: str, topic: str) -> Optional[str]: ...
+    async def post(self, body: str, channel: str, topic: str) -> str | None: ...
 
 
 # Builds a transport for a spec, wiring its inbound frames to the given sink.
@@ -212,7 +213,7 @@ class TopicConnectionManager:
             self._connections[key] = _Connection(spec, transport, self._clock())
             return spec
 
-    async def deliver(self, channel: str, topic: str, body: str) -> Optional[str]:
+    async def deliver(self, channel: str, topic: str, body: str) -> str | None:
         """Deliver an outbound reply into ``(channel, topic)`` via its live connection.
 
         Rides the per-topic connection the inbound turn already brought up, so the

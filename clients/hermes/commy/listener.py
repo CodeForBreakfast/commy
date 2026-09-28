@@ -20,7 +20,7 @@ transport wiring (``make_listener``) lives in ``transport.py``.
 
 from __future__ import annotations
 
-from typing import Awaitable, Callable, Set, Tuple
+from collections.abc import Awaitable, Callable
 
 from .connection import (
     ConnectionSpec,
@@ -34,12 +34,12 @@ from .receive import frame_from_params
 # The boot listener owns no single topic, so its ConnectionSpec.topic is empty.
 _LISTENER_TOPIC = ""
 
-TopicKey = Tuple[str, str]
+TopicKey = tuple[str, str]
 # Triggers a per-topic spawn for (channel, topic); its return value is unused.
 SpawnTrigger = Callable[[str, str], Awaitable[object]]
 # Reads the manager's live ownership set — the (channel, topic) pairs already
 # owned by a per-topic connection.
-OwnedKeys = Callable[[], Set[TopicKey]]
+OwnedKeys = Callable[[], set[TopicKey]]
 
 
 def channel_subscribe_tokens(channel: str) -> str:

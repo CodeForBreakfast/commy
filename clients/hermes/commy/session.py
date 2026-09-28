@@ -23,7 +23,7 @@ frame and route it to the no-op default handler, so the warning stops while the
 
 from __future__ import annotations
 
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
 import pydantic
 from mcp import ClientSession
@@ -52,7 +52,7 @@ class ClaudeChannelNotification(Notification[ChannelFrameParams, Literal["notifi
     params: ChannelFrameParams
 
 
-ChannelAwareServerNotification = pydantic.RootModel[Union[ServerNotificationType, ClaudeChannelNotification]]
+ChannelAwareServerNotification = pydantic.RootModel[ServerNotificationType | ClaudeChannelNotification]
 
 
 class ChannelAwareClientSession(ClientSession):

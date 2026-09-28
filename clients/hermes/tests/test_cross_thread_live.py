@@ -47,7 +47,6 @@ import os
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Optional
 
 import httpx
 import pytest
@@ -88,7 +87,7 @@ POST_RETRY_ATTEMPTS = 6
 POST_RETRY_BACKOFF_SECONDS = 3.0
 
 
-def _read_env() -> Optional[dict[str, str]]:
+def _read_env() -> dict[str, str] | None:
     required = {
         "site": os.environ.get("ZULIP_SITE"),
         "minter_email": os.environ.get("ZULIP_MINTER_EMAIL"),

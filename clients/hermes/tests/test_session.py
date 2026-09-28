@@ -95,7 +95,7 @@ def test_receive_loop_handles_both_carriers_without_a_validation_warning(caplog)
 
     async def scenario() -> None:
         to_client_send, to_client_recv = anyio.create_memory_object_stream(10)
-        from_client_send, from_client_recv = anyio.create_memory_object_stream(10)
+        from_client_send, _from_client_recv = anyio.create_memory_object_stream(10)
         async with ChannelAwareClientSession(
             to_client_recv, from_client_send, logging_callback=logging_callback
         ):

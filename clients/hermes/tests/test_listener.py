@@ -46,13 +46,13 @@ def _platform_registered():
 
 
 def _config(**overrides) -> SpawnConfig:
-    base = dict(
-        repo_dir="/opt/commy",
-        zulip_site="https://zulip.example",
-        minter_email="minter@example.com",
-        minter_api_key="key",
-        channel="myproject",
-    )
+    base = {
+        "repo_dir": "/opt/commy",
+        "zulip_site": "https://zulip.example",
+        "minter_email": "minter@example.com",
+        "minter_api_key": "key",
+        "channel": "myproject",
+    }
     base.update(overrides)
     return SpawnConfig(**base)
 

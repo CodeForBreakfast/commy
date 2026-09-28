@@ -14,6 +14,7 @@ reached a real subprocess. It also writes its own PID to ``STUB_PIDFILE`` so the
 test can confirm the subprocess is really gone after an idle reap.
 """
 
+import contextlib
 import os
 
 import anyio
@@ -53,30 +54,30 @@ async def _serve() -> None:
     )
     frame = _frame()
 
-    async with stdio_server() as (read_stream, write_stream):
-        async with ServerSession(read_stream, write_stream, init_options) as session:
-            async with anyio.create_task_group() as task_group:
+    async with (
+        stdio_server() as (read_stream, write_stream),
+        ServerSession(read_stream, write_stream, init_options) as session,
+        anyio.create_task_group() as task_group,
+    ):
 
-                async def emit() -> None:
-                    # The substrate emits the frame server-initiated (catch-up /
-                    # live). Re-emit on a short interval once initialized; the
-                    # client dedups, so repeats are harmless and the test just
-                    # waits for the first to land.
-                    while True:
-                        if session._initialization_state == InitializationState.Initialized:
-                            try:
-                                await session.send_log_message(
-                                    level="info", data=frame, logger="commy"
-                                )
-                            except Exception:
-                                pass
-                        await anyio.sleep(0.05)
+        async def emit() -> None:
+            # The substrate emits the frame server-initiated (catch-up /
+            # live). Re-emit on a short interval once initialized; the
+            # client dedups, so repeats are harmless and the test just
+            # waits for the first to land.
+            while True:
+                if session._initialization_state == InitializationState.Initialized:
+                    with contextlib.suppress(Exception):
+                        await session.send_log_message(
+                            level="info", data=frame, logger="commy"
+                        )
+                await anyio.sleep(0.05)
 
-                task_group.start_soon(emit)
-                async for _ in session.incoming_messages:
-                    pass
-                # Client disconnected (stdin closed) -> stop emitting and exit.
-                task_group.cancel_scope.cancel()
+        task_group.start_soon(emit)
+        async for _ in session.incoming_messages:
+            pass
+        # Client disconnected (stdin closed) -> stop emitting and exit.
+        task_group.cancel_scope.cancel()
 
 
 if __name__ == "__main__":
