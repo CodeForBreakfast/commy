@@ -25,7 +25,7 @@
     },
     "clients/claude-code": {
       "name": "commy-plugin",
-      "version": "0.24.0-rc.1",
+      "version": "0.24.0-rc.2",
       "dependencies": {
         "@commy/mcp": "workspace:*",
       },
@@ -40,7 +40,7 @@
     },
     "packages/mcp": {
       "name": "@commy/mcp",
-      "version": "0.24.0-rc.1",
+      "version": "0.24.0-rc.2",
       "dependencies": {
         "@commy/core": "workspace:*",
         "@commy/zulip": "workspace:*",
