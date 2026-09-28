@@ -12,12 +12,16 @@ name: Release
 #      yet (idempotency — every later push to main re-runs detect, and the tag is
 #      what stops a re-publish). Logic lives in scripts/release-detection.ts and
 #      is unit-tested (scripts/release-detection.test.ts).
-#   2. verify parity — re-run the seven-site lockstep test so the artifact, tag,
+#   2. verify parity — re-run the eight-site lockstep test so the artifact, tag,
 #      and Release can't ship a partially-bumped version.
 #   3. tag         — create+push the commy-v<version> tag as the record.
 #   4. publish-npm — build and publish @codeforbreakfast/commy-mcp to npm via
 #      OIDC trusted publishing (no NPM_TOKEN).
 #   5. release     — cut the GitHub Release from the checked-in notes file.
+#
+# A release candidate (X.Y.Z-rc.N) takes the same path, but publishes to npm
+# under `next` and marks its GitHub Release as a prerelease, so `latest` on both
+# keeps pointing at the last full release.
 #
 # Two load-bearing constraints:
 #   * npm's Trusted Publisher (OIDC) is pinned to this workflow's filename
@@ -68,13 +72,15 @@ jobs:
       release: ${{ steps.detect.outputs.release }}
       version: ${{ steps.detect.outputs.version }}
       tag: ${{ steps.detect.outputs.tag }}
+      prerelease: ${{ steps.detect.outputs.prerelease }}
+      npm_dist_tag: ${{ steps.detect.outputs.npm_dist_tag }}
     steps:
       # SHA-pinned like ci.yml; Renovate (.github/renovate.json5) bumps it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
       # Same module the unit tests cover, run with the flake-pinned bun. It reads
       # plugin.json, checks the notes file, queries the remote for the tag, and
-      # writes release/version/tag to $GITHUB_OUTPUT.
+      # writes release/version/tag/prerelease/npm_dist_tag to $GITHUB_OUTPUT.
       - id: detect
         env:
           FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force }}
@@ -90,6 +96,8 @@ jobs:
     env:
       TAG: ${{ needs.detect.outputs.tag }}
       VERSION: ${{ needs.detect.outputs.version }}
+      PRERELEASE: ${{ needs.detect.outputs.prerelease }}
+      NPM_DIST_TAG: ${{ needs.detect.outputs.npm_dist_tag }}
     steps:
       # SHA-pinned like ci.yml; Renovate (.github/renovate.json5) bumps them.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -99,11 +107,12 @@ jobs:
           node-version: '24.18.0'
           registry-url: 'https://registry.npmjs.org'
 
-      # Re-check the seven-site version lockstep on the commit being released,
+      # Re-check the eight-site version lockstep on the commit being released,
       # before any outward act — a partially-bumped commit must never reach the
-      # registry. manifests.test.ts asserts all seven sites agree with
-      # plugin.json (the six hand-edited sites plus the uv.lock self-entry).
-      - name: Verify seven-site version parity
+      # registry. manifests.test.ts asserts all eight sites agree with
+      # plugin.json (six hand-edited sites, plus pyproject.toml and the uv.lock
+      # self-entry that `uv version` sets together).
+      - name: Verify eight-site version parity
         run: nix develop .#ci --command bash -euo pipefail -c 'bun install --frozen-lockfile && bun test clients/claude-code/manifests.test.ts'
 
       # The record tag, created from the released commit. checkout persists the
@@ -141,7 +150,7 @@ jobs:
       # This step stays in release.yml (filename unchanged) — the OIDC pin is on
       # the workflow filename.
       - name: Publish to npm via OIDC trusted publishing
-        run: npm publish packages/mcp/dist
+        run: npm publish packages/mcp/dist --tag "${NPM_DIST_TAG}"
 
       # Cut the curated GitHub Release from the notes the bump PR checked in —
       # not raw git-log notes. --verify-tag refuses if the record tag is missing.
@@ -153,4 +162,5 @@ jobs:
           gh release create "${TAG}" \
             --title "commy ${VERSION}" \
             --notes-file "RELEASE-NOTES/${VERSION}.md" \
+            --prerelease="${PRERELEASE}" \
             --verify-tag
