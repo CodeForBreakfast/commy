@@ -67,6 +67,7 @@ import {
   Duration,
   Effect,
   Equivalence,
+  Fiber,
   HashMap,
   HashSet,
   Option,
@@ -92,6 +93,7 @@ import {
   registerQueue,
   zulipMessageContentSchema,
 } from './events.ts'
+import { readWindow } from './history-paging.ts'
 import type {
   ApiKey as ApiKeyType,
   BotEmail as BotEmailType,
@@ -442,6 +444,13 @@ const RECENT_THREADS_FETCH_LIMIT = 50
 const HISTORY_DEFAULT_LIMIT = 100
 
 /**
+ * Requests one bounded read may spend walking back to its window. A window
+ * far enough back to outrun this returns a short read rather than paging the
+ * whole realm; `limit` already stops the common case well before it.
+ */
+const HISTORY_MAX_PAGES = 20
+
+/**
  * The slice of Zulip's `/register` initial state that carries the realm-wide
  * editing switch. Zulip exposes realm settings on no GET endpoint at all
  * (`rest_path("realm", PATCH=update_realm)` is write-only), so `/register`
@@ -477,14 +486,6 @@ type NarrowFilter =
   // with the ✔ prefix — so the operand is a raw topic string, not a clean
   // port-facing ThreadName.
   | { readonly operator: 'topic'; readonly operand: string }
-
-const inRange =
-  (range: Range) =>
-  (m: HistoricalMessage): boolean => {
-    if (range.since !== undefined && m.ts < range.since) return false
-    if (range.until !== undefined && m.ts > range.until) return false
-    return true
-  }
 
 const toIdentity = (u: ZulipUser): Effect.Effect<Identity, ParseResult.ParseError> =>
   Effect.all({
@@ -822,29 +823,42 @@ export const zulipAdapter = (
       narrow: ReadonlyArray<NarrowFilter>,
     ): Effect.Effect<ReadonlyArray<Message>, ZulipApiError | ParseResult.ParseError> =>
       Effect.gen(function* () {
-        const historyQuery = {
-          anchor: 'newest',
-          num_before: range.limit ?? HISTORY_DEFAULT_LIMIT,
-          num_after: 0,
-          narrow: JSON.stringify(narrow),
-        } as const
-        const [directory, res] = yield* Effect.all(
-          [
-            buildDirectoryLookup(),
-            minterHttp.get('/messages', messagesResponseSchema, {
-              ...historyQuery,
-              apply_markdown: false,
+        const cap = range.limit ?? HISTORY_DEFAULT_LIMIT
+        const bounded = range.since !== undefined || range.until !== undefined
+        // The directory read is independent of the walk, so it runs alongside
+        // the first page rather than in front of it. Joined on the first page
+        // that has anything to map.
+        const directoryFiber = yield* Effect.fork(buildDirectoryLookup())
+        const messages = yield* readWindow({
+          query: { narrow: JSON.stringify(narrow), apply_markdown: false },
+          window: { since: range.since, until: range.until },
+          // An unbounded read is answered by the newest page, so its page is
+          // exactly the cap. A bounded one may have to walk to reach its
+          // window, and every page it walks past costs a request.
+          pageSize: bounded ? Math.max(cap, HISTORY_DEFAULT_LIMIT) : cap,
+          cap,
+          maxPages: bounded ? HISTORY_MAX_PAGES : 1,
+          fetchPage: (query) =>
+            minterHttp
+              .get('/messages', messagesResponseSchema, query)
+              .pipe(Effect.map((res) => res.messages)),
+          // One rendered read per page, or none at all — never one per
+          // mention-bearing message. See renderedContentForBatch.
+          onPage: (query, rows) =>
+            Effect.gen(function* () {
+              const renderedFor = yield* renderedContentForBatch(minterHttp, query, rows)
+              const historical = yield* Effect.forEach(rows, toHistoricalMessage)
+              const directory = yield* Fiber.join(directoryFiber)
+              return yield* Effect.forEach(historical, (m) =>
+                mapHistoricalMessage(m, directory, renderedFor),
+              )
             }),
-          ],
-          { concurrency: 2 },
-        )
-        // One rendered read for the whole batch, or none at all — never one
-        // per mention-bearing message. See renderedContentForBatch.
-        const renderedFor = yield* renderedContentForBatch(minterHttp, historyQuery, res.messages)
-        const historical = yield* Effect.forEach(res.messages, toHistoricalMessage)
-        return yield* Effect.forEach(historical.filter(inRange(range)), (m) =>
-          mapHistoricalMessage(m, directory, renderedFor),
-        )
+        })
+        // A walk that found nothing never mapped a page, so nothing has
+        // joined the directory yet. Join it anyway: a failed directory read
+        // must not pass for an empty window.
+        yield* Fiber.join(directoryFiber)
+        return messages
       })
 
     // Zulip constructs bot delivery emails as `<short_name>-bot@<bot_domain>`
@@ -2023,40 +2037,47 @@ export const zulipAdapter = (
         // subject) never sees PM-shaped rows — any DM in the minter's
         // recent history would otherwise crash the schema decode.
         const replayNarrow = JSON.stringify([{ negated: true, operator: 'is', operand: 'dm' }])
-        const replayQuery = {
-          anchor: 'newest',
-          num_before: REPLAY_NUM_BEFORE,
-          num_after: 0,
-          narrow: replayNarrow,
-        } as const
         return Effect.gen(function* () {
-          const [directory, res, current] = yield* Effect.all(
-            [
-              buildDirectoryLookup(),
-              minterHttp.get('/messages', replayResponseSchema, {
-                ...replayQuery,
-                apply_markdown: false,
+          const [directoryFiber, current] = yield* Effect.all([
+            Effect.fork(buildDirectoryLookup()),
+            SynchronizedRef.get(boundRef),
+          ])
+          // Catch-up has no cap of its own: a seat that was away for a week
+          // has to be told everything it missed, however many pages that
+          // spans.
+          const perMessage = yield* readWindow({
+            query: { narrow: replayNarrow, apply_markdown: false },
+            window: { since },
+            pageSize: REPLAY_NUM_BEFORE,
+            cap: undefined,
+            maxPages: HISTORY_MAX_PAGES,
+            fetchPage: (query) =>
+              minterHttp
+                .get('/messages', replayResponseSchema, query)
+                .pipe(Effect.map((res) => res.messages)),
+            // Catch-up is the burst case — a fleet bounce replaying a
+            // mention-heavy window. One rendered read covers a whole page,
+            // and it has to be that page's own query.
+            onPage: (query, rows) =>
+              Effect.gen(function* () {
+                const renderedFor = yield* renderedContentForBatch(minterHttp, query, rows)
+                const directory = yield* Fiber.join(directoryFiber)
+                return yield* Effect.forEach(rows, (raw) => {
+                  const { flags: _flags, ...message } = raw
+                  return messageToInboundEvents(
+                    message,
+                    directory,
+                    Option.getOrUndefined(current)?.identity,
+                    base,
+                    renderedFor,
+                  )
+                })
               }),
-              SynchronizedRef.get(boundRef),
-            ],
-            { concurrency: 2 },
-          )
-          // Catch-up is the burst case — a fleet bounce replaying a
-          // mention-heavy window. One rendered read covers the whole window.
-          const renderedFor = yield* renderedContentForBatch(minterHttp, replayQuery, res.messages)
-          const perMessage = yield* Effect.forEach(
-            res.messages.filter((raw) => raw.timestamp >= since),
-            (raw) => {
-              const { flags: _flags, ...message } = raw
-              return messageToInboundEvents(
-                message,
-                directory,
-                Option.getOrUndefined(current)?.identity,
-                base,
-                renderedFor,
-              )
-            },
-          )
+          })
+          // A catch-up that found nothing never mapped a page, so nothing has
+          // joined the directory yet. Join it anyway: a failed directory read
+          // must not pass for a seat that missed nothing.
+          yield* Fiber.join(directoryFiber)
           const out: InboundEvent[] = []
           for (const mapped of perMessage) {
             for (const ev of mapped) {
