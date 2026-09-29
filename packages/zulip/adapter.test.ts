@@ -31,7 +31,7 @@ import {
   type UnknownIdentity,
   UnresolvedMention,
 } from '@commy/core/ports'
-import { effectTest } from '@commy/testing/effect-test'
+import { effectTest, runTestEffect } from '@commy/testing/effect-test'
 import {
   makeStubHttpClient,
   type StubBody,
@@ -1235,6 +1235,45 @@ effectTest('publisher.post fails with a tagged UnresolvedMention on a dead menti
     )
     expect(posted).toHaveLength(0)
   }),
+)
+
+// Zulip still resolves a deactivated account's name, but renders the mention
+// silent, so it notifies nobody. The directory lists deactivated members too,
+// which must not count as resolving the mention — in either markup form.
+test.each([
+  ['@**cc-homelab-e99f08af**', 'cc-homelab-e99f08af'],
+  ['@**cc-homelab-e99f08af|4977**', 'cc-homelab-e99f08af|4977'],
+])(
+  'publisher.post fails with UnresolvedMention when %s names a deactivated seat',
+  (markup, token) =>
+    runTestEffect(() =>
+      Effect.gen(function* () {
+        const stub = yield* makeStubHttpClient
+        yield* seedSendMessage(stub, 203)
+        const adapter = yield* buildAdapter(stub)
+        yield* seedUsers(stub, [
+          HERMES,
+          {
+            user_id: 4977,
+            email: 'cc-homelab-e99f08af-bot@example.com',
+            full_name: 'cc-homelab-e99f08af',
+            is_bot: true,
+            is_active: false,
+            role: 400,
+          },
+        ])
+        const error = yield* Effect.flip(
+          adapter.publisher.post(
+            generalChannel.name,
+            decodeMessageBodySync(`${markup} your answer`),
+          ),
+        )
+        expect(error).toBeInstanceOf(UnresolvedMention)
+        if (error instanceof UnresolvedMention) {
+          expect(error.tokens).toEqual([token])
+        }
+      }),
+    ),
 )
 
 // A dead form written as an example inside a code span is literal text Zulip
