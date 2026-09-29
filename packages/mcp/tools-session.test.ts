@@ -26,7 +26,7 @@ interface SessionRig {
 
 const buildSessionRig = (
   options: {
-    readonly projectForCwd?: (cwd: string | undefined) => Effect.Effect<ProjectSlug | undefined>
+    readonly projectForCwd?: (cwd: string | undefined) => Effect.Effect<Option.Option<ProjectSlug>>
     readonly feedSessionId?: (sessionId: SessionId) => Effect.Effect<void>
   } = {},
 ): Effect.Effect<SessionRig, never, Scope.Scope> =>
@@ -430,11 +430,9 @@ test('post with session_id + cwd mints cc-<project>-<sid-prefix> derived from cw
       Effect.gen(function* () {
         const rig = yield* buildSessionRig({
           projectForCwd: (cwd) =>
-            Effect.succeed(
-              cwd === '/home/x/myproject'
-                ? Option.getOrUndefined(sanitiseProjectSlug('myproject'))
-                : undefined,
-            ),
+            cwd === '/home/x/myproject'
+              ? Effect.succeed(sanitiseProjectSlug('myproject'))
+              : Effect.succeedNone,
         })
         const result = yield* Effect.promise(() =>
           rig.client.callTool({
@@ -466,7 +464,8 @@ test('two sessions in different cwds mint two different project prefixes', () =>
           '/home/x/myproject-b': slug('myproject-b'),
         }
         const rig = yield* buildSessionRig({
-          projectForCwd: (cwd) => Effect.succeed(cwd === undefined ? undefined : cwdToSlug[cwd]),
+          projectForCwd: (cwd) =>
+            Effect.succeed(Option.fromNullable(cwd === undefined ? undefined : cwdToSlug[cwd])),
         })
         yield* Effect.promise(() =>
           rig.client.callTool({
@@ -503,9 +502,9 @@ test('post with cwd from a non-project directory falls back to bare cc-<8>', () 
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        // projectForCwd returns undefined when cwd is not in a known repo.
+        // projectForCwd returns none when cwd is not in a known repo.
         // The minted name must NOT inherit the plugin's own location.
-        const rig = yield* buildSessionRig({ projectForCwd: () => Effect.succeed(undefined) })
+        const rig = yield* buildSessionRig({ projectForCwd: () => Effect.succeedNone })
         yield* Effect.promise(() =>
           rig.client.callTool({
             name: 'post',

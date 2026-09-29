@@ -194,10 +194,10 @@ export interface RegisterToolsDeps {
    * minted `cc-<project>-<8>` name reflects the *calling* session's
    * project rather than the plugin's own location. Wired at boot in
    * `server.ts` from `COMMY_PROJECT` (operator override) and
-   * the git probe; defaults to a constant `undefined` resolver when
+   * the git probe; defaults to a resolver that always answers none when
    * omitted (tests that don't care about per-session derivation).
    */
-  readonly projectForCwd?: (cwd: string | undefined) => Effect.Effect<ProjectSlug | undefined>
+  readonly projectForCwd?: (cwd: string | undefined) => Effect.Effect<Option.Option<ProjectSlug>>
   /**
    * Restore (or seed) this session's narrow set on its first `subscribe`/
    * `unsubscribe` — memoised once per session_id in `server.ts`, so it runs
@@ -506,7 +506,7 @@ const UploadFileArgs = Schema.Struct({ path: Schema.String })
 
 const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyArray<ToolDef> => {
   const { adapter, identityCache, narrowSet } = deps
-  const projectForCwd = deps.projectForCwd ?? (() => Effect.succeed(undefined))
+  const projectForCwd = deps.projectForCwd ?? (() => Effect.succeedNone)
   /**
    * The tools that accept a host-supplied `session_id` (see
    * {@link ToolDef.hostSuppliedArgs}). EIGHT tools carry it. That is the same
@@ -548,7 +548,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
   }
   const projectForArgs = (
     args: Readonly<Record<string, unknown>>,
-  ): Effect.Effect<ProjectSlug | undefined> => projectForCwd(readCwd(args))
+  ): Effect.Effect<Option.Option<ProjectSlug>> => projectForCwd(readCwd(args))
   // Every tool call that carries arguments supplies its calling session's
   // context, uniformly. This DECIDES NOTHING about identity: it feeds the
   // shared session-id deferred (comms-k7cv) and puts the naming inputs where
@@ -569,7 +569,12 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         projectForArgs(args).pipe(
           Effect.flatMap((project) =>
             feedSession(sessionId).pipe(
-              Effect.zipRight(withSessionContext(effect, { sessionId, project })),
+              Effect.zipRight(
+                withSessionContext(effect, {
+                  sessionId,
+                  project: Option.getOrUndefined(project),
+                }),
+              ),
             ),
           ),
         ),
@@ -937,7 +942,10 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             // the snapshot persisted below captures the full live set and the
             // store's presence stays a true resume signal.
             if (sessionId !== undefined && deps.ensureSessionSubscriptions !== undefined) {
-              yield* deps.ensureSessionSubscriptions(sessionId, yield* projectForArgs(args))
+              yield* deps.ensureSessionSubscriptions(
+                sessionId,
+                Option.getOrUndefined(yield* projectForArgs(args)),
+              )
             }
             // Two sinks (see bootstrap.subscribeFromEnv): the consumer-side
             // narrow tells the event pump to tee matching events through;
@@ -983,7 +991,10 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             // Fed by `runFor` before this effect runs (see subscribe).
             const sessionId = readSessionId(args)
             if (sessionId !== undefined && deps.ensureSessionSubscriptions !== undefined) {
-              yield* deps.ensureSessionSubscriptions(sessionId, yield* projectForArgs(args))
+              yield* deps.ensureSessionSubscriptions(
+                sessionId,
+                Option.getOrUndefined(yield* projectForArgs(args)),
+              )
             }
             yield* Effect.sync(() => narrowSet.remove(intent)).pipe(
               Effect.andThen(adapter.inbox.unsubscribe(intentToTarget(intent))),
