@@ -16,7 +16,7 @@ held queue.
 
 There is no automatic hand-off — Renovate opens the PR and leaves it. This skill
 is the pull side: invoke it to evaluate one held PR, and it merges the bump or
-reports why it can't.
+raises the decision it can't make.
 
 ## The contract
 
@@ -58,10 +58,12 @@ notes directly. Then size the scope:
     changes, removed/renamed APIs, deprecations, and required config changes.
   - `grep` the codebase for the package's imports and call sites to size the
     blast radius.
-  - **If the breaking changes are extensive** — a real migration, not a couple
-    of renamed symbols — **stop. Do not merge.** Comment a summary of what the
-    upgrade needs on the PR and leave it open for a maintainer to schedule. A
-    held major is a fine outcome; a half-done forced major is not.
+  - **If the fixes are small** — a couple of renamed symbols, a changed
+    option — make them on the PR branch and carry on. A major that lands with
+    small fixes needs no decision.
+  - **If the breaking changes are extensive** — a real migration — **stop. Do
+    not merge.** Raise it as a decision (see *Decisions*). A held major is a
+    fine outcome; a half-done forced major is not.
 
 ## 4. Incompatible-dependency protocol
 
@@ -71,7 +73,8 @@ force.
 
 - Confirm the failure is a peer/ecosystem constraint, not our usage.
 - Comment on the PR naming the blocking dependency, **leave the PR open**
-  (Renovate keeps rebasing it as the ecosystem catches up), and move on.
+  (Renovate keeps rebasing it as the ecosystem catches up), and move on. This
+  is not a decision, so don't raise it as one.
 - **Never** force-merge past it, and never downgrade or pin the peer to make it
   pass. Wait for upstream.
 
@@ -107,8 +110,23 @@ nix develop .#ci --command bun run check
   `--auto` merges only once the branch ruleset's required `check` passes; it
   cannot bypass branch protection, so this is the gate enforcing itself, not a
   shortcut around it.
-- **Not confident, or breaking changes are extensive:** post a summary comment
-  explaining what the upgrade needs and leave the PR open for a maintainer.
+- **Not confident, or breaking changes are extensive:** leave the PR open and
+  raise it as a decision.
+
+## Decisions
+
+Merge every bump you can land without a maintainer's judgement. Two outcomes
+need one:
+
+- **A major whose migration is extensive** — someone has to choose when to
+  schedule the work.
+- **A bump you are not confident in** — the gate is green or nearly so, but
+  something in the changelog or the code leaves the call open.
+
+For each, write what the upgrade needs and what the choice is, in one message a
+maintainer can answer in one read. Raise it wherever you take decisions from
+the person you work for. If you have nowhere else, post it as a comment on the
+PR.
 
 ## Guardrails
 
