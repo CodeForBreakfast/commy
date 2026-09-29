@@ -591,7 +591,7 @@ test('a listen-only seat runs its catch-up at boot, with zero tool calls', async
   expect(caughtUpChannels).toEqual(['home'])
 })
 
-// ─── a quiet seat keeps its identity until it exits (comms-yyqa) ─────────────
+// ─── a quiet seat keeps its identity until it exits ───────────────────────────
 // The defect: a seat that made no posting or reacting call for an hour had its
 // bot released while its child was still alive. The events queue belongs to
 // the seat's own bot, so the seat went deaf; a seat blocked waiting for an
