@@ -100,16 +100,34 @@ Run the repo gate the same way CI does:
 nix develop .#ci --command bun run check
 ```
 
-- **Green and the evaluation is clean:** enable auto-merge so it lands when CI
-  on the head commit is green —
+- **Green and the evaluation is clean:** read the PR's author and owner, then
+  merge. Run the read as its own command before any merge command, so the
+  transcript shows both —
+
+  ```bash
+  gh pr view <number> --repo CodeForBreakfast/commy --json author,url
+  ```
+
+  The author must read `app/renovate` and the url must carry the
+  `CodeForBreakfast/commy` owner and repo. A `renovate/...` branch name proves
+  neither. If the author is anyone else, stop and raise a decision.
+
+  Then enable auto-merge, so the PR lands when CI on the head commit is green —
 
   ```bash
   gh pr merge <number> --repo CodeForBreakfast/commy --auto --squash
   ```
 
+  GitHub refuses `--auto` on a PR that is already clean. In that case merge it
+  directly, still without `--admin` —
+
+  ```bash
+  gh pr merge <number> --repo CodeForBreakfast/commy --squash
+  ```
+
   `--auto` merges only once the branch ruleset's required `check` passes; it
   cannot bypass branch protection, so this is the gate enforcing itself, not a
-  shortcut around it.
+  shortcut around it. A direct merge is held to the same ruleset.
 - **Not confident, or breaking changes are extensive:** leave the PR open and
   raise it as a decision.
 
