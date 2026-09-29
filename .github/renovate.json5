@@ -66,6 +66,12 @@
       rangeStrategy: "bump",
     },
     {
+      // @effect/tsgo patches one exact TypeScript release and refuses any other,
+      // so the two only ever move together.
+      matchPackageNames: ["typescript", "@effect/tsgo"],
+      groupName: "typescript and @effect/tsgo",
+    },
+    {
       // External requirements are compatibility floors, not pinned dependencies.
       // `requires-python` declares the Python range commy supports;
       // `build-system.requires` declares the minimum build tooling. Both must

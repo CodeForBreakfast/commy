@@ -54,7 +54,7 @@ set, the suite skips silently.
 **Lint layers, when to reach for which:**
 
 - **biome** — JS/TS style, formatting, generic lint (unused imports, etc.). Run via `bun run check` (turbo cached) or `bun run lint:fix` for auto-fix.
-- **@effect/language-service** — Effect idiom (floating Effects, untyped catches, unnecessary `Effect.gen`, reaching for global `fetch`/`Date`/`console` instead of Effect-native services, ~60 rules). TypeScript-plugin: registered in `tsconfig.json` under `compilerOptions.plugins`, persisted at build time via `effect-language-service patch` in the `prepare` script — so diagnostics surface under `tsc --noEmit` (i.e. `bun run check`), not just in editors. Project-scope rule tweaks live in the tsconfig plugin entry; document the reason inline when disabling.
+- **@effect/tsgo** — Effect idiom (floating Effects, untyped catches, unnecessary `Effect.gen`, reaching for global `fetch`/`Date`/`console` instead of Effect-native services, ~60 rules). It patches the TypeScript 7 compiler and reads its plugin entry, still named `@effect/language-service`, from `tsconfig.json` under `compilerOptions.plugins`. The `effect-tsgo patch` step in the `prepare` script applies the patch at install time — so diagnostics surface under `tsc --noEmit` (i.e. `bun run check`), not just in editors. Project-scope rule tweaks live in the tsconfig plugin entry; document the reason inline when disabling.
 
 ## Contributing
 
@@ -111,4 +111,4 @@ If you have a local read-only Effect source clone available (path is machine-loc
 | independent effects run sequentially | `Effect.all` / `Effect.forEach` with bounded `{ concurrency }` — never `'unbounded'` onto a rate-limited Zulip realm |
 | untrusted data via `as` / `JSON.parse` at the edge | `Schema.decodeUnknown` |
 
-This complements the linters, it doesn't repeat them: `@effect/language-service` and biome catch per-line idiom; this table is for the whole-block / whole-type / whole-module shapes a linter can't see.
+This complements the linters, it doesn't repeat them: `@effect/tsgo` and biome catch per-line idiom; this table is for the whole-block / whole-type / whole-module shapes a linter can't see.

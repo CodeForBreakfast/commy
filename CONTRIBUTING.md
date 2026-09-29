@@ -17,7 +17,7 @@ nix develop .#ci --command bun run check
 ```
 
 A green `bun run check` is the whole gate: typecheck, lint (biome +
-@effect/language-service), and tests, orchestrated by turbo.
+@effect/tsgo), and tests, orchestrated by turbo.
 
 ## Making changes
 
