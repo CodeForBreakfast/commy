@@ -54,6 +54,7 @@ const buildMessage = (
     readonly channel?: string
     readonly thread?: string
     readonly mentions?: ReadonlyArray<Identity>
+    readonly sender?: Identity
   } = {},
 ): Message => ({
   ref: {
@@ -73,7 +74,7 @@ const buildMessage = (
       `https://zulip.example.com/#narrow/channel/${opts.channel ?? 'general'}/near/${ts}`,
     ),
   },
-  sender: human,
+  sender: opts.sender ?? human,
   body: decodeMessageBodySync(body),
   ts: decodeTimestampSync(ts),
   mentions: userMentions(opts.mentions ?? []),
@@ -265,6 +266,25 @@ describe('catchUpChannels', () => {
       windowSeconds: 200,
     })
     expect(notifier.payloads[0]?.meta['mentioned']).toBe('true')
+  })
+
+  test("the bound bot's own posts are not dispatched back to it", async () => {
+    const history = buildHistorySpy({
+      general: [
+        buildMessage(4800, 'from-carol'),
+        buildMessage(4850, 'from-me', { sender: botIdentity }),
+        buildMessage(4900, 'carol-again'),
+      ],
+    })
+    const notifier = buildNotifierSpy()
+    await runCatchUp({
+      intents: [{ kind: 'channel', channelName: decodeChannelNameSync('general') }],
+      history: history.history,
+      notifier: notifier.notifier,
+      botIdentityId: botIdentity.id,
+      windowSeconds: 400,
+    })
+    expect(notifier.payloads.map((p) => p.content)).toEqual(['from-carol', 'carol-again'])
   })
 
   test('botIdentityId undefined → payload omits mentioned meta but still dispatches', async () => {
