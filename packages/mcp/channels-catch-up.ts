@@ -123,8 +123,10 @@ export const catchUpChannels = (deps: ChannelsCatchUpDeps): Effect.Effect<void, 
         fetchForIntent(intent, deps.history, since, newTopicsSince).pipe(catchUpAt('history')),
       { concurrency: 2 },
     )
+    // The live pump drops the seat's own posts as self-echo; a catch-up that
+    // did not would hand them back to their author.
     const messages = Arr.sort(
-      Arr.flatten(batches),
+      Arr.filter(Arr.flatten(batches), (m) => m.sender.id !== deps.botIdentityId),
       Order.mapInput(Order.number, (m: Message) => m.ts),
     )
     yield* Effect.forEach(
