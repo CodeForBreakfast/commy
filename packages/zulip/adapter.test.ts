@@ -1241,8 +1241,8 @@ effectTest('publisher.post fails with a tagged UnresolvedMention on a dead menti
 // silent, so it notifies nobody. The directory lists deactivated members too,
 // which must not count as resolving the mention — in either markup form.
 test.each([
-  ['@**cc-homelab-e99f08af**', 'cc-homelab-e99f08af'],
-  ['@**cc-homelab-e99f08af|4977**', 'cc-homelab-e99f08af|4977'],
+  ['@**cc-myproject-abcdef12**', 'cc-myproject-abcdef12'],
+  ['@**cc-myproject-abcdef12|42**', 'cc-myproject-abcdef12|42'],
 ])(
   'publisher.post fails with UnresolvedMention when %s names a deactivated seat',
   (markup, token) =>
@@ -1254,9 +1254,9 @@ test.each([
         yield* seedUsers(stub, [
           HERMES,
           {
-            user_id: 4977,
-            email: 'cc-homelab-e99f08af-bot@example.com',
-            full_name: 'cc-homelab-e99f08af',
+            user_id: 42,
+            email: 'cc-myproject-abcdef12-bot@example.com',
+            full_name: 'cc-myproject-abcdef12',
             is_bot: true,
             is_active: false,
             role: 400,
