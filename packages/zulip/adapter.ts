@@ -693,6 +693,7 @@ export const zulipAdapter = (
       readonly byId: ReadonlyMap<ZulipUserRef, Identity>
       readonly byName: ReadonlyMap<string, Identity>
       readonly byIdentityId: ReadonlyMap<IdentityId, ZulipUserRef>
+      readonly active: ReadonlySet<IdentityId>
     }
 
     const buildDirectoryLookup = (): Effect.Effect<
@@ -705,13 +706,15 @@ export const zulipAdapter = (
             const byId = new Map<ZulipUserRef, Identity>()
             const byName = new Map<string, Identity>()
             const byIdentityId = new Map<IdentityId, ZulipUserRef>()
+            const active = new Set<IdentityId>()
             for (const u of members) {
               const ident = yield* toIdentity(u)
               byId.set(ZulipUserRef(u.user_id), ident)
               byName.set(u.full_name, ident)
               byIdentityId.set(ident.id, ZulipUserRef(u.user_id))
+              if (u.is_active) active.add(ident.id)
             }
-            return { byId, byName, byIdentityId }
+            return { byId, byName, byIdentityId, active }
           }),
         ),
       )
@@ -738,6 +741,20 @@ export const zulipAdapter = (
       byUserId: (userId) => directory.byId.get(ZulipUserRef(userId)),
     })
 
+    // Zulip resolves a deactivated member's name but renders the mention
+    // silent, so only active members can be notified by one.
+    const notifiableMentionDirectory = (directory: DirectoryLookup): MentionDirectory => {
+      const isActive = (identity: Identity | undefined): identity is Identity =>
+        identity !== undefined && directory.active.has(identity.id)
+      return {
+        byName: new Map([...directory.byName].filter(([, identity]) => isActive(identity))),
+        byUserId: (userId) => {
+          const identity = directory.byId.get(ZulipUserRef(userId))
+          return isActive(identity) ? identity : undefined
+        },
+      }
+    }
+
     // Write-path mention pre-flight: a `@**Name**` token in an outbound body
     // that resolves to no known identity would be posted verbatim and notify
     // nobody — Zulip accepts it silently. Reject the write instead. The token
@@ -754,7 +771,7 @@ export const zulipAdapter = (
         ? Effect.void
         : buildDirectoryLookup().pipe(
             Effect.flatMap((directory) => {
-              const dead = unresolvedMentions(body, mentionDirectory(directory))
+              const dead = unresolvedMentions(body, notifiableMentionDirectory(directory))
               return dead.length === 0
                 ? Effect.void
                 : Effect.fail(
