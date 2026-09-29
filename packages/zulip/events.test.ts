@@ -1958,7 +1958,7 @@ test(
             },
           }),
           resolveDirectory: () => Effect.succeed(directoryFor(HERMES, MAINTAINER)),
-          currentRegistration: Effect.succeed(Option.some({ queueId: 'q-stale', lastEventId: 0 })),
+          currentRegistration: Effect.succeedSome({ queueId: 'q-stale', lastEventId: 0 }),
           boundIdentity: HERMES,
           messageRefCache: createMessageRefCache(),
         }

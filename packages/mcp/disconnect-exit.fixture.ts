@@ -21,7 +21,7 @@ import { memoryAdapter } from '@commy/memory/adapter'
 import { FetchHttpClient } from '@effect/platform'
 import { NodeContext, NodeRuntime } from '@effect/platform-node'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { ConfigProvider, Effect, Layer, Option } from 'effect'
+import { ConfigProvider, Effect, Layer } from 'effect'
 import { substrateAdapterLayer } from './bootstrap.ts'
 import { CursorStoreTag } from './cursor-store.ts'
 import { completeAsSubstrate } from './memory-substrate.ts'
@@ -33,12 +33,12 @@ import { SubscriptionStoreTag } from './subscription-store.ts'
 import { testBootStoresLayer } from './test-platform.ts'
 
 const inMemoryCursorStore = {
-  read: () => Effect.succeed(Option.none()),
+  read: () => Effect.succeedNone,
   write: () => Effect.void,
 }
 
 const inMemorySubscriptionStore = {
-  read: () => Effect.succeed(Option.none()),
+  read: () => Effect.succeedNone,
   write: () => Effect.void,
 }
 

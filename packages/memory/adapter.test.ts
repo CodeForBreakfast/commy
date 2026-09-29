@@ -140,10 +140,9 @@ test('concurrent acquire on a fresh adapter binds exactly one name', async () =>
   const adapter = await Effect.runPromise(memoryAdapter())
   const names = ['agent-a', 'agent-b', 'agent-c', 'agent-d'].map((n) => decodeBotNameSync(n))
   const exits = await Effect.runPromise(
-    Effect.all(
-      names.map((name) => Effect.exit(adapter.identity.acquire(name))),
-      { concurrency: 'unbounded' },
-    ),
+    Effect.forEach(names, (name) => Effect.exit(adapter.identity.acquire(name)), {
+      concurrency: 'unbounded',
+    }),
   )
   const successes = exits.filter(Exit.isSuccess)
   expect(successes).toHaveLength(1)

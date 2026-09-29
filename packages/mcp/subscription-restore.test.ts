@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { decodeChannelNameSync } from '@commy/core/ports'
-import { Effect, Option } from 'effect'
+import { Effect } from 'effect'
 import type { ProjectSlug } from './bootstrap.ts'
 import { createNarrowSet } from './narrow-set.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
@@ -35,7 +35,7 @@ describe('seedDefaultsIfFresh', () => {
     await Effect.runPromise(
       seedDefaultsIfFresh(
         {
-          subscriptionStore: stubStore(() => Effect.succeed(Option.none())),
+          subscriptionStore: stubStore(() => Effect.succeedNone),
           registerDefaults: (project) =>
             Effect.sync(() => {
               defaultsCall = { project }
@@ -53,7 +53,7 @@ describe('seedDefaultsIfFresh', () => {
       seedDefaultsIfFresh(
         {
           subscriptionStore: stubStore(() =>
-            Effect.succeed(Option.some([newTopics('general'), channel('commy')])),
+            Effect.succeedSome([newTopics('general'), channel('commy')]),
           ),
           registerDefaults: () =>
             Effect.sync(() => {
@@ -71,7 +71,7 @@ describe('seedDefaultsIfFresh', () => {
     await Effect.runPromise(
       seedDefaultsIfFresh(
         {
-          subscriptionStore: stubStore(() => Effect.succeed(Option.some([]))),
+          subscriptionStore: stubStore(() => Effect.succeedSome([])),
           registerDefaults: () =>
             Effect.sync(() => {
               defaultsCalled = true

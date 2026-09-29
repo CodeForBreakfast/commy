@@ -456,7 +456,7 @@ export const makeProgram = (
                         Effect.map(Option.isNone),
                         // An unreadable store is treated as fresh, matching
                         // `resumeQueue`'s own best-effort degrade.
-                        Effect.catchAll(() => Effect.succeed(true)),
+                        Effect.orElseSucceed(() => true),
                         Effect.flatMap((nothingPersisted) =>
                           nothingPersisted
                             ? Deferred.succeed(resumeOutcome, false).pipe(Effect.asVoid)
@@ -524,10 +524,12 @@ export const makeProgram = (
       // Per-call project resolver. Operator override (COMMY_PROJECT)
       // is authoritative; otherwise derive from the calling session's cwd
       // at call time — process cwd is irrelevant.
-      const projectForCwd = (cwd: string | undefined): Effect.Effect<ProjectSlug | undefined> => {
-        if (parsed.project !== undefined) return Effect.succeed(parsed.project)
-        if (cwd === undefined) return Effect.succeed(undefined)
-        return Effect.map(deriveProject({ cwd, readGitContext }), Option.getOrUndefined)
+      const projectForCwd = (
+        cwd: string | undefined,
+      ): Effect.Effect<Option.Option<ProjectSlug>> => {
+        if (parsed.project !== undefined) return Effect.succeedSome(parsed.project)
+        if (cwd === undefined) return Effect.succeedNone
+        return deriveProject({ cwd, readGitContext })
       }
 
       // Sample the realm-wide editing switch once, before the tool list is
@@ -593,12 +595,10 @@ export const makeProgram = (
             Effect.succeedNone
       const rebuildNarrowSet: Effect.Effect<void> = (
         parsed.botName === undefined
-          ? Deferred.await(sessionIdDeferred).pipe(
-              Effect.map((sessionId): SessionId | undefined => sessionId),
-            )
-          : Effect.succeed(undefined)
+          ? Deferred.await(sessionIdDeferred).pipe(Effect.asSome)
+          : Effect.succeedNone
       ).pipe(
-        Effect.flatMap((sessionId) =>
+        Effect.flatMap((sessionId: Option.Option<SessionId>) =>
           withSessionContext(
             restoreSubscriptions({
               persisted: persistedTopicIntents,
@@ -606,7 +606,7 @@ export const makeProgram = (
               narrowSet,
               inbox: adapter.inbox,
             }),
-            { sessionId, project: parsed.project },
+            { sessionId: Option.getOrUndefined(sessionId), project: parsed.project },
           ),
         ),
         Effect.catchAll((err) =>

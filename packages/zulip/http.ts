@@ -372,8 +372,10 @@ export const makeZulipHttp = (
             Effect.flatMap((text) => classifyEnvelope(text, response.status, url)),
           ),
         ),
-        Effect.catchTag('RequestError', (cause) => Effect.fail(transportError(url, cause))),
-        Effect.catchTag('ResponseError', (cause) => Effect.fail(transportError(url, cause))),
+        Effect.catchTags({
+          RequestError: (cause) => Effect.fail(transportError(url, cause)),
+          ResponseError: (cause) => Effect.fail(transportError(url, cause)),
+        }),
       )
 
     const sendWithRetry = (
@@ -465,10 +467,10 @@ export const makeZulipHttp = (
                     Effect.mapError((cause) => transportError(url, cause)),
                   )
                 }),
-                Effect.catchTag('RequestError', (cause) => Effect.fail(transportError(url, cause))),
-                Effect.catchTag('ResponseError', (cause) =>
-                  Effect.fail(transportError(url, cause)),
-                ),
+                Effect.catchTags({
+                  RequestError: (cause) => Effect.fail(transportError(url, cause)),
+                  ResponseError: (cause) => Effect.fail(transportError(url, cause)),
+                }),
               )
             })()
           : Effect.die(

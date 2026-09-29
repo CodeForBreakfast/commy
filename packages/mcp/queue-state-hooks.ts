@@ -87,7 +87,7 @@ export const buildQueueStateHooks = (deps: {
               onNone: () =>
                 store.read(id).pipe(
                   Effect.map(Option.isNone),
-                  Effect.catchAll(() => Effect.succeed(true)),
+                  Effect.orElseSucceed(() => true),
                   Effect.flatMap((isFresh) => (isFresh ? store.write(id, queue) : Effect.void)),
                 ),
             }),

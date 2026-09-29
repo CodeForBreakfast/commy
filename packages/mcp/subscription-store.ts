@@ -178,7 +178,7 @@ const readSubscriptions = (
 > =>
   fs.readFileString(path).pipe(
     Effect.flatMap((raw) => decodeSubscriptionsFile(id, raw)),
-    Effect.map((intents) => Option.some(intents)),
+    Effect.asSome,
     Effect.catchIf(isNotFound, () => Effect.succeed(Option.none<ReadonlyArray<SubscribeIntent>>())),
   )
 

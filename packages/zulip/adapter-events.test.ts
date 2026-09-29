@@ -47,7 +47,7 @@ import { HttpClient } from '@effect/platform'
 import {
   Duration,
   Effect,
-  Option,
+  type Option,
   Queue,
   Redacted,
   type Scope,
@@ -493,7 +493,7 @@ effectTest(
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
       const adapter = yield* buildAdapterWithQueueConfig(stub, {
-        resumeQueue: () => Effect.succeed(Option.some({ queueId: 'resumed-q', lastEventId: 41 })),
+        resumeQueue: () => Effect.succeedSome({ queueId: 'resumed-q', lastEventId: 41 }),
       })
       // The backlog buffered while the seat was dead: the reacted-to message
       // (which seeds the ref cache in-batch) followed by the reaction on it.
@@ -569,7 +569,7 @@ effectTest(
       const stub = yield* makeStubHttpClient
       const outcomes: boolean[] = []
       const adapter = yield* buildAdapterWithQueueConfig(stub, {
-        resumeQueue: () => Effect.succeed(Option.some({ queueId: 'resumed-q', lastEventId: 41 })),
+        resumeQueue: () => Effect.succeedSome({ queueId: 'resumed-q', lastEventId: 41 }),
         onResumeOutcome: (replayed) => Effect.sync(() => void outcomes.push(replayed)),
       })
       yield* stub.respondSequence('GET', '/api/v1/events', [
@@ -594,7 +594,7 @@ effectTest(
       const stub = yield* makeStubHttpClient
       const outcomes: boolean[] = []
       const adapter = yield* buildAdapterWithQueueConfig(stub, {
-        resumeQueue: () => Effect.succeed(Option.some({ queueId: 'dead-q', lastEventId: 41 })),
+        resumeQueue: () => Effect.succeedSome({ queueId: 'dead-q', lastEventId: 41 }),
         onResumeOutcome: (replayed) => Effect.sync(() => void outcomes.push(replayed)),
       })
       // Fresh register for the re-registration after the dead resume-poll.

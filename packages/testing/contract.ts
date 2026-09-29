@@ -152,11 +152,7 @@ const takeUntil = (
   queue: Queue.Queue<InboundEvent>,
   predicate: (event: InboundEvent) => boolean,
 ): Effect.Effect<InboundEvent> =>
-  Queue.take(queue).pipe(
-    Effect.flatMap((event) =>
-      predicate(event) ? Effect.succeed(event) : takeUntil(queue, predicate),
-    ),
-  )
+  Queue.take(queue).pipe(Effect.filterOrElse(predicate, () => takeUntil(queue, predicate)))
 
 /**
  * Await the first event matching `predicate`, failing the test (with
