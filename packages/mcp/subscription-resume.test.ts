@@ -334,7 +334,6 @@ const buildPersistRig = (): Effect.Effect<PersistRig, never, Scope.Scope> =>
     const identityCache = yield* createEphemeralIdentityCache({
       acquire: adapter.identity.acquire,
       release: adapter.identity.release,
-      idleReleaseMs: 60 * 60 * 1000,
     })
     yield* installBinder(binderRef, binderFor(identityCache))
     const narrowSet = createNarrowSet()

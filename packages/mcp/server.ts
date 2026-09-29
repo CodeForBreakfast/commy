@@ -12,20 +12,7 @@ import { CommandExecutor, FetchHttpClient, FileSystem, type HttpClient } from '@
 import { NodeContext, NodeRuntime } from '@effect/platform-node'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import type { Scope } from 'effect'
-import {
-  Cause,
-  Clock,
-  ConfigProvider,
-  Data,
-  Deferred,
-  Duration,
-  Effect,
-  Layer,
-  Option,
-  Predicate,
-  Schedule,
-} from 'effect'
+import { Cause, ConfigProvider, Data, Deferred, Effect, Layer, Option, Predicate } from 'effect'
 import type { BotName, GitContext, ParsedEnv, ProjectSlug, SessionId } from './bootstrap.ts'
 import {
   readGitContext as defaultReadGitContext,
@@ -130,42 +117,6 @@ export interface ProgramParams {
 
 /** Race budget for `identity.release()` in the shutdown finalizer. */
 const RELEASE_TIMEOUT_MS = 5000
-
-/**
- * Idle timeout for the ephemeral identity cache. Sessions that go an hour
- * without an attribution-producing tool call get their bot deactivated and
- * the slot cleared. A returning session re-acquires via Zulip's reactivate
- * + regenerate-api-key path.
- */
-const EPHEMERAL_IDLE_RELEASE_MS = 60 * 60 * 1000
-const EPHEMERAL_IDLE_SWEEP_INTERVAL_MS = 5 * 60 * 1000
-
-/**
- * Fork the ephemeral idle sweep onto a periodic schedule scoped to the
- * enclosing fiber Scope:
- *
- *   - `Schedule.spaced` keeps `intervalMs` between sweeps. (`Effect.repeat`
- *     runs the body once at fork too; the boot-time sweep is a no-op since
- *     no slot is idle yet.)
- *   - `Effect.forkScoped` ties the sweep fiber to the caller's Scope, so
- *     when that Scope closes (the pump's scoped region unwinds on natural
- *     end or signal-driven interrupt) the fiber is interrupted.
- *   - The forked fiber never blocks process exit: it's a child of the
- *     Scope, not the main fiber's join set.
- *
- * The sweep reads the current wall-clock from Effect's `Clock` rather
- * than `Date.now()`, so tests can drive it deterministically with
- * `TestClock`.
- */
-export const forkIdleSweep = (
-  cache: Pick<IdentityCache, 'sweepIdle'>,
-  intervalMs: number,
-): Effect.Effect<void, never, Scope.Scope> => {
-  const sweep = Clock.currentTimeMillis.pipe(Effect.flatMap((nowMs) => cache.sweepIdle(nowMs)))
-  return Effect.asVoid(
-    Effect.forkScoped(Effect.repeat(sweep, Schedule.spaced(Duration.millis(intervalMs)))),
-  )
-}
 
 /**
  * Type-2 default sub set for interactive CC sessions. Fires
@@ -367,7 +318,6 @@ const buildIdentityCache = (
   return createEphemeralIdentityCache({
     acquire: adapter.identity.acquire,
     release: adapter.identity.release,
-    idleReleaseMs: EPHEMERAL_IDLE_RELEASE_MS,
     ...(ephemeralOnAcquire !== undefined ? { onAcquire: ephemeralOnAcquire } : {}),
   })
 }
@@ -880,9 +830,6 @@ export const makeProgram = (
           : Effect.void,
       )
 
-      // Ephemeral mode runs a periodic idle sweep (forked into this scope).
-      const runsIdleSweep = parsed.botName === undefined
-
       // Boot-time subscribe now binds: a subscription and its events queue are
       // realm state under the seat's own principal, so the seam needs this
       // seat's naming inputs in the fiber-local context the bind reads.
@@ -1077,13 +1024,7 @@ export const makeProgram = (
       // finalizer so LIFO teardown runs pump-cancel first.
       yield* Effect.addFinalizer(() => pump.cancel)
 
-      // Ephemeral idle sweep forked into this scope — interrupted when the
-      // scope closes (pump end or signal-driven interrupt).
-      if (runsIdleSweep) {
-        yield* forkIdleSweep(identityCache, EPHEMERAL_IDLE_SWEEP_INTERVAL_MS)
-      }
-
-      // Boot-forked narrow-set rebuild, scope-tied like the sweep. Asks the
+      // Boot-forked narrow-set rebuild, scope-tied. Asks the
       // realm what this seat is subscribed to and narrows the answer with its
       // recorded topic intents, then replays the deltas journaled since
       // `beginBuffering` so a subscribe racing the load is never lost. Never

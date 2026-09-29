@@ -10,6 +10,7 @@ import type {
   IdentityId as IdentityIdType,
   IdentityOrigin,
   IdentityPort,
+  InboundEvent,
   MessageInbox,
   MessagePublisher,
   Presence,
@@ -19,11 +20,17 @@ import type {
 } from '@commy/core/ports'
 import {
   type ChannelName,
+  ChannelPermalinkSchema,
+  decodeChannelIdSync,
   decodeChannelNameSync,
   decodeDisplayNameSync,
   decodeIdentityIdSync,
+  decodeMessageBodySync,
+  decodeMessageIdSync,
   decodeThreadNameSync,
+  decodeTimestampSync,
   InboxError,
+  MessagePermalinkSchema,
 } from '@commy/core/ports'
 import { memoryAdapter } from '@commy/memory/adapter'
 import {
@@ -34,7 +41,6 @@ import {
   Layer,
   Option,
   Ref,
-  Scope,
   Stream,
   TestClock,
   TestContext,
@@ -42,7 +48,6 @@ import {
 import { EnvConfigError, NotInRepo, parseEnv, substrateAdapterLayer } from './bootstrap.ts'
 import type { CursorStore } from './cursor-store.ts'
 import { CursorStoreTag } from './cursor-store.ts'
-import type { IdentityCache } from './identity-cache.ts'
 // Above-port unit tests drive the substrate through hand-rolled port fakes and
 // the in-memory adapter only — never the real Zulip adapter (see
 // docs/architecture.md § Test architecture). `completeAsSubstrate` is the single
@@ -52,7 +57,7 @@ import type { IdentityCache } from './identity-cache.ts'
 import { completeAsSubstrate, type ZulipAdapter } from './memory-substrate.ts'
 import { QueueStateStoreTag } from './queue-state-store.ts'
 import { ResumeOutcomeLive } from './resume-outcome.ts'
-import { clientDisconnect, forkIdleSweep, makeProgram, type ProgramParams } from './server.ts'
+import { clientDisconnect, makeProgram, type ProgramParams } from './server.ts'
 import type { BindOnDemand } from './session-binder.ts'
 import {
   bindThrough,
@@ -101,13 +106,13 @@ const inMemorySubscriptionStore = (): SubscriptionStore => {
 }
 
 /**
- * Run the boot program with a substituted adapter. The
+ * Build the boot program with a substituted adapter. The
  * adapter layer is parse-gated like the production `ZulipAdapterLive`, so
  * an invalid env fails the layer build — the adapter is never acquired
  * and `close()` never fires — mirroring production exactly. The logger is
  * provided both at the program edge and to `onAcquire` (cache edge).
  */
-const runProgram = (
+const provideProgram = (
   env: Record<string, string | undefined>,
   adapter: ZulipAdapter,
   params: ProgramParams = {},
@@ -121,28 +126,27 @@ const runProgram = (
   // has to stay pristine, so a test that cares about a log line passes its own
   // `captureLogger` and asserts on it.
   const loggerLayer = params.loggerLayer ?? captureLogger([])
-  return Effect.runPromiseExit(
-    makeProgram({ ...params, loggerLayer }).pipe(
-      Effect.provide(
-        Layer.provideMerge(
-          Layer.mergeAll(
-            substrateAdapterLayer(parseEnv.pipe(Effect.as(adapter))),
-            Layer.succeed(CursorStoreTag, inMemoryCursorStore()),
-            Layer.succeed(SubscriptionStoreTag, inMemorySubscriptionStore()),
-            SessionIdLive,
-            binderRef === undefined
-              ? SessionBinderLive
-              : Layer.succeed(SessionBinderTag, binderRef),
-            ResumeOutcomeLive,
-            Layer.succeed(QueueStateStoreTag, createInMemoryQueueStateStore()),
-            loggerLayer,
-          ),
-          testPlatformLayer(env),
+  return makeProgram({ ...params, loggerLayer }).pipe(
+    Effect.provide(
+      Layer.provideMerge(
+        Layer.mergeAll(
+          substrateAdapterLayer(parseEnv.pipe(Effect.as(adapter))),
+          Layer.succeed(CursorStoreTag, inMemoryCursorStore()),
+          Layer.succeed(SubscriptionStoreTag, inMemorySubscriptionStore()),
+          SessionIdLive,
+          binderRef === undefined ? SessionBinderLive : Layer.succeed(SessionBinderTag, binderRef),
+          ResumeOutcomeLive,
+          Layer.succeed(QueueStateStoreTag, createInMemoryQueueStateStore()),
+          loggerLayer,
         ),
+        testPlatformLayer(env),
       ),
     ),
   )
 }
+
+const runProgram = (...args: Parameters<typeof provideProgram>) =>
+  Effect.runPromiseExit(provideProgram(...args))
 
 /** Squash a failure Exit to its underlying error for instanceof / message assertions. */
 const failureValue = (exit: Exit.Exit<void, unknown>): unknown =>
@@ -587,6 +591,97 @@ test('a listen-only seat runs its catch-up at boot, with zero tool calls', async
   expect(caughtUpChannels).toEqual(['home'])
 })
 
+// ─── a quiet seat keeps its identity until it exits (comms-yyqa) ─────────────
+// The defect: a seat that made no posting or reacting call for an hour had its
+// bot released while its child was still alive. The events queue belongs to
+// the seat's own bot, so the seat went deaf; a seat blocked waiting for an
+// answer is exactly the one that makes no calls. Its next post then re-acquired
+// and replayed hours of history at it. The stream below stands in for that
+// queue: it delivers only while the seat still holds its identity.
+test('a seat that makes no tool call for hours keeps its identity and goes on receiving', async () => {
+  const binderRef = await Effect.runPromise(Ref.make<Option.Option<BindOnDemand>>(Option.none()))
+  const adapter = await Effect.runPromise(memoryAdapter({ bindOnDemand: bindThrough(binderRef) }))
+  const lifecycle: string[] = []
+  let holdsIdentity = false
+  const peer: Identity = {
+    id: decodeIdentityIdSync('peer-7'),
+    name: decodeDisplayNameSync('peer'),
+    kind: 'agent',
+  }
+  const answer: InboundEvent = {
+    kind: 'message-posted',
+    message: {
+      ref: {
+        id: decodeMessageIdSync('answer-1'),
+        channel: {
+          id: decodeChannelIdSync('home'),
+          name: decodeChannelNameSync('home'),
+          permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/home'),
+        },
+        thread: Option.none(),
+        permalink: MessagePermalinkSchema.make(
+          'https://zulip.example.com/#narrow/channel/home/near/answer-1',
+        ),
+      },
+      sender: peer,
+      body: decodeMessageBodySync('the answer'),
+      ts: decodeTimestampSync(1715450000),
+      mentions: [],
+      reactions: [],
+    },
+  }
+  const substrate = completeAsSubstrate(
+    {
+      ...adapter,
+      identity: {
+        ...adapter.identity,
+        acquire: (name) =>
+          adapter.identity.acquire(name).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                holdsIdentity = true
+                lifecycle.push('acquire')
+              }),
+            ),
+          ),
+        release: (opts) =>
+          adapter.identity.release(opts).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                holdsIdentity = false
+                lifecycle.push('release')
+              }),
+            ),
+          ),
+      },
+      inbox: {
+        ...adapter.inbox,
+        events: () =>
+          Stream.fromEffect(TestClock.adjust(Duration.hours(3))).pipe(
+            Stream.flatMap(() => (holdsIdentity ? Stream.make(answer) : Stream.empty)),
+          ),
+      },
+      history: { ...adapter.history, readChannel: () => Effect.succeed([]) },
+    },
+    { close: async () => {} },
+  )
+  const exit = await Effect.runPromiseExit(
+    provideProgram(
+      { ...lazyEnv, COMMY_SUBSCRIBE: 'home' },
+      substrate,
+      {
+        notifier: async (payload) => {
+          lifecycle.push(`delivered ${payload.content}`)
+        },
+        readGitContext: () => Effect.succeed(NotInRepo()),
+      },
+      binderRef,
+    ).pipe(Effect.provide(TestContext.TestContext)),
+  )
+  expect(Exit.isSuccess(exit)).toBe(true)
+  expect(lifecycle).toEqual(['acquire', 'delivered the answer', 'release'])
+})
+
 test('main aborts non-zero when COMMY_SUBSCRIBE contains a malformed token', async () => {
   const fake = buildFakeAdapter()
   const env = {
@@ -773,64 +868,3 @@ test('clientDisconnect resolves once and detaches its listeners after EOF', asyn
   expect(stdin.listenerCount('end')).toBe(0)
   expect(stdin.listenerCount('close')).toBe(0)
 })
-
-// ─── ephemeral idle sweep on Clock + Schedule ──────────────
-
-interface SweepSpyCache {
-  readonly cache: Pick<IdentityCache, 'sweepIdle'>
-  readonly nowMsCalls: number[]
-}
-
-const buildSweepSpyCache = (): SweepSpyCache => {
-  const nowMsCalls: number[] = []
-  return {
-    nowMsCalls,
-    cache: {
-      sweepIdle: (nowMs) =>
-        Effect.sync(() => {
-          nowMsCalls.push(nowMs)
-        }),
-    },
-  }
-}
-
-test('forkIdleSweep runs sweepIdle on the spaced schedule, stamping the Clock time', () =>
-  Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const spy = buildSweepSpyCache()
-        const intervalMs = 5 * 60 * 1000
-        // Forking happens inside the scope; Schedule.spaced runs the body
-        // once immediately at fork, then once per interval thereafter.
-        yield* forkIdleSweep(spy.cache, intervalMs)
-        // Let the immediate first sweep settle.
-        yield* TestClock.adjust(Duration.zero)
-        expect(spy.nowMsCalls).toEqual([0])
-        // Each interval advance fires exactly one more sweep, stamped with
-        // the advancing Clock time (proves the body reads Clock, not Date.now).
-        yield* TestClock.adjust(Duration.millis(intervalMs))
-        expect(spy.nowMsCalls).toEqual([0, intervalMs])
-        yield* TestClock.adjust(Duration.millis(intervalMs))
-        expect(spy.nowMsCalls).toEqual([0, intervalMs, intervalMs * 2])
-      }),
-    ).pipe(Effect.provide(TestContext.TestContext)),
-  ))
-
-test('forkIdleSweep fiber is interrupted when its scope closes (does not block exit)', () =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const spy = buildSweepSpyCache()
-      const intervalMs = 5 * 60 * 1000
-      const scope = yield* Scope.make()
-      yield* forkIdleSweep(spy.cache, intervalMs).pipe(Scope.extend(scope))
-      yield* TestClock.adjust(Duration.zero)
-      expect(spy.nowMsCalls).toEqual([0])
-      yield* TestClock.adjust(Duration.millis(intervalMs))
-      expect(spy.nowMsCalls).toEqual([0, intervalMs])
-      // Closing the scope interrupts the forked sweep fiber: no further
-      // sweeps fire even as time advances past more intervals.
-      yield* Scope.close(scope, Exit.void)
-      yield* TestClock.adjust(Duration.millis(intervalMs * 3))
-      expect(spy.nowMsCalls).toEqual([0, intervalMs])
-    }).pipe(Effect.provide(TestContext.TestContext)),
-  ))

@@ -26,13 +26,11 @@ interface SessionRig {
 
 const buildSessionRig = (
   options: {
-    readonly idleReleaseMs?: number
     readonly projectForCwd?: (cwd: string | undefined) => Effect.Effect<ProjectSlug | undefined>
     readonly feedSessionId?: (sessionId: SessionId) => Effect.Effect<void>
   } = {},
 ): Effect.Effect<SessionRig, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const idleReleaseMs = options.idleReleaseMs ?? 60 * 60 * 1000
     // The mint seam, wired as `server.ts` wires it. The adapter reads through a
     // holder; the binder is installed once the cache exists, because the cache
     // is built FROM the adapter's acquire. Nothing in the tool layer decides
@@ -42,7 +40,6 @@ const buildSessionRig = (
     const identityCache = yield* createEphemeralIdentityCache({
       acquire: adapter.identity.acquire,
       release: adapter.identity.release,
-      idleReleaseMs,
     })
     yield* installBinder(binderRef, binderFor(identityCache))
     const narrowSet = createNarrowSet()

@@ -6,7 +6,7 @@ import type {
   UnknownIdentity,
 } from '@commy/core/ports'
 import { UnboundEphemeralSession } from '@commy/core/ports'
-import { Clock, Effect, SynchronizedRef } from 'effect'
+import { Effect, SynchronizedRef } from 'effect'
 import type { ProjectSlug, SessionId } from './bootstrap.ts'
 import { composeBotName } from './bootstrap.ts'
 import type { EnsureBound } from './ensure-bound.ts'
@@ -30,8 +30,7 @@ export type EnsureBoundError = UnknownIdentity | IdentityError | UnboundEphemera
  *     is set; the bot lives for the child's lifetime.
  *   - **Ephemeral**: at-most-one slot keyed by `session_id`. A new sid
  *     releases the prior identity (Zulip deactivates the bot) before
- *     acquiring the new one. Idle sweep releases the slot after N
- *     minutes of inactivity. The slot collapses to a single entry —
+ *     acquiring the new one. The slot collapses to a single entry —
  *     see the 1-slot simplification note for why this isn't a
  *     `Map<sid, AcquiredIdentity>`.
  *
@@ -51,8 +50,8 @@ export interface IdentityCache {
    *     derived from the hook-injected cwd at the boundary in
    *     `tools.ts`. Process-level project state is gone — that was
    *     the leak source.
-   *   - `state.sessionId === sid` → bump `lastUsedMs`, return existing
-   *     (project arg is ignored; the slot is named once).
+   *   - `state.sessionId === sid` → return existing (project arg is
+   *     ignored; the slot is named once).
    *   - `state.sessionId !== sid` → release the prior identity (if
    *     acquired), then mint a fresh entry for the new sid using
    *     the new call's `project`.
@@ -84,13 +83,6 @@ export interface IdentityCache {
    * shutdown body when the MCP child is exiting; idempotent.
    */
   releaseAllBound(): Effect.Effect<void>
-  /**
-   * If the slot's last activity is older than `idleReleaseMs`, release
-   * the bound identity and clear the slot. Called by a periodic timer
-   * the server boot wires up in ephemeral mode. Persistent mode is a
-   * no-op.
-   */
-  sweepIdle(nowMs: number): Effect.Effect<void>
 }
 
 export interface SingleIdentityCacheDeps {
@@ -110,8 +102,6 @@ export const createSingleIdentityCache = (deps: SingleIdentityCacheDeps): Identi
     // extra teardown to do; keeping these present means server-boot wiring
     // stays symmetric across the two factories.
     releaseAllBound: () => Effect.void,
-    // Persistent identities live for the child's lifetime.
-    sweepIdle: () => Effect.void,
   }
 }
 
@@ -126,13 +116,11 @@ export interface EphemeralIdentityCacheDeps {
   ) => Effect.Effect<AcquiredIdentity, UnknownIdentity | IdentityError>
   /**
    * Adapter-side release (`adapter.identity.release`). Called on
-   * session transitions (release-then-acquire) and idle sweeps. The
+   * session transitions (release-then-acquire). The
    * adapter is single-bound, so there's no per-name release argument
    * — release affects whichever identity is currently bound.
    */
   readonly release: () => Effect.Effect<void>
-  /** Idle threshold for `sweepIdle`. */
-  readonly idleReleaseMs: number
   /**
    * Post-acquire hook. Fires after every
    * successful adapter-side acquire — both the fresh-slot path (first
@@ -168,7 +156,6 @@ export interface EphemeralIdentityCacheDeps {
 interface Slot {
   readonly sessionId: SessionId
   readonly ensureBound: EnsureBound<UnknownIdentity | IdentityError>
-  readonly lastUsedMs: number
 }
 
 const unboundStub: EnsureBound<UnboundEphemeralSession> = Object.assign(
@@ -218,7 +205,6 @@ export const createEphemeralIdentityCache = (
     const mintSlot = (
       sessionId: SessionId,
       project: ProjectSlug | undefined,
-      nowMs: number,
       prior: Slot | undefined,
     ): Effect.Effect<readonly [EnsureBound<UnknownIdentity | IdentityError>, Slot]> => {
       const name = deriveBotName(sessionId, project)
@@ -227,11 +213,7 @@ export const createEphemeralIdentityCache = (
         acquire,
         name,
         afterAcquire: afterAcquireFor(project, sessionId),
-      }).pipe(
-        Effect.map(
-          (ensureBound) => [ensureBound, { sessionId, ensureBound, lastUsedMs: nowMs }] as const,
-        ),
-      )
+      }).pipe(Effect.map((ensureBound) => [ensureBound, { sessionId, ensureBound }] as const))
     }
 
     // Atomic read-release-clear: the effectful release runs inside the
@@ -248,11 +230,9 @@ export const createEphemeralIdentityCache = (
     )
 
     return {
-      // Reads the activity stamp from Effect's `Clock` (the same source
-      // `forkIdleSweep` feeds `sweepIdle`), so the idle comparison is
-      // consistent and `TestClock`-drivable. The slot swap is serialised
-      // through `SynchronizedRef.modifyEffect`, which also allocates the new
-      // entry's `EnsureBound` inside the atomic region.
+      // The slot swap is serialised through `SynchronizedRef.modifyEffect`,
+      // which also allocates the new entry's `EnsureBound` inside the atomic
+      // region.
       ensureBoundFor: (sessionId, project): Effect.Effect<EnsureBound<EnsureBoundError>> =>
         sessionId === undefined
           ? // Refuse to surface the slot when no sid was supplied.
@@ -263,20 +243,15 @@ export const createEphemeralIdentityCache = (
             // preserved: a follow-up call with the original sid still reaches
             // the same binding.
             Effect.succeed(unboundStub)
-          : Clock.currentTimeMillis.pipe(
-              Effect.flatMap((nowMs) =>
-                SynchronizedRef.modifyEffect(slotRef, (slot) => {
-                  if (slot !== undefined && slot.sessionId === sessionId) {
-                    const bumped: Slot = { ...slot, lastUsedMs: nowMs }
-                    return Effect.succeed([slot.ensureBound, bumped] as const)
-                  }
-                  // Fresh sid or a transition off the prior slot. The prior
-                  // slot's release is captured into the new entry's first
-                  // acquire (see `acquireForTransition`).
-                  return mintSlot(sessionId, project, nowMs, slot)
-                }),
-              ),
-            ),
+          : SynchronizedRef.modifyEffect(slotRef, (slot) => {
+              if (slot !== undefined && slot.sessionId === sessionId) {
+                return Effect.succeed([slot.ensureBound, slot] as const)
+              }
+              // Fresh sid or a transition off the prior slot. The prior
+              // slot's release is captured into the new entry's first
+              // acquire (see `acquireForTransition`).
+              return mintSlot(sessionId, project, slot)
+            }),
       boundIdentityIds: () => {
         const slot = Effect.runSync(SynchronizedRef.get(slotRef))
         if (slot === undefined) return new Set()
@@ -284,17 +259,5 @@ export const createEphemeralIdentityCache = (
         return current === undefined ? new Set() : new Set([current.identity.id])
       },
       releaseAllBound: () => releaseBoundSlot,
-      sweepIdle: (nowMs) =>
-        // Idle check and release are one atomic region — a slot a request
-        // fiber bumped (or replaced) between fork and sweep is re-read here,
-        // so the sweep only releases a slot still genuinely idle past the
-        // threshold; otherwise it leaves the slot untouched.
-        SynchronizedRef.updateEffect(slotRef, (slot) =>
-          slot !== undefined &&
-          slot.ensureBound.current() !== undefined &&
-          nowMs - slot.lastUsedMs > deps.idleReleaseMs
-            ? Effect.as(deps.release(), undefined)
-            : Effect.succeed(slot),
-        ),
     }
   })
