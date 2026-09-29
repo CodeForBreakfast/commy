@@ -571,7 +571,7 @@ export const deriveProject = (
   deps: DeriveProjectDeps,
 ): Effect.Effect<Option.Option<ProjectSlug>> => {
   if (deps.project !== undefined) {
-    return Effect.succeed(Option.some(deps.project))
+    return Effect.succeedSome(deps.project)
   }
   return Effect.map(deps.readGitContext(deps.cwd), (context) =>
     matchGitContext(context, {
@@ -604,7 +604,7 @@ const gitStdout = (
     Command.stderr('pipe'),
     Command.string,
     Effect.map((out) => out.trim()),
-    Effect.catchAll(() => Effect.succeed('')),
+    Effect.orElseSucceed(() => ''),
   )
 
 /**

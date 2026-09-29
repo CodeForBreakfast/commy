@@ -94,7 +94,7 @@ const readState = (
 ): Effect.Effect<Option.Option<EventQueueCursor>, PlatformError | ParseResult.ParseError> =>
   fs.readFileString(path).pipe(
     Effect.flatMap(decodeQueueStateFile),
-    Effect.map(Option.some),
+    Effect.asSome,
     Effect.catchIf(isNotFound, () => Effect.succeed(Option.none<EventQueueCursor>())),
   )
 

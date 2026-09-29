@@ -219,11 +219,11 @@ const bootDeployedSeat = async (
   Deferred.unsafeDone(resumeOutcome, Effect.succeed(false))
   const sessionIdDeferred = Deferred.unsafeMake<SessionIdValue>(FiberId.none)
   const inMemoryCursorStore = {
-    read: () => Effect.succeed(Option.none()),
+    read: () => Effect.succeedNone,
     write: () => Effect.void,
   }
   const inMemorySubscriptionStore = {
-    read: () => Effect.succeed(Option.none()),
+    read: () => Effect.succeedNone,
     write: () => Effect.void,
   }
 

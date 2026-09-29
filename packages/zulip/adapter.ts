@@ -1161,7 +1161,7 @@ export const zulipAdapter = (
             Arr.findFirst(res.members, (u) => u.is_active && u.full_name === name).pipe(
               Option.match({
                 onNone: () => Effect.succeed(Option.none<Identity>()),
-                onSome: (match) => toIdentity(match).pipe(Effect.map(Option.some)),
+                onSome: (match) => toIdentity(match).pipe(Effect.asSome),
               }),
             ),
           ),
@@ -1339,7 +1339,10 @@ export const zulipAdapter = (
             onSome: Effect.succeed,
           }),
         ),
-        Effect.flatMap((map) => (map.has(name) ? Effect.succeed(map) : refreshKnownStreams())),
+        Effect.filterOrElse(
+          (map) => map.has(name),
+          () => refreshKnownStreams(),
+        ),
         Effect.map((map) => Option.fromNullable(map.get(name))),
       )
 
@@ -1369,7 +1372,7 @@ export const zulipAdapter = (
         Effect.flatMap((res) =>
           Option.match(fromWireDescription(res.stream.description), {
             onNone: () => Effect.succeed(Option.none<ChannelDescription>()),
-            onSome: (raw) => decodeChannelDescription(raw).pipe(Effect.map(Option.some)),
+            onSome: (raw) => decodeChannelDescription(raw).pipe(Effect.asSome),
           }),
         ),
       )
@@ -1470,7 +1473,7 @@ export const zulipAdapter = (
             Arr.last(res.messages).pipe(
               Option.match({
                 onNone: () => Effect.succeed(Option.none<MessageId>()),
-                onSome: (m) => decodeMessageId(String(m.id)).pipe(Effect.map(Option.some)),
+                onSome: (m) => decodeMessageId(String(m.id)).pipe(Effect.asSome),
               }),
             ),
           ),
@@ -2126,10 +2129,9 @@ export const zulipAdapter = (
             { operator: 'topic', operand: topic },
           ])
         return readTopic(threadName).pipe(
-          Effect.flatMap((messages) =>
-            messages.length > 0
-              ? Effect.succeed(messages)
-              : readTopic(applyResolvedPrefix(threadName, true)),
+          Effect.filterOrElse(
+            (messages) => messages.length > 0,
+            () => readTopic(applyResolvedPrefix(threadName, true)),
           ),
           Effect.mapError((cause) => new HistoryError({ operation: 'readThread', cause })),
         )

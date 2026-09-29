@@ -586,8 +586,8 @@ export const fetchMessageRef = (
     .pipe(
       Effect.flatMap((res) => {
         const message = res.messages[0]
-        if (message === undefined || message.id !== messageId) return Effect.succeed(Option.none())
-        return decodeMessageRef(message, base).pipe(Effect.map(Option.some))
+        if (message === undefined || message.id !== messageId) return Effect.succeedNone
+        return decodeMessageRef(message, base).pipe(Effect.asSome)
       }),
     )
 

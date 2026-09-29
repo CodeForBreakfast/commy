@@ -456,7 +456,7 @@ export const makeProgram = (
                         Effect.map(Option.isNone),
                         // An unreadable store is treated as fresh, matching
                         // `resumeQueue`'s own best-effort degrade.
-                        Effect.catchAll(() => Effect.succeed(true)),
+                        Effect.orElseSucceed(() => true),
                         Effect.flatMap((nothingPersisted) =>
                           nothingPersisted
                             ? Deferred.succeed(resumeOutcome, false).pipe(Effect.asVoid)

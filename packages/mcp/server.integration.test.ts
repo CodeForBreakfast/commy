@@ -1367,7 +1367,7 @@ test('persistent boot with no prior cursor: no replay events fired, cursor initi
 test('persistent boot with a prior cursor: replay fires, mention-received notifications dispatched ahead of pump', async () => {
   const PRIOR_CURSOR_TS = 1000
   const cursorStore: CursorStore = {
-    read: () => Effect.succeed(Option.some(decodeTimestampSync(PRIOR_CURSOR_TS))),
+    read: () => Effect.succeedSome(decodeTimestampSync(PRIOR_CURSOR_TS)),
     write: () => Effect.void,
   }
 
@@ -1529,7 +1529,7 @@ test('ephemeral lazy acquire with no prior cursor: no replay, cursor initialised
 test('ephemeral lazy acquire with a prior cursor: replay fires, mention dispatched ahead of tool result', async () => {
   const PRIOR_CURSOR_TS = 1000
   const cursorStore: CursorStore = {
-    read: () => Effect.succeed(Option.some(decodeTimestampSync(PRIOR_CURSOR_TS))),
+    read: () => Effect.succeedSome(decodeTimestampSync(PRIOR_CURSOR_TS)),
     write: () => Effect.void,
   }
 
@@ -1615,7 +1615,7 @@ test('ephemeral lazy acquire with a prior cursor: replay fires, mention dispatch
 
 test('ephemeral catch-up failure is non-fatal: tool call succeeds, failure is logged', async () => {
   const cursorStore: CursorStore = {
-    read: () => Effect.succeed(Option.some(decodeTimestampSync(1000))),
+    read: () => Effect.succeedSome(decodeTimestampSync(1000)),
     write: () => Effect.void,
   }
 
@@ -1664,7 +1664,7 @@ test('ephemeral queue-ALIVE resume: history catch-up does NOT run, no duplicate 
   // either would double-deliver every message the pump already carries.
   const PRIOR_CURSOR_TS = 1000
   const cursorStore: CursorStore = {
-    read: () => Effect.succeed(Option.some(decodeTimestampSync(PRIOR_CURSOR_TS))),
+    read: () => Effect.succeedSome(decodeTimestampSync(PRIOR_CURSOR_TS)),
     write: () => Effect.void,
   }
   const replayCalls: number[] = []
@@ -1720,7 +1720,7 @@ test('ephemeral queue-DEAD resume: mentions + channels catch-up run and backfill
   // messages the dead queue could not carry.
   const PRIOR_CURSOR_TS = 1000
   const cursorStore: CursorStore = {
-    read: () => Effect.succeed(Option.some(decodeTimestampSync(PRIOR_CURSOR_TS))),
+    read: () => Effect.succeedSome(decodeTimestampSync(PRIOR_CURSOR_TS)),
     write: () => Effect.void,
   }
   const mentionedIdentity = {
@@ -1997,7 +1997,7 @@ test('ephemeral subscribe persists the live narrow set (defaults + new sub) unde
   // keyed under that id with no id ever passed to write().
   const sessionIdDeferred = Deferred.unsafeMake<SessionIdValue>(FiberId.none)
   const subscriptionStore: SubscriptionStore = {
-    read: () => Effect.succeed(Option.none()),
+    read: () => Effect.succeedNone,
     write: (intents) =>
       Effect.flatMap(Deferred.await(sessionIdDeferred), (id) =>
         Effect.sync(() => {
@@ -2035,7 +2035,7 @@ test('ephemeral resume recovers its channels from the realm and does NOT re-appl
   // is what marks this a resume rather than a first launch. Resume must honour
   // both: recover `home`, and never re-add a dropped default.
   const subscriptionStore: SubscriptionStore = {
-    read: () => Effect.succeed(Option.some([])),
+    read: () => Effect.succeedSome([]),
     write: () => Effect.void,
   }
   const cap = captureSubscribes(['home'])

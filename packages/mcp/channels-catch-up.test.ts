@@ -106,7 +106,7 @@ const buildHistorySpy = (
           return byThread[`${channel}/${threadName}`] ?? []
         }),
       recentThreads: () => Effect.succeed([]),
-      messagePermalink: () => Effect.succeed(Option.none()),
+      messagePermalink: () => Effect.succeedNone,
     },
   }
 }

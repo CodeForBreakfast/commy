@@ -210,7 +210,7 @@ const buildFakeAdapter = (
         return Effect.succeed(acquiredIdentity)
       }),
     release: () => Effect.void,
-    resolve: () => Effect.succeed(Option.none()),
+    resolve: () => Effect.succeedNone,
   }
   const publisher: MessagePublisher = {
     post: () => Effect.die(new Error('unused fake')),
@@ -247,13 +247,13 @@ const buildFakeAdapter = (
     readChannel: (_channel: ChannelName, _range: Range) => Effect.succeed([]),
     readThread: (_channel: ChannelName, _threadName, _range?: Range) => Effect.succeed([]),
     recentThreads: () => Effect.succeed([]),
-    messagePermalink: () => Effect.succeed(Option.none()),
+    messagePermalink: () => Effect.succeedNone,
   }
   const directory: Directory = {
     listAgents: () => Effect.succeed([]),
     listHumans: () => Effect.succeed([]),
     listChannels: () => Effect.succeed([]),
-    channelDescription: () => Effect.succeed(Option.none()),
+    channelDescription: () => Effect.succeedNone,
     presence: (_id: Identity): Effect.Effect<Presence> => Effect.succeed('offline'),
   }
   const adapter = completeAsSubstrate(
@@ -532,20 +532,18 @@ test('boot completes for an ephemeral seat with COMMY_SUBSCRIBE and no resume ve
     { ...adapter, inbox: { ...adapter.inbox, events: neverProduces } },
     { close: async () => {} },
   )
-  const exit = await Effect.runPromise(
-    Effect.exit(
-      Effect.promise(() =>
-        runProgram(
-          { ...lazyEnv, COMMY_SUBSCRIBE: 'home' },
-          substrate,
-          {
-            loggerLayer: captureLogger([]),
-            readGitContext: () => Effect.succeed(NotInRepo()),
-          },
-          binderRef,
-        ),
-      ).pipe(Effect.timeoutFail({ duration: '5 seconds', onTimeout: () => 'boot hung' as const })),
-    ),
+  const exit = await Effect.runPromiseExit(
+    Effect.promise(() =>
+      runProgram(
+        { ...lazyEnv, COMMY_SUBSCRIBE: 'home' },
+        substrate,
+        {
+          loggerLayer: captureLogger([]),
+          readGitContext: () => Effect.succeed(NotInRepo()),
+        },
+        binderRef,
+      ),
+    ).pipe(Effect.timeoutFail({ duration: '5 seconds', onTimeout: () => 'boot hung' as const })),
   )
   expect(Exit.isSuccess(exit)).toBe(true)
 })
