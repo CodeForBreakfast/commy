@@ -41,7 +41,7 @@
     "@commy/testing": "workspace:*",
     "@biomejs/biome": "2.5.14",
     "@effect/language-service": "0.87.2",
-    "bun-types": "1.3.14",
+    "bun-types": "1.4.2",
     "turbo": "2.10.6",
     "typescript": "6.0.3"
   }
