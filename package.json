@@ -9,7 +9,7 @@
   "packageManager": "bun@1.4.2",
   "bin": "./packages/mcp/server.ts",
   "scripts": {
-    "prepare": "git config core.hooksPath .hooks && effect-language-service patch",
+    "prepare": "git config core.hooksPath .hooks && effect-tsgo patch",
     "build": "bun build packages/mcp/server.ts --target=node --outfile packages/mcp/dist/server.js && bun build clients/claude-code/hooks/inject-session-id.ts --target=node --outfile clients/claude-code/dist/inject-session-id.js",
     "pack:npm": "bun scripts/assemble-npm-package.ts",
     "start": "bun install --no-summary && bun packages/mcp/server.ts",
@@ -40,7 +40,7 @@
   "devDependencies": {
     "@commy/testing": "workspace:*",
     "@biomejs/biome": "2.5.14",
-    "@effect/language-service": "0.87.2",
+    "@effect/tsgo": "0.45.0",
     "bun-types": "1.4.2",
     "turbo": "2.11.2",
     "typescript": "7.0.2"
