@@ -65,10 +65,14 @@ const MAINTAINER: Identity = {
   kind: 'human',
 }
 
-const directoryFor = (...identities: ReadonlyArray<Identity>): DirectoryLookup => ({
-  byId: new Map(identities.map((i) => [Number(i.id), i])),
-  byName: new Map(identities.map((i) => [i.name, i])),
-})
+const directoryFor = (...identities: ReadonlyArray<Identity>): DirectoryLookup => {
+  const directory: DirectoryLookup = {
+    byId: new Map(identities.map((i) => [Number(i.id), i])),
+    byName: new Map(identities.map((i) => [i.name, i])),
+    cover: () => Effect.succeed(directory),
+  }
+  return directory
+}
 
 const messageMentioning = (target: Identity, sender: Identity): ParsedZulipMessage => ({
   id: 100,

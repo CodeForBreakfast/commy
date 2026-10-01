@@ -110,7 +110,7 @@ import {
 } from './mentions.ts'
 import { buildMessageRef, permalinkBase, withChannelPermalink } from './permalink.ts'
 import { type RenderedContentLookup, renderedContentForBatch } from './rendered-content.ts'
-import { mentionsOfMessage } from './rendered-mentions.ts'
+import { mentionedUserIds, mentionsOfMessage } from './rendered-mentions.ts'
 import { applyResolvedPrefix, splitTopic } from './resolved-topic.ts'
 import { senderNarrow, userPresencePath, ZulipUserRef } from './user-ref.ts'
 
@@ -322,6 +322,11 @@ const sentMessageSchema = Schema.Struct({
 })
 
 const successSchema = Schema.Struct({ result: Schema.Literal('success') })
+
+const renderedSchema = Schema.Struct({
+  result: Schema.Literal('success'),
+  rendered: Schema.String,
+})
 
 /**
  * Classify a failed content edit. Zulip walls a content edit three ways —
@@ -689,35 +694,63 @@ export const zulipAdapter = (
       ZulipApiError | ParseResult.ParseError
     > => minterHttp.get('/users', usersSchema).pipe(Effect.map((res) => res.members))
 
+    // The unfiltered GET /users above is served from Zulip's realm-wide user
+    // cache, and a read racing a user's creation re-caches the list without
+    // that user until the next change to any user. Filtering by `user_ids`
+    // reads the database instead.
+    const fetchMembersById = (
+      userIds: ReadonlyArray<number>,
+    ): Effect.Effect<ReadonlyArray<ZulipUser>, ZulipApiError | ParseResult.ParseError> =>
+      minterHttp
+        .get('/users', usersSchema, { user_ids: JSON.stringify(userIds) })
+        .pipe(Effect.map((res) => res.members))
+
     interface DirectoryLookup {
       readonly byId: ReadonlyMap<ZulipUserRef, Identity>
       readonly byName: ReadonlyMap<string, Identity>
       readonly byIdentityId: ReadonlyMap<IdentityId, ZulipUserRef>
       readonly active: ReadonlySet<IdentityId>
+      readonly cover: (
+        userIds: ReadonlyArray<number>,
+      ) => Effect.Effect<DirectoryLookup, ZulipApiError | ParseResult.ParseError>
     }
+
+    const directoryOf = (
+      members: ReadonlyArray<ZulipUser>,
+    ): Effect.Effect<DirectoryLookup, ParseResult.ParseError> =>
+      Effect.gen(function* () {
+        const byId = new Map<ZulipUserRef, Identity>()
+        const byName = new Map<string, Identity>()
+        const byIdentityId = new Map<IdentityId, ZulipUserRef>()
+        const active = new Set<IdentityId>()
+        for (const u of members) {
+          const ident = yield* toIdentity(u)
+          byId.set(ZulipUserRef(u.user_id), ident)
+          byName.set(u.full_name, ident)
+          byIdentityId.set(ident.id, ZulipUserRef(u.user_id))
+          if (u.is_active) active.add(ident.id)
+        }
+        const lookup: DirectoryLookup = {
+          byId,
+          byName,
+          byIdentityId,
+          active,
+          cover: (userIds) => {
+            const missing = Arr.dedupe(userIds.filter((id) => !byId.has(ZulipUserRef(id))))
+            return Arr.isEmptyReadonlyArray(missing)
+              ? Effect.succeed(lookup)
+              : fetchMembersById(missing).pipe(
+                  Effect.flatMap((found) => directoryOf([...members, ...found])),
+                )
+          },
+        }
+        return lookup
+      })
 
     const buildDirectoryLookup = (): Effect.Effect<
       DirectoryLookup,
       ZulipApiError | ParseResult.ParseError
-    > =>
-      fetchMembers().pipe(
-        Effect.flatMap((members) =>
-          Effect.gen(function* () {
-            const byId = new Map<ZulipUserRef, Identity>()
-            const byName = new Map<string, Identity>()
-            const byIdentityId = new Map<IdentityId, ZulipUserRef>()
-            const active = new Set<IdentityId>()
-            for (const u of members) {
-              const ident = yield* toIdentity(u)
-              byId.set(ZulipUserRef(u.user_id), ident)
-              byName.set(u.full_name, ident)
-              byIdentityId.set(ident.id, ZulipUserRef(u.user_id))
-              if (u.is_active) active.add(ident.id)
-            }
-            return { byId, byName, byIdentityId, active }
-          }),
-        ),
-      )
+    > => fetchMembers().pipe(Effect.flatMap(directoryOf))
 
     // Recipient directory shape consumed by bot-dm-guard — narrower than
     // the full DirectoryLookup so the wrapping helper stays decoupled.
@@ -732,6 +765,15 @@ export const zulipAdapter = (
           ),
         })),
       )
+
+    // Zulip's renderer resolves mention names against the database, so it
+    // still knows a user the cached GET /users list has lost.
+    const renderedMentionIds = (
+      content: string,
+    ): Effect.Effect<ReadonlyArray<number>, ZulipApiError | ParseResult.ParseError> =>
+      minterHttp
+        .post('/messages/render', renderedSchema, { content })
+        .pipe(Effect.map((res) => mentionedUserIds(res.rendered)))
 
     // A directory the shared mention helpers can resolve against — the
     // name-keyed map plus an id resolver for the disambiguated `@**Name|id**`
@@ -772,12 +814,22 @@ export const zulipAdapter = (
         : buildDirectoryLookup().pipe(
             Effect.flatMap((directory) => {
               const dead = unresolvedMentions(body, notifiableMentionDirectory(directory))
-              return dead.length === 0
+              return Arr.isEmptyReadonlyArray(dead)
+                ? Effect.succeed(dead)
+                : renderedMentionIds(body).pipe(
+                    Effect.flatMap(directory.cover),
+                    Effect.map((covered) =>
+                      unresolvedMentions(body, notifiableMentionDirectory(covered)),
+                    ),
+                  )
+            }),
+            Effect.flatMap((dead) =>
+              Arr.isEmptyReadonlyArray(dead)
                 ? Effect.void
                 : Effect.fail(
                     new UnresolvedMention({ operation, tokens: dead, substrate: 'zulip' }),
-                  )
-            }),
+                  ),
+            ),
           )
 
     const mapHistoricalReactions = (
@@ -829,7 +881,7 @@ export const zulipAdapter = (
           mentions: yield* mentionsOfMessage(
             renderedFor,
             { id: Number(m.id), content: m.content },
-            mentionDirectory(directory),
+            (userIds) => directory.cover(userIds).pipe(Effect.map(mentionDirectory)),
           ),
           reactions,
         }
@@ -865,7 +917,13 @@ export const zulipAdapter = (
             Effect.gen(function* () {
               const renderedFor = yield* renderedContentForBatch(minterHttp, query, rows)
               const historical = yield* Effect.forEach(rows, toHistoricalMessage)
-              const directory = yield* Fiber.join(directoryFiber)
+              const directory = yield* Fiber.join(directoryFiber).pipe(
+                Effect.flatMap((d) =>
+                  d.cover(
+                    historical.flatMap((m) => [m.senderId, ...m.reactions.map((r) => r.userId)]),
+                  ),
+                ),
+              )
               return yield* Effect.forEach(historical, (m) =>
                 mapHistoricalMessage(m, directory, renderedFor),
               )
@@ -1155,18 +1213,33 @@ export const zulipAdapter = (
               ).pipe(Effect.as([undefined, Option.none<BoundState>()] as const)),
           }),
         ).pipe(Effect.asVoid),
-      resolve: (name) =>
-        minterHttp.get('/users', usersSchema).pipe(
-          Effect.flatMap((res) =>
-            Arr.findFirst(res.members, (u) => u.is_active && u.full_name === name).pipe(
-              Option.match({
-                onNone: () => Effect.succeed(Option.none<Identity>()),
-                onSome: (match) => toIdentity(match).pipe(Effect.asSome),
-              }),
-            ),
+      resolve: (name) => {
+        const activeNamed = (members: ReadonlyArray<ZulipUser>) =>
+          Arr.findFirst(members, (u) => u.is_active && u.full_name === name)
+        return fetchMembers().pipe(
+          Effect.flatMap((members) =>
+            Option.match(activeNamed(members), {
+              onSome: (match) => Effect.succeedSome(match),
+              onNone: () =>
+                renderedMentionIds(`@**${name}**`).pipe(
+                  Effect.flatMap((userIds) =>
+                    Arr.isEmptyReadonlyArray(userIds)
+                      ? Effect.succeed([])
+                      : fetchMembersById(userIds),
+                  ),
+                  Effect.map(activeNamed),
+                ),
+            }),
+          ),
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.succeed(Option.none<Identity>()),
+              onSome: (match) => toIdentity(match).pipe(Effect.asSome),
+            }),
           ),
           Effect.mapError((cause) => new IdentityError({ operation: 'resolve', cause })),
-        ),
+        )
+      },
     }
 
     const directory: Directory = {
@@ -2081,7 +2154,9 @@ export const zulipAdapter = (
             onPage: (query, rows) =>
               Effect.gen(function* () {
                 const renderedFor = yield* renderedContentForBatch(minterHttp, query, rows)
-                const directory = yield* Fiber.join(directoryFiber)
+                const directory = yield* Fiber.join(directoryFiber).pipe(
+                  Effect.flatMap((d) => d.cover(rows.map((row) => row.sender_id))),
+                )
                 return yield* Effect.forEach(rows, (raw) => {
                   const { flags: _flags, ...message } = raw
                   return messageToInboundEvents(
