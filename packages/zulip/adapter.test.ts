@@ -2792,6 +2792,31 @@ effectTest('inbox.unsubscribe(channel) DELETEs /users/me/subscriptions with the 
   }),
 )
 
+// A subscription row names a whole channel, so dropping one topic must leave
+// the row standing while the seat still holds another topic there.
+effectTest(
+  'inbox.unsubscribe of one topic keeps the channel row while another topic holds it',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* seedSubscribeOk(stub, 'general')
+      yield* seedUnsubscribeOk(stub, 'general')
+      const adapter = yield* buildAdapter(stub)
+      const held = { channel: generalChannel.name, thread: decodeThreadNameSync('held') }
+      const dropped = { channel: generalChannel.name, thread: decodeThreadNameSync('dropped') }
+      yield* adapter.inbox.subscribe(held)
+      yield* adapter.inbox.subscribe(dropped)
+      yield* adapter.inbox.unsubscribe(dropped)
+      const deletesWhileHeld = (yield* stub.captured).filter(
+        (r) => r.method === 'DELETE' && r.url.pathname === '/api/v1/users/me/subscriptions',
+      )
+      expect(deletesWhileHeld).toHaveLength(0)
+
+      yield* adapter.inbox.unsubscribe(held)
+      yield* findRequest(stub, 'DELETE', '/api/v1/users/me/subscriptions')
+    }),
+)
+
 effectTest('inbox.replay(since) returns message-posted events for messages with ts >= since', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient

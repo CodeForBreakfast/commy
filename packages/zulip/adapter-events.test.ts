@@ -32,6 +32,7 @@ import {
   decodeChannelNameSync,
   decodeDisplayNameSync,
   decodeMessageBodySync,
+  decodeThreadNameSync,
   decodeTimestampSync,
   type IdentityError,
   mentionedIdentities,
@@ -367,6 +368,55 @@ effectTest(
       for (const req of [...registers, ...polls]) {
         expect(decodeBasicAuth(req.headers.get('Authorization'))).toEqual(seatAuth)
       }
+    }),
+  { layer: TestContext.TestContext },
+)
+
+// A new-topics narrow makes the adapter filter its channel itself, passing a
+// reply only while the seat holds some other narrow there.
+effectTest(
+  'a reply in a held topic still arrives after a sibling topic is unsubscribed beside a new-topics narrow',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* seedRegister(stub)
+      yield* seedSubscribeOk(stub)
+      yield* stub.respond('DELETE', '/api/v1/users/me/subscriptions', {
+        body: { result: 'success', removed: ['general'], not_removed: [] },
+      })
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        {
+          body: {
+            result: 'success',
+            events: [
+              messageEvent(5, aZulipMessage({ id: 100, subject: 'held', content: 'opens' })),
+              messageEvent(6, aZulipMessage({ id: 101, subject: 'held', content: 'replies' })),
+            ],
+          },
+        },
+        { hang: true },
+      ])
+      yield* adapter.inbox.subscribe({ kind: 'new-topics-in-channel', channel: homeChannel.name })
+      yield* adapter.inbox.subscribe({
+        channel: homeChannel.name,
+        thread: decodeThreadNameSync('held'),
+      })
+      yield* adapter.inbox.subscribe({
+        channel: homeChannel.name,
+        thread: decodeThreadNameSync('dropped'),
+      })
+      yield* adapter.inbox.unsubscribe({
+        channel: homeChannel.name,
+        thread: decodeThreadNameSync('dropped'),
+      })
+      const queue = yield* eventQueue(adapter)
+      yield* awaitEventPolls(stub, 2)
+      const delivered = yield* Queue.takeAll(queue)
+      const ids = [...delivered].flatMap((e) =>
+        e.kind === 'message-posted' ? [String(e.message.ref.id)] : [],
+      )
+      expect(ids).toEqual(['100', '101'])
     }),
   { layer: TestContext.TestContext },
 )

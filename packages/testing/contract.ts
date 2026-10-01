@@ -1170,6 +1170,63 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         ),
       ))
 
+    test('inbox.unsubscribe of one topic leaves another topic in that channel delivering', () =>
+      Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const channel = yield* env.seedChannel('lobby')
+            const held = { channel: channel.name, thread: decodeThreadNameSync('held') }
+            const dropped = { channel: channel.name, thread: decodeThreadNameSync('dropped') }
+            yield* env.comms.inbox.subscribe(held)
+            yield* env.comms.inbox.subscribe(dropped)
+            yield* env.comms.inbox.unsubscribe(dropped)
+            const queue = yield* eventQueue(env.comms)
+            yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('still arrives'), {
+              thread: held.thread,
+            })
+            yield* awaitEvent(
+              queue,
+              'the post in the topic still held',
+              (e) => e.kind === 'message-posted' && e.message.body.includes('still arrives'),
+            )
+          }),
+        ),
+      ))
+
+    test('inbox.unsubscribe of one topic leaves another topic delivering beside a new-topics narrow', () =>
+      Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const channel = yield* env.seedChannel('lobby')
+            const held = { channel: channel.name, thread: decodeThreadNameSync('held') }
+            const dropped = { channel: channel.name, thread: decodeThreadNameSync('dropped') }
+            yield* env.comms.inbox.subscribe({
+              kind: 'new-topics-in-channel',
+              channel: channel.name,
+            })
+            yield* env.comms.inbox.subscribe(held)
+            yield* env.comms.inbox.subscribe(dropped)
+            yield* env.comms.inbox.unsubscribe(dropped)
+            const queue = yield* eventQueue(env.comms)
+            yield* env.comms.publisher.post(channel.name, decodeMessageBodySync('opens held'), {
+              thread: held.thread,
+            })
+            yield* env.comms.publisher.post(
+              channel.name,
+              decodeMessageBodySync('replies in held'),
+              {
+                thread: held.thread,
+              },
+            )
+            yield* awaitEvent(
+              queue,
+              'the reply in the topic still held',
+              (e) => e.kind === 'message-posted' && e.message.body.includes('replies in held'),
+            )
+          }),
+        ),
+      ))
+
     // What a seat reads back on the way up, and the ceiling on what it can
     // read. A subscription names a CHANNEL on every substrate worth targeting,
     // so a narrow below that — one topic, or first-messages-only — reads back as
