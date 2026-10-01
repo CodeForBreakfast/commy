@@ -32,6 +32,7 @@ import type {
   RecentThread,
   SubscriptionTarget,
   ThreadName,
+  ThreadSubscription,
   Timestamp as TimestampType,
 } from '@commy/core/ports'
 import {
@@ -520,19 +521,30 @@ interface BoundState {
   readonly origin: IdentityOrigin
 }
 
-// Channels are addressed by name, so the narrow sets and the per-channel
-// seen-topics ledger key on `ChannelName` — the same address the subscription
+// Channels are addressed by name, so the narrows and the per-channel
+// seen-topics ledger name a channel by `ChannelName` — the same address the subscription
 // target carries and that inbound messages expose as `ref.channel.name`.
 interface InboxState {
-  readonly subscribedChannels: HashSet.HashSet<ChannelName>
+  readonly heldNarrows: HashSet.HashSet<HeldNarrow>
   readonly newTopicsChannels: HashSet.HashSet<ChannelName>
   readonly seenTopicsByChannel: HashMap.HashMap<ChannelName, HashSet.HashSet<ThreadName>>
   readonly registration: Option.Option<EventQueueCursor>
 }
 
+// A whole-channel or single-topic subscription. One subscription row covers
+// every narrow in its channel, so the channel stays held until the last of
+// them is dropped.
+const heldNarrowOf = (target: ChannelName | ThreadSubscription) =>
+  Predicate.isString(target)
+    ? Data.struct({ channel: target, thread: Option.none<ThreadName>() })
+    : Data.struct({ channel: target.channel, thread: Option.some(target.thread) })
+type HeldNarrow = ReturnType<typeof heldNarrowOf>
+
+const holdsChannel = (state: InboxState, channelName: ChannelName): boolean =>
+  HashSet.some(state.heldNarrows, (narrow) => narrow.channel === channelName)
+
 const streamIsListening = (state: InboxState, channelName: ChannelName): boolean =>
-  HashSet.has(state.subscribedChannels, channelName) ||
-  HashSet.has(state.newTopicsChannels, channelName)
+  holdsChannel(state, channelName) || HashSet.has(state.newTopicsChannels, channelName)
 
 // Record (channelName, threadName) in the per-channel seen set, returning
 // whether this is the first observation of the topic and the next state.
@@ -1746,7 +1758,7 @@ export const zulipAdapter = (
     // subscribe/unsubscribe are Ref.update transitions; reads
     // (streamIsListening, shouldDeliver) snapshot the record.
     const inboxRef = yield* SynchronizedRef.make<InboxState>({
-      subscribedChannels: HashSet.empty<ChannelName>(),
+      heldNarrows: HashSet.empty<HeldNarrow>(),
       newTopicsChannels: HashSet.empty<ChannelName>(),
       seenTopicsByChannel: HashMap.empty<ChannelName, HashSet.HashSet<ThreadName>>(),
       registration: Option.none(),
@@ -1803,7 +1815,7 @@ export const zulipAdapter = (
               onNone: () => [false, state] as const,
               onSome: (t) => observeNewTopic(state, cname, t.name),
             })
-            if (HashSet.has(state.subscribedChannels, cname)) return [true, ticked]
+            if (holdsChannel(state, cname)) return [true, ticked]
             if (me !== undefined && mentionsIdentity(message.mentions, me.id)) {
               return [true, ticked]
             }
@@ -1880,7 +1892,7 @@ export const zulipAdapter = (
                     }
                   : {
                       ...state,
-                      subscribedChannels: HashSet.add(state.subscribedChannels, channel),
+                      heldNarrows: HashSet.add(state.heldNarrows, heldNarrowOf(target)),
                     }
                 return [wasListening, next]
               }).pipe(
@@ -1933,7 +1945,7 @@ export const zulipAdapter = (
                     }
                   : {
                       ...state,
-                      subscribedChannels: HashSet.remove(state.subscribedChannels, channel),
+                      heldNarrows: HashSet.remove(state.heldNarrows, heldNarrowOf(target)),
                     }
                 return [streamIsListening(next, channel), next]
               }).pipe(
