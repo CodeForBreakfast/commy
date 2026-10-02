@@ -778,6 +778,11 @@ const seedSendMessage = (stub: StubHttpClient, id: number): Effect.Effect<void> 
     })
   })
 
+// A mention the directory cannot place is put to Zulip's renderer before the
+// write is refused, so a test that expects a refusal seeds the rendering.
+const seedRender = (stub: StubHttpClient, rendered: string): Effect.Effect<void> =>
+  stub.respond('POST', '/api/v1/messages/render', { body: { result: 'success', rendered } })
+
 effectTest(
   'publisher.post sends type=channel + to=channel.name + content; defaults topic to "(no topic)" when no thread',
   () =>
@@ -1213,6 +1218,7 @@ effectTest('publisher.post fails with a tagged UnresolvedMention on a dead menti
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 200)
+    yield* seedRender(stub, '<p>decision for @<strong>Alice Example</strong> to make</p>')
     const adapter = yield* buildAdapter(stub)
     // The directory holds HERMES only; @**Graeme Foster** resolves to nobody.
     const error = yield* Effect.flip(
@@ -1250,6 +1256,10 @@ test.each([
       Effect.gen(function* () {
         const stub = yield* makeStubHttpClient
         yield* seedSendMessage(stub, 203)
+        yield* seedRender(
+          stub,
+          '<p><span class="user-mention silent" data-user-id="42">cc-myproject-abcdef12</span> your answer</p>',
+        )
         const adapter = yield* buildAdapter(stub)
         yield* seedUsers(stub, [
           HERMES,
@@ -1274,6 +1284,112 @@ test.each([
         }
       }),
     ),
+)
+
+// Zulip serves GET /users from a realm-wide cache, and a GET /users that lands
+// while a user is being created re-caches the list without them until the next
+// change to any user. Zulip's mention renderer and GET /users?user_ids=… read
+// the database, so they still know the new user.
+const PINNED = {
+  user_id: 777,
+  email: 'pinned-bot@example.com',
+  full_name: 'pinned-bot',
+  is_bot: true,
+  is_active: true,
+  role: 400,
+} as const
+
+const pinnedIdentity: Identity = {
+  id: decodeIdentityIdSync('777'),
+  name: decodeDisplayNameSync('pinned-bot'),
+  kind: 'agent',
+}
+
+const PINNED_SPAN = '<span class="user-mention" data-user-id="777">@pinned-bot</span>'
+
+const seedStaleUserList = (
+  stub: StubHttpClient,
+  cached: ReadonlyArray<unknown>,
+  byIds: ReadonlyArray<unknown>,
+): Effect.Effect<void> =>
+  stub.respondSequence('GET', '/api/v1/users', [
+    { body: { result: 'success', members: cached } },
+    { body: { result: 'success', members: byIds } },
+  ])
+
+const userListReads = (stub: StubHttpClient) =>
+  stub.captured.pipe(
+    Effect.map((reqs) =>
+      reqs.filter((r) => r.method === 'GET' && r.url.pathname === '/api/v1/users'),
+    ),
+  )
+
+effectTest('identity.resolve finds a bot the cached user list has not caught up with', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    yield* seedStaleUserList(stub, [HERMES], [PINNED])
+    yield* seedRender(stub, `<p>${PINNED_SPAN}</p>`)
+    const resolved = yield* adapter.identity.resolve(decodeDisplayNameSync('pinned-bot'))
+    expect(resolved).toEqual(Option.some(pinnedIdentity))
+    const reads = yield* userListReads(stub)
+    expect(reads.at(-1)?.url.searchParams.get('user_ids')).toBe('[777]')
+  }),
+)
+
+effectTest('identity.resolve answers none without a second read when the realm knows no one', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    yield* seedUsers(stub, [HERMES])
+    yield* seedRender(stub, '<p>@<strong>nobody</strong></p>')
+    const resolved = yield* adapter.identity.resolve(decodeDisplayNameSync('nobody'))
+    expect(resolved).toEqual(Option.none())
+    expect(yield* userListReads(stub)).toHaveLength(1)
+  }),
+)
+
+effectTest(
+  'publisher.post delivers a mention of a bot the cached user list has not caught up with',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* seedSendMessage(stub, 204)
+      const adapter = yield* buildAdapter(stub)
+      yield* seedStaleUserList(stub, [HERMES], [PINNED])
+      yield* seedRender(stub, `<p>${PINNED_SPAN} hello</p>`)
+      yield* adapter.publisher.post(
+        generalChannel.name,
+        decodeMessageBodySync('@**pinned-bot** hello'),
+      )
+      const params = new URLSearchParams(
+        (yield* findRequest(stub, 'POST', '/api/v1/messages')).body,
+      )
+      expect(params.get('content')).toBe('@**pinned-bot** hello')
+    }),
+)
+
+effectTest('history.readChannel names a sender the cached user list has not caught up with', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* seedStaleUserList(stub, [HERMES], [PINNED])
+    yield* seedMessages(stub, [
+      {
+        id: 9001,
+        sender_id: PINNED.user_id,
+        sender_full_name: PINNED.full_name,
+        stream_id: 1234,
+        display_recipient: 'general',
+        subject: 'office test1',
+        content: 'listening',
+        timestamp: 1790860477,
+        reactions: [],
+      },
+    ])
+    const messages = yield* adapter.history.readChannel(generalChannel.name, { limit: 50 })
+    expect(messages[0]?.sender).toEqual(pinnedIdentity)
+  }),
 )
 
 // A dead form written as an example inside a code span is literal text Zulip
@@ -1314,6 +1430,7 @@ effectTest('publisher.edit fails with a tagged UnresolvedMention on a dead menti
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* stub.respond('PATCH', '/api/v1/messages/42', { body: { result: 'success' } })
+    yield* seedRender(stub, '<p>now pinging @<strong>Alice Example</strong></p>')
     const adapter = yield* buildAdapter(stub)
     const target: MessageRef = {
       id: decodeMessageIdSync('42'),

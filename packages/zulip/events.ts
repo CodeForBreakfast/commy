@@ -50,6 +50,7 @@ import {
   Stream,
 } from 'effect'
 import type { ZulipApiError, ZulipHttp } from './http.ts'
+import type { MentionDirectory } from './mentions.ts'
 import { buildMessageRef } from './permalink.ts'
 import { type RenderedContentLookup, renderedContentPerMessage } from './rendered-content.ts'
 import { mentionsOfMessage } from './rendered-mentions.ts'
@@ -58,7 +59,19 @@ import { splitTopic } from './resolved-topic.ts'
 export interface DirectoryLookup {
   readonly byId: ReadonlyMap<number, Identity>
   readonly byName: ReadonlyMap<string, Identity>
+  /**
+   * This directory extended with whichever of `userIds` it lacks and the realm
+   * holds. The full user list it was built from can lag the realm.
+   */
+  readonly cover: (
+    userIds: ReadonlyArray<number>,
+  ) => Effect.Effect<DirectoryLookup, ZulipApiError | ParseResult.ParseError>
 }
+
+const mentionDirectoryOf = (directory: DirectoryLookup): MentionDirectory => ({
+  byName: directory.byName,
+  byUserId: (userId) => directory.byId.get(userId),
+})
 
 /**
  * LRU cache of MessageRefs keyed by Zulip message id. Reaction events
@@ -413,7 +426,8 @@ export const messageToInboundEvents = (
   renderedFor: RenderedContentLookup,
 ): Effect.Effect<ReadonlyArray<InboundEvent>, ZulipApiError | ParseResult.ParseError> =>
   Effect.gen(function* () {
-    const sender = yield* decodeSenderIdentity(message, directory)
+    const covered = yield* directory.cover([message.sender_id])
+    const sender = yield* decodeSenderIdentity(message, covered)
     const ref = yield* decodeMessageRef(message, base)
     const body = yield* decodeMessageBody(message.content)
     const ts = yield* decodeTimestamp(message.timestamp)
@@ -422,10 +436,9 @@ export const messageToInboundEvents = (
       sender,
       body,
       ts,
-      mentions: yield* mentionsOfMessage(renderedFor, message, {
-        byName: directory.byName,
-        byUserId: (userId) => directory.byId.get(userId),
-      }),
+      mentions: yield* mentionsOfMessage(renderedFor, message, (userIds) =>
+        covered.cover(userIds).pipe(Effect.map(mentionDirectoryOf)),
+      ),
       // Reactions arrive as separate `reaction` events. A freshly-posted
       // message carries no reaction state — anything that exists already
       // (via history reads) surfaces through the HistoryReader path.
@@ -511,9 +524,9 @@ export const reactionToInboundEvent = (
   reaction: ParsedZulipReactionEvent,
   directory: DirectoryLookup,
   target: MessageRef,
-): Effect.Effect<InboundEvent, ParseResult.ParseError> =>
+): Effect.Effect<InboundEvent, ZulipApiError | ParseResult.ParseError> =>
   Effect.gen(function* () {
-    const by = yield* decodeReactionIdentity(reaction, directory)
+    const by = yield* decodeReactionIdentity(reaction, yield* directory.cover([reaction.user_id]))
     const emoji = yield* decodeEmoji(reaction.emoji_name)
     return {
       kind: reactionKind(reaction.op),
@@ -707,7 +720,7 @@ const processSingleEvent = (
     const reaction = parsedReaction.right
     const eventsForTarget = (
       target: MessageRef,
-    ): Effect.Effect<ReadonlyArray<InboundEvent>, ParseResult.ParseError> =>
+    ): Effect.Effect<ReadonlyArray<InboundEvent>, ZulipApiError | ParseResult.ParseError> =>
       reactionToInboundEvent(reaction, directory, target).pipe(Effect.map((ev) => [ev]))
     const resolveTarget: Effect.Effect<
       ReadonlyArray<InboundEvent>,

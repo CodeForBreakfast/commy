@@ -770,6 +770,102 @@ effectTest(
   { layer: TestContext.TestContext },
 )
 
+// Zulip serves GET /users from a realm-wide cache that a concurrent user
+// creation can leave without the new user until the next change to any user.
+// GET /users?user_ids=… reads the database, so it still knows them.
+const seedStaleUserList = (
+  stub: StubHttpClient,
+  cached: ReadonlyArray<unknown>,
+  byIds: ReadonlyArray<unknown>,
+): Effect.Effect<void> =>
+  stub.respondSequence('GET', '/api/v1/users', [
+    { body: { result: 'success', members: cached } },
+    { body: { result: 'success', members: byIds } },
+  ])
+
+effectTest(
+  'inbox.events names a sender the cached user list has not caught up with',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* seedRegister(stub)
+      const pinnedBot = {
+        user_id: 777,
+        email: 'pinned-bot@example.com',
+        full_name: 'pinned-bot',
+        is_bot: true,
+        is_active: true,
+        role: 400,
+      }
+      yield* seedStaleUserList(stub, [HERMES, MAINTAINER], [pinnedBot])
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        {
+          body: {
+            result: 'success',
+            events: [
+              messageEvent(
+                5,
+                aZulipMessage({
+                  sender_id: pinnedBot.user_id,
+                  sender_full_name: pinnedBot.full_name,
+                }),
+              ),
+            ],
+          },
+        },
+        { hang: true },
+      ])
+      const queue = yield* eventQueue(adapter)
+      const posted = yield* Queue.take(queue)
+      expect(posted.kind).toBe('message-posted')
+      if (posted.kind === 'message-posted') {
+        expect(posted.message.sender.kind).toBe('agent')
+      }
+    }),
+  { layer: TestContext.TestContext },
+)
+
+effectTest(
+  'inbox.events wakes the seat on its own mention while the cached user list lacks it',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* buildAdapter(stub)
+      yield* seedRegister(stub)
+      yield* seedStaleUserList(stub, [MAINTAINER], [HERMES])
+      yield* stub.respond('GET', '/api/v1/messages', {
+        body: {
+          result: 'success',
+          messages: [
+            {
+              id: 300,
+              content:
+                '<p><span class="user-mention" data-user-id="9">@hermes-agent</span> listen</p>',
+            },
+          ],
+        },
+      })
+      yield* stub.respondSequence('GET', '/api/v1/events', [
+        {
+          body: {
+            result: 'success',
+            events: [
+              messageEvent(7, aZulipMessage({ id: 300, content: '@**hermes-agent** listen' })),
+            ],
+          },
+        },
+        { hang: true },
+      ])
+      const queue = yield* eventQueue(adapter)
+      const mention = yield* Queue.take(queue).pipe(
+        Effect.repeat({ until: (e: InboundEvent) => e.kind === 'mention-received' }),
+      )
+      expect(mention.kind).toBe('mention-received')
+    }),
+  { layer: TestContext.TestContext },
+)
+
 effectTest(
   'inbox.events ignores Zulip heartbeat events but advances last_event_id',
   () =>

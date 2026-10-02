@@ -145,6 +145,18 @@ export const renderedMentions = (
     Effect.map(Arr.dedupeWith((a, b) => Equal.equals(identityOf(a), identityOf(b)))),
   )
 
+/** The user ids Zulip rendered a notifying mention span for. */
+export const mentionedUserIds = (rendered: string): ReadonlyArray<number> =>
+  Arr.filterMap(
+    mentionSpans(rendered),
+    MentionSpan.$match({
+      UserSpan: ({ userId }) => Option.some(userId),
+      GroupSpan: () => Option.none(),
+      ChannelWildcardSpan: () => Option.none(),
+      TopicWildcardSpan: () => Option.none(),
+    }),
+  )
+
 /**
  * Who a message mentions, for a caller that holds its raw content and can
  * reach its rendering. The raw body is the candidate filter and nothing more:
@@ -152,18 +164,26 @@ export const renderedMentions = (
  * mentioned. Because a render is a property of the message rather than of
  * whoever reads it, the answer is the same for the bound bot as for the
  * minter whose credentials fetched it.
+ *
+ * `directoryFor` is handed the rendered user ids so it can return a directory
+ * that names all of them.
  */
 export const mentionsOfMessage = (
   renderedFor: RenderedContentLookup,
   message: { readonly id: number; readonly content: string },
-  directory: MentionDirectory,
+  directoryFor: (
+    userIds: ReadonlyArray<number>,
+  ) => Effect.Effect<MentionDirectory, ZulipApiError | ParseResult.ParseError>,
 ): Effect.Effect<ReadonlyArray<Mention>, ZulipApiError | ParseResult.ParseError> =>
   mayMention(message.content)
     ? renderedFor(message.id).pipe(
         Effect.flatMap(
           Option.match({
             onNone: () => Effect.succeed([] as ReadonlyArray<Mention>),
-            onSome: (rendered) => renderedMentions(rendered, directory),
+            onSome: (rendered) =>
+              directoryFor(mentionedUserIds(rendered)).pipe(
+                Effect.flatMap((directory) => renderedMentions(rendered, directory)),
+              ),
           }),
         ),
       )
