@@ -1218,7 +1218,7 @@ effectTest('publisher.post fails with a tagged UnresolvedMention on a dead menti
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 200)
-    yield* seedRender(stub, '<p>decision for @<strong>Graeme Foster</strong> to make</p>')
+    yield* seedRender(stub, '<p>decision for @<strong>Alice Example</strong> to make</p>')
     const adapter = yield* buildAdapter(stub)
     // The directory holds HERMES only; @**Graeme Foster** resolves to nobody.
     const error = yield* Effect.flip(
@@ -1290,22 +1290,22 @@ test.each([
 // while a user is being created re-caches the list without them until the next
 // change to any user. Zulip's mention renderer and GET /users?user_ids=… read
 // the database, so they still know the new user.
-const VOICE = {
-  user_id: 5162,
-  email: 'voice-bot@example.com',
-  full_name: 'voice',
+const PINNED = {
+  user_id: 777,
+  email: 'pinned-bot@example.com',
+  full_name: 'pinned-bot',
   is_bot: true,
   is_active: true,
   role: 400,
 } as const
 
-const voiceIdentity: Identity = {
-  id: decodeIdentityIdSync('5162'),
-  name: decodeDisplayNameSync('voice'),
+const pinnedIdentity: Identity = {
+  id: decodeIdentityIdSync('777'),
+  name: decodeDisplayNameSync('pinned-bot'),
   kind: 'agent',
 }
 
-const VOICE_SPAN = '<span class="user-mention" data-user-id="5162">@voice</span>'
+const PINNED_SPAN = '<span class="user-mention" data-user-id="777">@pinned-bot</span>'
 
 const seedStaleUserList = (
   stub: StubHttpClient,
@@ -1328,12 +1328,12 @@ effectTest('identity.resolve finds a bot the cached user list has not caught up 
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* zulipAdapter(stub, yield* makeConfig())
-    yield* seedStaleUserList(stub, [HERMES], [VOICE])
-    yield* seedRender(stub, `<p>${VOICE_SPAN}</p>`)
-    const resolved = yield* adapter.identity.resolve(decodeDisplayNameSync('voice'))
-    expect(resolved).toEqual(Option.some(voiceIdentity))
+    yield* seedStaleUserList(stub, [HERMES], [PINNED])
+    yield* seedRender(stub, `<p>${PINNED_SPAN}</p>`)
+    const resolved = yield* adapter.identity.resolve(decodeDisplayNameSync('pinned-bot'))
+    expect(resolved).toEqual(Option.some(pinnedIdentity))
     const reads = yield* userListReads(stub)
-    expect(reads.at(-1)?.url.searchParams.get('user_ids')).toBe('[5162]')
+    expect(reads.at(-1)?.url.searchParams.get('user_ids')).toBe('[777]')
   }),
 )
 
@@ -1356,13 +1356,16 @@ effectTest(
       const stub = yield* makeStubHttpClient
       yield* seedSendMessage(stub, 204)
       const adapter = yield* buildAdapter(stub)
-      yield* seedStaleUserList(stub, [HERMES], [VOICE])
-      yield* seedRender(stub, `<p>${VOICE_SPAN} hello</p>`)
-      yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('@**voice** hello'))
+      yield* seedStaleUserList(stub, [HERMES], [PINNED])
+      yield* seedRender(stub, `<p>${PINNED_SPAN} hello</p>`)
+      yield* adapter.publisher.post(
+        generalChannel.name,
+        decodeMessageBodySync('@**pinned-bot** hello'),
+      )
       const params = new URLSearchParams(
         (yield* findRequest(stub, 'POST', '/api/v1/messages')).body,
       )
-      expect(params.get('content')).toBe('@**voice** hello')
+      expect(params.get('content')).toBe('@**pinned-bot** hello')
     }),
 )
 
@@ -1370,12 +1373,12 @@ effectTest('history.readChannel names a sender the cached user list has not caug
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
-    yield* seedStaleUserList(stub, [HERMES], [VOICE])
+    yield* seedStaleUserList(stub, [HERMES], [PINNED])
     yield* seedMessages(stub, [
       {
-        id: 63631,
-        sender_id: VOICE.user_id,
-        sender_full_name: VOICE.full_name,
+        id: 9001,
+        sender_id: PINNED.user_id,
+        sender_full_name: PINNED.full_name,
         stream_id: 1234,
         display_recipient: 'general',
         subject: 'office test1',
@@ -1385,7 +1388,7 @@ effectTest('history.readChannel names a sender the cached user list has not caug
       },
     ])
     const messages = yield* adapter.history.readChannel(generalChannel.name, { limit: 50 })
-    expect(messages[0]?.sender).toEqual(voiceIdentity)
+    expect(messages[0]?.sender).toEqual(pinnedIdentity)
   }),
 )
 
@@ -1427,7 +1430,7 @@ effectTest('publisher.edit fails with a tagged UnresolvedMention on a dead menti
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* stub.respond('PATCH', '/api/v1/messages/42', { body: { result: 'success' } })
-    yield* seedRender(stub, '<p>now pinging @<strong>Graeme Foster</strong></p>')
+    yield* seedRender(stub, '<p>now pinging @<strong>Alice Example</strong></p>')
     const adapter = yield* buildAdapter(stub)
     const target: MessageRef = {
       id: decodeMessageIdSync('42'),

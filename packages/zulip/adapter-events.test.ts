@@ -740,15 +740,15 @@ effectTest(
       const stub = yield* makeStubHttpClient
       const adapter = yield* buildAdapter(stub)
       yield* seedRegister(stub)
-      const voice = {
-        user_id: 5162,
-        email: 'voice-bot@example.com',
-        full_name: 'voice',
+      const pinnedBot = {
+        user_id: 777,
+        email: 'pinned-bot@example.com',
+        full_name: 'pinned-bot',
         is_bot: true,
         is_active: true,
         role: 400,
       }
-      yield* seedStaleUserList(stub, [HERMES, MAINTAINER], [voice])
+      yield* seedStaleUserList(stub, [HERMES, MAINTAINER], [pinnedBot])
       yield* stub.respondSequence('GET', '/api/v1/events', [
         {
           body: {
@@ -756,7 +756,10 @@ effectTest(
             events: [
               messageEvent(
                 5,
-                aZulipMessage({ sender_id: voice.user_id, sender_full_name: voice.full_name }),
+                aZulipMessage({
+                  sender_id: pinnedBot.user_id,
+                  sender_full_name: pinnedBot.full_name,
+                }),
               ),
             ],
           },
