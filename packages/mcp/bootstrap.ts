@@ -22,7 +22,6 @@ import {
   ParseResult,
   Redacted,
   Schema,
-  String as Str,
 } from 'effect'
 import type { NarrowSet } from './narrow-set.ts'
 import { buildQueueStateHooks } from './queue-state-hooks.ts'
@@ -48,10 +47,11 @@ declare const ProjectSlugBrand: unique symbol
 /**
  * Sanitised project slug. Brand carries the invariant "we ran
  * `sanitiseProjectSlug`" — lowercase ASCII letters, digits, and `-`; starts
- * with a letter; capped at 12 chars. The single mint point is
- * `sanitiseProjectSlug`. Without the brand, an unsanitised string from
- * `COMMY_PROJECT` could flow through `composeBotName` and mint a
- * name that exceeds the 24-char budget or contains invalid characters.
+ * with a letter. The single mint point is `sanitiseProjectSlug`. The slug is
+ * the project's whole name, because it names the project channel;
+ * `composeBotName` shortens it for the bot name alone. Without the brand, an
+ * unsanitised string from `COMMY_PROJECT` could flow through `composeBotName`
+ * and mint a name that contains invalid characters.
  */
 export type ProjectSlug = string & { readonly [ProjectSlugBrand]: never }
 
@@ -472,11 +472,9 @@ export const parseEnv: Effect.Effect<ParsedEnv, EnvConfigError> = envConfig.pipe
 )
 
 /**
- * Project slugs are lowercase ASCII letters,
- * digits, and `-`; start with a letter; capped at 12 chars (so that
- * `cc-<project>-<8>` fits the 24-char overall budget). Returns the
- * sanitised slug, or `Option.none()` if the input collapses to something
- * unusable (empty, leading-digit, all-punctuation).
+ * Project slugs are lowercase ASCII letters, digits, and `-`, and start with
+ * a letter. Returns the sanitised slug, or `Option.none()` if the input
+ * collapses to something unusable (empty, leading-digit, all-punctuation).
  */
 export const sanitiseProjectSlug = (raw: string): Option.Option<ProjectSlug> => {
   const lowered = raw.toLowerCase()
@@ -484,18 +482,20 @@ export const sanitiseProjectSlug = (raw: string): Option.Option<ProjectSlug> => 
   const filtered = dashed.replace(/[^a-z0-9-]/g, '-')
   const collapsed = filtered.replace(/-+/g, '-')
   const trimmed = collapsed.replace(/^-+|-+$/g, '')
-  if (Str.isEmpty(trimmed)) return Option.none()
-  const truncated = trimmed.slice(0, 12).replace(/-+$/, '')
-  if (Str.isEmpty(truncated)) return Option.none()
-  if (!/^[a-z]/.test(truncated)) return Option.none()
-  return Option.some(truncated as ProjectSlug)
+  if (!/^[a-z]/.test(trimmed)) return Option.none()
+  return Option.some(trimmed as ProjectSlug)
 }
+
+/** Longest project part a bot name carries, so `cc-<project>-<8>` fits 24 chars. */
+const BOT_NAME_PROJECT_MAX = 12
 
 /**
  * Compose the bot name for an ephemeral Claude Code session.
  *
  * - `cc-<project>-<first-8-of-sessionId>` when `project` is provided
- *   (assumed already sanitised — call `sanitiseProjectSlug` first).
+ *   (assumed already sanitised — call `sanitiseProjectSlug` first). A project
+ *   longer than {@link BOT_NAME_PROJECT_MAX} is shortened here.
+ *   Mid-word shortening is acceptable, because the suffix disambiguates.
  * - `cc-<first-8-of-sessionId>` when `project` is undefined.
  *
  * `sessionId` is the branded `SessionId` type: only
@@ -510,7 +510,8 @@ export const composeBotName = (args: {
 }): BotName => {
   const suffix = args.sessionId.slice(0, 8)
   if (args.project === undefined) return decodeBotNameSync(`cc-${suffix}`)
-  return decodeBotNameSync(`cc-${args.project}-${suffix}`)
+  const project = args.project.slice(0, BOT_NAME_PROJECT_MAX).replace(/-+$/, '')
+  return decodeBotNameSync(`cc-${project}-${suffix}`)
 }
 
 /**

@@ -73,19 +73,22 @@ Sanitisation, applied uniformly at each step:
 - Lowercase.
 - Replace `/` and `_` with `-`; strip other non-`[a-z0-9-]` chars.
 - Collapse consecutive `-`; trim leading/trailing `-`.
-- Truncate to 12 chars (`cc-` + `<project>` + `-` + 8-char suffix = 24
-  max). Mid-word truncation is acceptable — the 8-char suffix
-  disambiguates anyway. A trailing `-` produced by truncation is
-  trimmed.
 - Must start with a letter post-sanitisation; otherwise the slug is
   dropped and derivation falls through (env value case) or returns
   `undefined` (git/cwd case).
+
+The sanitised project is never shortened, because it also names the
+project channel `#<project>` and the default subscriptions to it. The bot
+name alone shortens it to 12 chars, so that `cc-` + `<project>` + `-` +
+the 8-char suffix fits in 24. Mid-word shortening is acceptable, because
+the suffix disambiguates anyway, and a trailing `-` it leaves is trimmed.
 
 | Cwd / source                          | Derived project    | Resulting name                  |
 |---------------------------------------|--------------------|---------------------------------|
 | `~/myproject`                         | `myproject`        | `cc-myproject-<8>`              |
 | `~/Development/commy`                 | `commy`            | `cc-commy-<8>`                  |
 | `~/long-project` (12 chars)           | `long-project`     | `cc-long-project-<8>` (24 max)  |
+| `~/example-long-project`              | `example-long-project` | `cc-example-long-<8>`       |
 | `/tmp`                                | _undefined_        | `cc-<8>`                        |
 | `COMMY_PROJECT=custom-name`           | `custom-name`      | `cc-custom-name-<8>`            |
 

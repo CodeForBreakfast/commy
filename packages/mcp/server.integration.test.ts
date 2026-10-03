@@ -1911,6 +1911,31 @@ test('ephemeral mode without project: first post registers no narrows at all', a
   }
 })
 
+test('ephemeral mode + long project: the bot name is shortened but the default narrow uses the full channel', async () => {
+  const cap = captureSubscribes()
+  const h = await buildHarness({
+    ephemeral: true,
+    env: { COMMY_PROJECT: 'Example_Long_Project' },
+    seedChannels: ['example-long-project', 'home'],
+    inboxOverrides: cap.inboxOverrides,
+  })
+  try {
+    const sessionId = 'a1aaa1aa-0000-4000-8000-000000000007'
+    await callTool(h.client, 'post', {
+      channel_name: 'home',
+      body: 'first attribution',
+      session_id: sessionId,
+    })
+    expect(cap.tokens).toEqual(['example-long-project/general'])
+    const identity = expectStructured(
+      await callTool(h.client, 'current_identity', { session_id: sessionId }),
+    )['identity'] as Record<string, unknown>
+    expect(identity['name']).toBe('cc-example-long-a1aaa1aa')
+  } finally {
+    await h.cleanup()
+  }
+})
+
 test('ephemeral mode + project: current_identity (passive read) does NOT register defaults', async () => {
   const cap = captureSubscribes()
   const h = await buildHarness({
@@ -2153,6 +2178,23 @@ test('persistent boot with COMMY_PROJECT registers Type-1 defaults at the substr
     // Order isn't load-bearing — only membership. Persistent mode has no
     // additional onAcquire defaults beyond Type-1 itself.
     expect(new Set(cap.tokens)).toEqual(new Set(['new-topics:myproject', 'myproject/general']))
+  } finally {
+    await h.cleanup()
+  }
+})
+
+test('persistent boot with a long COMMY_PROJECT registers Type-1 defaults on the full channel', async () => {
+  const cap = captureSubscribes()
+  const h = await buildHarness({
+    env: { COMMY_PROJECT: 'example-long-project' },
+    seedChannels: ['example-long-project'],
+    inboxOverrides: cap.inboxOverrides,
+  })
+  try {
+    await new Promise((r) => setTimeout(r, 50))
+    expect(new Set(cap.tokens)).toEqual(
+      new Set(['new-topics:example-long-project', 'example-long-project/general']),
+    )
   } finally {
     await h.cleanup()
   }

@@ -159,6 +159,17 @@ test('initialize instructions name the project-slug rule and point at list_chann
   }
 })
 
+test('initialize instructions say the channel uses the full slug, not the shortened one in a bot name', async () => {
+  const { client, close } = await pairAndConnect()
+  try {
+    const instructions = client.getInstructions()
+    expect(instructions).toMatch(/never shortened/)
+    expect(instructions).toMatch(/bot name may carry a shortened form/)
+  } finally {
+    await close()
+  }
+})
+
 test('initialize instructions cover topic discipline — when to open new vs reply, naming hygiene', async () => {
   const { client, close } = await pairAndConnect()
   try {
