@@ -661,13 +661,30 @@ test('composeBotName slices session id to 8 chars', () => {
   )
 })
 
-test('composeBotName stays within the 24-char budget for max project length', () => {
+test('composeBotName keeps a twelve-character project whole', () => {
   const name = composeBotName({
     sessionId: sid('abcdef12-3456-4789-89ab-cdef01234567'),
-    project: slug('myproject-ab'), // 12 chars (the budget)
+    project: slug('myproject-ab'),
+  })
+  expect(name).toBe(decodeBotNameSync('cc-myproject-ab-abcdef12'))
+})
+
+test('composeBotName shortens a long project to twelve chars to fit the 24-char budget', () => {
+  const name = composeBotName({
+    sessionId: sid('abcdef12-3456-4789-89ab-cdef01234567'),
+    project: slug('example-long-project'),
   })
   expect(name.length).toBeLessThanOrEqual(24)
-  expect(name).toBe(decodeBotNameSync('cc-myproject-ab-abcdef12'))
+  expect(name).toBe(decodeBotNameSync('cc-example-long-abcdef12'))
+})
+
+test('composeBotName trims a trailing dash left by shortening', () => {
+  expect(
+    composeBotName({
+      sessionId: sid('abcdef12-3456-4789-89ab-cdef01234567'),
+      project: slug('hello-world-x'),
+    }),
+  ).toBe(decodeBotNameSync('cc-hello-world-abcdef12'))
 })
 
 // sanitiseProjectSlug assertions cast to `string | undefined` because
@@ -686,8 +703,8 @@ test('sanitiseProjectSlug replaces underscores and slashes with dashes', () => {
   expect(slugStr('foo/bar')).toBe('foo-bar')
 })
 
-test('sanitiseProjectSlug truncates to 12 chars', () => {
-  expect(slugStr('abcdefghijklmnop')).toBe('abcdefghijkl')
+test('sanitiseProjectSlug keeps a project name longer than twelve chars whole', () => {
+  expect(slugStr('example-long-project')).toBe('example-long-project')
 })
 
 test('sanitiseProjectSlug replaces chars outside [a-z0-9-] with a dash', () => {
@@ -702,10 +719,6 @@ test('sanitiseProjectSlug strips leading and trailing dashes', () => {
   expect(slugStr('-foo-')).toBe('foo')
 })
 
-test('sanitiseProjectSlug trims trailing dash produced by truncation', () => {
-  expect(slugStr('hello-world-x')).toBe('hello-world')
-})
-
 test('sanitiseProjectSlug returns undefined when the result is empty', () => {
   expect(slugStr('')).toBeUndefined()
   expect(slugStr('---')).toBeUndefined()
@@ -716,7 +729,7 @@ test('sanitiseProjectSlug returns undefined when the result starts with a digit'
 })
 
 test('sanitiseProjectSlug preserves digits and dashes inside the slug', () => {
-  expect(slugStr('myproject-b-3')).toBe('myproject-b')
+  expect(slugStr('myproject-b-3')).toBe('myproject-b-3')
   expect(slugStr('a1b2c3')).toBe('a1b2c3')
 })
 
@@ -757,7 +770,7 @@ test('deriveProject falls back to git remote basename when env value absent', ()
   expect(result).toBe('myproject')
 })
 
-test('deriveProject sanitises the git remote basename (mid-word truncation acceptable)', () => {
+test('deriveProject sanitises the git remote basename without shortening it', () => {
   const result = deriveStr({
     cwd: '/home/x/foo',
     readGitContext: () =>
@@ -765,7 +778,7 @@ test('deriveProject sanitises the git remote basename (mid-word truncation accep
         InRepo({ gitRoot: '/home/x/foo', remoteBasename: Option.some('My-Project_v2') }),
       ),
   })
-  expect(result).toBe('my-project-v')
+  expect(result).toBe('my-project-v2')
 })
 
 test('deriveProject falls back to git-root basename when no remote', () => {

@@ -181,6 +181,8 @@ const buildFakeAdapter = (
     readonly identityOrigin?: IdentityOrigin
     /** Reject every substrate-side subscribe, for the part-way-failure paths. */
     readonly subscribeError?: InboxError
+    /** Channels the realm already has. */
+    readonly channels?: ReadonlyArray<string>
   } = {},
 ): { readonly adapter: ZulipAdapter; readonly calls: FakeAdapterCalls } => {
   const acquired: string[] = []
@@ -252,7 +254,16 @@ const buildFakeAdapter = (
   const directory: Directory = {
     listAgents: () => Effect.succeed([]),
     listHumans: () => Effect.succeed([]),
-    listChannels: () => Effect.succeed([]),
+    listChannels: () =>
+      Effect.succeed(
+        (options.channels ?? []).map((name, index) => ({
+          id: decodeChannelIdSync(String(index + 1)),
+          name: decodeChannelNameSync(name),
+          permalink: ChannelPermalinkSchema.make(
+            `https://zulip.example.com/#narrow/channel/${name}`,
+          ),
+        })),
+      ),
     channelDescription: () => Effect.succeedNone,
     presence: (_id: Identity): Effect.Effect<Presence> => Effect.succeed('offline'),
   }
@@ -721,7 +732,7 @@ test('main applies env-driven subscriptions in order after acquire and Type-1 de
 // ─── Type-1 default sub set for project concierges ──────────────
 
 test('persistent mode + project registers Type-1 defaults (new-topics + thread/general)', async () => {
-  const fake = buildFakeAdapter()
+  const fake = buildFakeAdapter({ channels: ['foo'] })
   const env = { ...validEnv, COMMY_PROJECT: 'foo' }
   await runProgram(env, fake.adapter)
   expect(fake.calls.acquired).toEqual(['myproject-concierge'])
@@ -746,7 +757,7 @@ test('persistent mode without project registers no narrows at all', async () => 
 })
 
 test('Type-1 defaults register after acquire and before COMMY_SUBSCRIBE entries', async () => {
-  const fake = buildFakeAdapter()
+  const fake = buildFakeAdapter({ channels: ['foo'] })
   const env = {
     ...validEnv,
     COMMY_PROJECT: 'foo',
@@ -798,7 +809,7 @@ test('Type-1 default failure is logged + continues — does not crash boot', asy
   // transient Zulip hiccup never refuses concierge boot. The bot is
   // already minted at this point — refusing service over a missing
   // default would be worse than the missing default.
-  const fake = buildFakeAdapter()
+  const fake = buildFakeAdapter({ channels: ['foo'] })
   let calls = 0
   const failingInbox: MessageInbox = {
     ...fake.adapter.inbox,

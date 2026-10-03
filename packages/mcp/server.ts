@@ -4,6 +4,9 @@ import type {
   AcquiredIdentity,
   AgentComms,
   BindError,
+  ChannelName,
+  Directory,
+  DirectoryError,
   InboxError,
   MessageInbox,
 } from '@commy/core/ports'
@@ -12,7 +15,18 @@ import { CommandExecutor, FetchHttpClient, FileSystem, type HttpClient } from '@
 import { NodeContext, NodeRuntime } from '@effect/platform-node'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import { Cause, ConfigProvider, Data, Deferred, Effect, Layer, Option, Predicate } from 'effect'
+import {
+  Array as Arr,
+  Cause,
+  ConfigProvider,
+  Data,
+  Deferred,
+  Effect,
+  Layer,
+  Option,
+  type ParseResult,
+  Predicate,
+} from 'effect'
 import type { BotName, GitContext, ParsedEnv, ProjectSlug, SessionId } from './bootstrap.ts'
 import {
   readGitContext as defaultReadGitContext,
@@ -119,11 +133,37 @@ export interface ProgramParams {
 const RELEASE_TIMEOUT_MS = 5000
 
 /**
+ * The project's channel, when the realm already has one. A default
+ * subscription reads this rather than subscribing by name, because on Zulip
+ * subscribing to a channel that does not exist creates it.
+ */
+const existingProjectChannel = (
+  directory: Directory,
+  project: ProjectSlug | undefined,
+): Effect.Effect<Option.Option<ChannelName>, DirectoryError | ParseResult.ParseError> =>
+  project === undefined
+    ? Effect.succeedNone
+    : Effect.all([decodeChannelName(project), directory.listChannels()]).pipe(
+        Effect.map(([wanted, channels]) => Arr.findFirst(channels, (c) => c.name === wanted)),
+        Effect.tap(
+          Option.match({
+            onNone: () =>
+              Effect.logWarning(
+                `commy plugin: skipping the project default subscriptions — no channel named ${project} exists on the realm`,
+              ),
+            onSome: () => Effect.void,
+          }),
+        ),
+        Effect.map(Option.map((channel) => channel.name)),
+      )
+
+/**
  * Type-2 default sub set for interactive CC sessions. Fires
  * once per ephemeral slot, right after the substrate-side acquire
  * resolves: registers the project broadcast topic
  * `<project>/general` (skipped when no project slug could be
- * derived). Mentions need no narrow — they arrive unconditionally.
+ * derived, or the realm has no channel by that name). Mentions need no
+ * narrow — they arrive unconditionally.
  *
  * Failures are swallowed with a log line — the bot is already minted at
  * this point and refusing the caller's tool call over a transient
@@ -135,20 +175,25 @@ const RELEASE_TIMEOUT_MS = 5000
 const createType2DefaultsOnAcquire = (
   narrowSet: NarrowSet,
   inbox: MessageInbox,
+  directory: Directory,
 ): ((project: ProjectSlug | undefined) => Effect.Effect<void>) => {
   const registerIntent = (intent: SubscribeIntent): Effect.Effect<void, BindError | InboxError> =>
     Effect.sync(() => narrowSet.add(intent)).pipe(
       Effect.zipRight(inbox.subscribe(intentToTarget(intent))),
     )
   return (project) =>
-    (project !== undefined
-      ? Effect.all([decodeChannelName(project), decodeThreadName('general')]).pipe(
-          Effect.flatMap(([channelName, threadName]) =>
-            registerIntent({ kind: 'thread', channelName, threadName }),
-          ),
-        )
-      : Effect.void
-    ).pipe(
+    existingProjectChannel(directory, project).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.void,
+          onSome: (channelName) =>
+            decodeThreadName('general').pipe(
+              Effect.flatMap((threadName) =>
+                registerIntent({ kind: 'thread', channelName, threadName }),
+              ),
+            ),
+        }),
+      ),
       Effect.catchAll((err) =>
         Effect.logError(
           `commy plugin: Type-2 default narrow registration failed: ${Cause.pretty(Cause.fail(err))}`,
@@ -167,8 +212,8 @@ const createType2DefaultsOnAcquire = (
  *      enquiry surfaces while replies in unrelated topics stay quiet.
  *   2. `<project>/general` — project broadcast topic.
  *
- * Both are skipped when no project slug resolves from `COMMY_PROJECT`,
- * leaving the set empty — mentions still arrive, because they are
+ * Both are skipped when no project slug resolves from `COMMY_PROJECT`, or
+ * the realm has no channel by that name, leaving the set empty — mentions still arrive, because they are
  * unconditional and need no narrow. Failures swallow with a log
  * line — the bot is already minted at this point and refusing service
  * over a transient substrate hiccup would be worse than the missing
@@ -187,19 +232,24 @@ const logType1Failure = (err: unknown): Effect.Effect<void> =>
 const registerType1DefaultsOnBoot = (
   inbox: MessageInbox,
   narrowSet: NarrowSet,
+  directory: Directory,
   project: ProjectSlug | undefined,
 ): Effect.Effect<ReadonlyArray<SubscribeIntent>> =>
-  (project !== undefined
-    ? Effect.all([decodeChannelName(project), decodeThreadName('general')]).pipe(
-        Effect.map(
-          ([channelName, threadName]): ReadonlyArray<SubscribeIntent> => [
-            { kind: 'new-topics-in-channel', channelName },
-            { kind: 'thread', channelName, threadName },
-          ],
-        ),
-      )
-    : Effect.succeed<ReadonlyArray<SubscribeIntent>>([])
-  ).pipe(
+  existingProjectChannel(directory, project).pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.succeed<ReadonlyArray<SubscribeIntent>>([]),
+        onSome: (channelName) =>
+          decodeThreadName('general').pipe(
+            Effect.map(
+              (threadName): ReadonlyArray<SubscribeIntent> => [
+                { kind: 'new-topics-in-channel', channelName },
+                { kind: 'thread', channelName, threadName },
+              ],
+            ),
+          ),
+      }),
+    ),
     Effect.flatMap((intents) =>
       Effect.forEach(intents, (intent) =>
         Effect.sync(() => narrowSet.add(intent)).pipe(
@@ -563,7 +613,7 @@ export const makeProgram = (
       // persistent mode (which registers Type-1 defaults at boot instead).
       const registerType2Defaults =
         parsed.botName === undefined
-          ? createType2DefaultsOnAcquire(narrowSet, adapter.inbox)
+          ? createType2DefaultsOnAcquire(narrowSet, adapter.inbox, adapter.directory)
           : undefined
 
       // Rebuild this seat's narrow set from the realm, narrowed by whatever
@@ -802,7 +852,12 @@ export const makeProgram = (
                 persistentIdentity = acquired
               }).pipe(
                 Effect.zipRight(
-                  registerType1DefaultsOnBoot(adapter.inbox, narrowSet, parsed.project),
+                  registerType1DefaultsOnBoot(
+                    adapter.inbox,
+                    narrowSet,
+                    adapter.directory,
+                    parsed.project,
+                  ),
                 ),
               ),
           }),
