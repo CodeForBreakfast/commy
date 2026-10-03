@@ -975,7 +975,7 @@ effectTest('publisher.post hands back message and channel permalinks on the retu
       decodeMessageBodySync('hello world'),
     )
     expect(ref.permalink).toBe(
-      MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/99'),
+      MessagePermalinkSchema.make('https://zulip.example.com/#narrow/channel/1234-general/near/99'),
     )
     expect(ref.channel.permalink).toBe(
       ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/1234-general'),
@@ -992,7 +992,9 @@ effectTest('publisher.post threads the permalink through the topic when a thread
       thread: decodeThreadNameSync('planning'),
     })
     expect(ref.permalink).toBe(
-      MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/100'),
+      MessagePermalinkSchema.make(
+        'https://zulip.example.com/#narrow/channel/1234-general/topic/planning/near/100',
+      ),
     )
     expect(Option.map(ref.thread, (t) => t.permalink)).toEqual(
       Option.some(
@@ -1011,7 +1013,7 @@ effectTest('publisher.post permalink uses the public host header when one is con
     const adapter = yield* buildAdapter(stub, { hostHeader: 'public.zulip.test' })
     const ref = yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hi'))
     expect(ref.permalink).toBe(
-      MessagePermalinkSchema.make('https://public.zulip.test/#narrow/id/7'),
+      MessagePermalinkSchema.make('https://public.zulip.test/#narrow/channel/1234-general/near/7'),
     )
   }),
 )
@@ -1089,7 +1091,9 @@ effectTest(
             'https://zulip.example.com/#narrow/channel/1234-general/topic/planning/with/1',
           ),
         }),
-        permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/1'),
+        permalink: MessagePermalinkSchema.make(
+          'https://zulip.example.com/#narrow/channel/1234-general/topic/planning/near/1',
+        ),
       }
       yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('still here'), {
         replyTo: parent,
@@ -1436,7 +1440,9 @@ effectTest('publisher.edit fails with a tagged UnresolvedMention on a dead menti
       id: decodeMessageIdSync('42'),
       channel: generalChannel,
       thread: Option.none(),
-      permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
+      permalink: MessagePermalinkSchema.make(
+        'https://zulip.example.com/#narrow/channel/1234-general/near/42',
+      ),
     }
     const error = yield* Effect.flip(
       adapter.publisher.edit(target, decodeMessageBodySync('now pinging @**Graeme Foster**')),
@@ -1462,7 +1468,9 @@ effectTest('publisher.edit PATCHes /messages/{id} with the new content', () =>
       id: decodeMessageIdSync('42'),
       channel: generalChannel,
       thread: Option.none(),
-      permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
+      permalink: MessagePermalinkSchema.make(
+        'https://zulip.example.com/#narrow/channel/1234-general/near/42',
+      ),
     }
     yield* adapter.publisher.edit(target, decodeMessageBodySync('replacement body'))
     const req = yield* findRequest(stub, 'PATCH', '/api/v1/messages/42')
@@ -1487,7 +1495,9 @@ effectTest('publisher.edit wraps an unrecognised edit failure as a generic Publi
       id: decodeMessageIdSync('42'),
       channel: generalChannel,
       thread: Option.none(),
-      permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
+      permalink: MessagePermalinkSchema.make(
+        'https://zulip.example.com/#narrow/channel/1234-general/near/42',
+      ),
     }
     const err = yield* Effect.flip(adapter.publisher.edit(target, decodeMessageBodySync('nope')))
     expect(err).toBeInstanceOf(PublisherError)
@@ -1517,7 +1527,9 @@ effectTest(
         id: decodeMessageIdSync('42'),
         channel: generalChannel,
         thread: Option.none(),
-        permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
+        permalink: MessagePermalinkSchema.make(
+          'https://zulip.example.com/#narrow/channel/1234-general/near/42',
+        ),
       }
       const err = yield* Effect.flip(adapter.publisher.edit(target, decodeMessageBodySync('nope')))
       expect(err).toBeInstanceOf(MessageEditRefused)
@@ -1546,7 +1558,9 @@ effectTest(
         id: decodeMessageIdSync('42'),
         channel: generalChannel,
         thread: Option.none(),
-        permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
+        permalink: MessagePermalinkSchema.make(
+          'https://zulip.example.com/#narrow/channel/1234-general/near/42',
+        ),
       }
       const err = yield* Effect.flip(adapter.publisher.edit(target, decodeMessageBodySync('nope')))
       expect(err).toBeInstanceOf(MessageEditRefused)
@@ -1575,7 +1589,9 @@ effectTest(
         id: decodeMessageIdSync('42'),
         channel: generalChannel,
         thread: Option.none(),
-        permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
+        permalink: MessagePermalinkSchema.make(
+          'https://zulip.example.com/#narrow/channel/1234-general/near/42',
+        ),
       }
       const err = yield* Effect.flip(adapter.publisher.edit(target, decodeMessageBodySync('nope')))
       expect(err).toBeInstanceOf(MessageEditRefused)
@@ -1690,7 +1706,9 @@ effectTest('publisher.react POSTs /messages/{id}/reactions with emoji_name', () 
       id: decodeMessageIdSync('42'),
       channel: generalChannel,
       thread: Option.none(),
-      permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
+      permalink: MessagePermalinkSchema.make(
+        'https://zulip.example.com/#narrow/channel/1234-general/near/42',
+      ),
     }
     yield* adapter.publisher.react(target, decodeEmojiSync('thumbs_up'))
     const params = new URLSearchParams(
@@ -1709,7 +1727,9 @@ effectTest('publisher.unreact DELETEs /messages/{id}/reactions with emoji_name',
       id: decodeMessageIdSync('42'),
       channel: generalChannel,
       thread: Option.none(),
-      permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
+      permalink: MessagePermalinkSchema.make(
+        'https://zulip.example.com/#narrow/channel/1234-general/near/42',
+      ),
     }
     yield* adapter.publisher.unreact(target, decodeEmojiSync('thumbs_up'))
     const req = yield* findRequest(stub, 'DELETE', '/api/v1/messages/42/reactions')
@@ -1754,7 +1774,9 @@ effectTest('history.readChannel narrows by channel and maps each message to the 
             'https://zulip.example.com/#narrow/channel/1234-general/topic/lobby/with/555',
           ),
         }),
-        permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/555'),
+        permalink: MessagePermalinkSchema.make(
+          'https://zulip.example.com/#narrow/channel/1234-general/topic/lobby/near/555',
+        ),
       },
       sender: {
         id: decodeIdentityIdSync('5'),
@@ -2136,7 +2158,31 @@ effectTest('history.messagePermalink builds a link from a channel hint via the s
       thread: decodeThreadNameSync('topic-x'),
     })
     expect(link).toEqual(
-      Option.some(MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/77')),
+      Option.some(
+        MessagePermalinkSchema.make(
+          'https://zulip.example.com/#narrow/channel/1234-general/topic/topic-x/near/77',
+        ),
+      ),
+    )
+  }),
+)
+
+effectTest('history.messagePermalink links into the channel when the hint names no thread', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const adapter = yield* buildAdapter(stub)
+    yield* stub.respond('GET', '/api/v1/streams', {
+      body: { result: 'success', streams: [{ stream_id: 1234, name: 'general' }] },
+    })
+    const link = yield* adapter.history.messagePermalink(decodeMessageIdSync('77'), {
+      channel: decodeChannelNameSync('general'),
+    })
+    expect(link).toEqual(
+      Option.some(
+        MessagePermalinkSchema.make(
+          'https://zulip.example.com/#narrow/channel/1234-general/near/77',
+        ),
+      ),
     )
   }),
 )
@@ -2160,7 +2206,11 @@ effectTest('history.messagePermalink fetches the message by id when no hint is g
     ])
     const link = yield* adapter.history.messagePermalink(decodeMessageIdSync('77'))
     expect(link).toEqual(
-      Option.some(MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/77')),
+      Option.some(
+        MessagePermalinkSchema.make(
+          'https://zulip.example.com/#narrow/channel/1234-general/topic/lobby/near/77',
+        ),
+      ),
     )
   }),
 )

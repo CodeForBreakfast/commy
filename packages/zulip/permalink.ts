@@ -30,6 +30,7 @@ import {
   ThreadPermalinkSchema,
 } from '@commy/core/ports'
 import { Option } from 'effect'
+import { applyResolvedPrefix } from './resolved-topic.ts'
 
 const HASH_REPLACEMENTS: Readonly<Record<string, string>> = {
   '%': '.',
@@ -93,16 +94,37 @@ export const topicPermalink = (
     `${channelPermalink(base, channel)}/topic/${encodeHashComponent(topic)}/with/${anchor}`,
   )
 
+type ThreadLike = { readonly name: ThreadName; readonly resolved: boolean }
+
 /**
- * A single-message permalink built with Zulip's `id` operator
- * (`#narrow/id/<id>`). It resolves the message by its immutable id alone — no
- * channel or topic operand — so it never goes stale, and renders a
- * single-message view rather than the surrounding conversation (a deliberate
- * consequence: it is a precise pointer to one message, not to its thread). For
- * a rename-stable link to the conversation, use `topicPermalink`.
+ * A single-message permalink in the form Zulip's own "Copy link to message"
+ * builds (`by_conversation_and_time_url` in `web/src/hash_util.ts`):
+ * `.../topic/<topic>/near/<id>`, or `.../near/<id>` when the topic is unknown.
+ *
+ * The channel operand is what makes the link open for a viewer who never
+ * received the message. The server reads a channel's history, rather than only
+ * the messages the viewer received, when the narrow names that channel
+ * (`ok_to_include_history` in `zerver/lib/narrow.py`). A bare
+ * `#narrow/id/<id>` therefore comes back empty for anyone who was not
+ * subscribed when the message was sent.
+ *
+ * The web app keeps the link valid across a rename, move or resolve: it fetches
+ * the `near` message and retargets the narrow when the message has moved from
+ * the linked topic (`message_view.show`). The topic is written as the substrate
+ * names it now, ✔ included, because the retarget only follows the message's
+ * edit history, and a message sent into an already-resolved topic has none.
  */
-export const messagePermalink = (base: string, id: MessageId): MessagePermalink =>
-  MessagePermalinkSchema.make(`${base}/#narrow/id/${id}`)
+export const messagePermalink = (
+  base: string,
+  channel: ChannelLike,
+  id: MessageId,
+  thread?: ThreadLike,
+): MessagePermalink =>
+  MessagePermalinkSchema.make(
+    thread === undefined
+      ? `${channelPermalink(base, channel)}/near/${id}`
+      : `${channelPermalink(base, channel)}/topic/${encodeHashComponent(applyResolvedPrefix(thread.name, thread.resolved))}/near/${id}`,
+  )
 
 /** A channel ref carrying its narrow permalink. */
 export const withChannelPermalink = (
@@ -119,13 +141,10 @@ export const buildMessageRef = (
   base: string,
   id: MessageId,
   channel: { readonly id: ChannelId; readonly name: ChannelName },
-  thread?: { readonly name: ThreadName; readonly resolved: boolean },
+  thread?: ThreadLike,
 ): MessageRef => {
   const decoratedChannel = withChannelPermalink(base, channel)
-  const permalink = messagePermalink(base, id)
-  // Resolution rides on the ObservedThread as a flag; the ✔ prefix stays a
-  // substrate detail and never reaches the URL (the anchor keeps the topic
-  // link valid across a resolve regardless).
+  const permalink = messagePermalink(base, decoratedChannel, id, thread)
   return thread === undefined
     ? {
         id,

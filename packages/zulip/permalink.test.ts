@@ -93,9 +93,35 @@ test('topicPermalink appends an encoded topic segment with the anchor via the wi
   )
 })
 
-test('messagePermalink points at the message by id alone via the id operator', () => {
-  expect(messagePermalink(base, decodeMessageIdSync('42'))).toBe(
-    MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
+test('messagePermalink places the message in its topic via the near operator', () => {
+  expect(
+    messagePermalink(base, channel, decodeMessageIdSync('42'), {
+      name: decodeThreadNameSync('my topic'),
+      resolved: false,
+    }),
+  ).toBe(
+    MessagePermalinkSchema.make(
+      'https://zulip.example.com/#narrow/channel/9-general/topic/my.20topic/near/42',
+    ),
+  )
+})
+
+test('messagePermalink names a resolved topic by its substrate name', () => {
+  expect(
+    messagePermalink(base, channel, decodeMessageIdSync('42'), {
+      name: decodeThreadNameSync('planning'),
+      resolved: true,
+    }),
+  ).toBe(
+    MessagePermalinkSchema.make(
+      'https://zulip.example.com/#narrow/channel/9-general/topic/.E2.9C.94.20planning/near/42',
+    ),
+  )
+})
+
+test('messagePermalink falls back to the channel when the topic is unknown', () => {
+  expect(messagePermalink(base, channel, decodeMessageIdSync('42'))).toBe(
+    MessagePermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-general/near/42'),
   )
 })
 
@@ -110,12 +136,6 @@ test('topicPermalink survives a topic rename/resolve: the with/<anchor> locator 
 
   expect(beforeResolve.endsWith('/with/42')).toBe(true)
   expect(afterResolve.endsWith('/with/42')).toBe(true)
-})
-
-// The message permalink carries no topic operand at all, so it is trivially
-// invariant across any topic rename/move/resolve.
-test('messagePermalink is topic-independent', () => {
-  expect(messagePermalink(base, decodeMessageIdSync('42'))).not.toContain('/topic/')
 })
 
 test('withChannelPermalink decorates a channel ref with its permalink', () => {
@@ -146,7 +166,9 @@ test('buildMessageRef decorates message, channel and topic for a threaded messag
         'https://zulip.example.com/#narrow/channel/9-general/topic/lobby/with/42',
       ),
     }),
-    permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
+    permalink: MessagePermalinkSchema.make(
+      'https://zulip.example.com/#narrow/channel/9-general/topic/lobby/near/42',
+    ),
   })
 })
 
@@ -159,6 +181,8 @@ test('buildMessageRef omits the thread for a thread-less message', () => {
       permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/9-general'),
     },
     thread: Option.none(),
-    permalink: MessagePermalinkSchema.make('https://zulip.example.com/#narrow/id/42'),
+    permalink: MessagePermalinkSchema.make(
+      'https://zulip.example.com/#narrow/channel/9-general/near/42',
+    ),
   })
 })
