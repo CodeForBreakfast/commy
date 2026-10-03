@@ -412,46 +412,35 @@ test('a fresh conversation gets a fresh seat rather than inheriting the last one
 })
 
 /**
- * The three verbs `comms-tww6` is open about, observed rather than argued
- * about. They reach the substrate's bind seam but sit outside the matcher, so
- * the hook never runs for them and no `session_id` reaches the server. Under
- * the deployed configuration they refuse — a typed refusal, not silent
- * attribution to whatever seat an earlier call happened to bind.
- *
- * This is a characterisation of HEAD, not an endorsement: whether they should
- * instead be stamped is `comms-tww6`'s fork. When that lands, this test is
- * what has to be rewritten, deliberately.
+ * Resolving a thread and describing a channel both publish the actor's name
+ * into the realm, so each must act under the seat of the conversation making
+ * the call. The seed post binds one conversation's seat first; each verb is
+ * then called from a different conversation and has to bind that one, not
+ * inherit the seat already held.
  */
-test('the tww6 verbs are outside the matcher, so the deployed configuration refuses them', async () => {
+test("the thread-resolution and channel-description verbs act under the calling conversation's seat", async () => {
   const cwd = nonRepoCwd()
-  const manifest = await readShippedHooksManifest()
-  const seat = await bootDeployedSeat(manifest)
+  const seat = await bootDeployedSeat(await readShippedHooksManifest())
+  const calls: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+    ['resolve_thread', { channel_name: 'home', thread: 'a-topic' }],
+    ['unresolve_thread', { channel_name: 'home', thread: 'a-topic' }],
+    ['set_channel_description', { channel_name: 'home', description: 'a new description' }],
+  ]
   try {
-    await seat.callAsClaudeCode(
-      'post',
-      { channel_name: 'home', body: 'seed', thread: 'a-topic' },
-      { sessionId: SID_CONVERSATION, cwd: cwd.path },
-    )
-    for (const tool of ['resolve_thread', 'unresolve_thread'] as const) {
-      const args = await argumentsAfterPreToolUse(manifest, {
-        session_id: SID_CONVERSATION,
-        cwd: cwd.path,
-        tool_name: toolNameAsClaudeCodeSeesIt(tool),
-        tool_input: { channel_name: 'home', thread: 'a-topic' },
-      })
-      expect(args).not.toHaveProperty('session_id')
-      const refusal = await refusalMessage(
-        seat.callAsClaudeCode(tool, { channel_name: 'home', thread: 'a-topic' }),
+    for (const [tool, args] of calls) {
+      await seat.callAsClaudeCode(
+        'post',
+        { channel_name: 'home', body: 'seed', thread: 'a-topic' },
+        { sessionId: SID_CONVERSATION, cwd: cwd.path },
       )
-      expect(refusal).toContain('UnboundEphemeralSession')
+      expect(await seat.boundName()).toBe('cc-aaaaaaaa')
+      const result = await seat.callAsClaudeCode(tool, args, {
+        sessionId: SID_AFTER_CLEAR,
+        cwd: cwd.path,
+      })
+      expect(result.isError).toBeFalsy()
+      expect(await seat.boundName()).toBe('cc-bbbbbbbb')
     }
-    const description = await refusalMessage(
-      seat.callAsClaudeCode('set_channel_description', {
-        channel_name: 'home',
-        description: 'a new description',
-      }),
-    )
-    expect(description).toContain('UnboundEphemeralSession')
   } finally {
     await seat.shutdown()
     cwd.remove()
@@ -497,13 +486,9 @@ const DEPLOYED_OUTCOMES: Readonly<Record<string, DeployedOutcome>> = {
   unreact: 'usable',
   download_file: 'usable',
   upload_file: 'usable',
-  // The three `comms-tww6` is open about: they reach the substrate's bind seam
-  // but sit outside the PreToolUse matcher, so no session id ever reaches the
-  // server on their behalf. Recorded as observed, not as endorsed — when
-  // `comms-tww6` is decided, these three entries are what changes.
-  resolve_thread: 'refused-for-want-of-identity',
-  unresolve_thread: 'refused-for-want-of-identity',
-  set_channel_description: 'refused-for-want-of-identity',
+  resolve_thread: 'usable',
+  unresolve_thread: 'usable',
+  set_channel_description: 'usable',
 }
 
 test('every shipped tool, driven through the deployed chain, lands where the table says', async () => {

@@ -12,16 +12,14 @@ import hooksManifest from './hooks/hooks.json'
  * call sites — a hand-maintained trigger table in the tool layer. That table is
  * gone: the mint decision now lives at the adapter port, where reaching for a
  * bound credential (`boundHttp`) IS the declaration that an identity is needed.
- * So the derivation is traced from there instead, which is also what
- * `comms-tww6` specifies:
+ * So the derivation is traced from there instead:
  *
  *   A TOOL WHOSE ADAPTER PATH REACHES `boundHttp` MUST RECEIVE `session_id`
  *   AND BE IN THE `hooks.json` MATCHER.
  *
  * That is a stronger rule than the old one. The old test could only catch a
  * tool that called the wrapper and was missing from the matcher; it could not
- * see a tool that reached `boundHttp` while appearing in neither set — which is
- * exactly the live P1 that `comms-tww6` is open about.
+ * see a tool that reached `boundHttp` while appearing in neither set.
  *
  * RECEIVES, NOT DECLARES (comms-tg70). The rule used to say DECLARE, and traced
  * a `session_id` property on the tool's advertised `inputSchema`. No tool
@@ -37,24 +35,25 @@ import hooksManifest from './hooks/hooks.json'
  * satisfies all of them by looking at nothing. Pinning the receiving set makes
  * the scan itself the thing under test: rename the marker and the pin fails
  * loudly instead of the suite passing quietly.
- *
- * KNOWN VIOLATIONS ARE NAMED, NOT PAPERED OVER. Three tools violate the rule at
- * HEAD (see `TWW6_EXCEPTIONS`). Fixing them means giving them the host-supplied
- * `session_id`, which is out of scope here. Encoding the real rule with a
- * visible exception list beats asserting a weaker rule that passes: the day
- * `comms-tww6` lands, its author deletes entries from that list and this test
- * proves the fix.
  */
 
 /**
  * Publisher verbs whose adapter implementation reaches `boundHttp`. Pinned
- * rather than parsed: two of them reach it through shared helpers
+ * rather than parsed: three of them reach it through shared helpers
  * (`setThreadResolved`, `setChannelDescription`), which no line-wise scan
  * resolves honestly. `adapterVerbsReachingBoundHttp` below guards the pin, so a
  * verb that joins or leaves the seam fails this suite rather than silently
  * widening the set a tool has to be stamped for.
  */
-const BOUND_VERBS = ['post', 'edit', 'react', 'unreact'] as const
+const BOUND_VERBS = [
+  'post',
+  'edit',
+  'react',
+  'unreact',
+  'resolveThread',
+  'unresolveThread',
+  'setChannelDescription',
+] as const
 
 /**
  * Declarations in `packages/zulip/adapter.ts` that call `boundHttp()`. The two
@@ -131,10 +130,9 @@ const ATTACHMENT_DEP_ADAPTER_MEMBER: Readonly<Record<string, string>> = {
  * Tools that reach `boundHttp` through an inbox verb while sitting outside the
  * matcher, so the hook never stamps them and the bind seam sees no session id.
  *
- * EMPTY, and it has to stay that way. An unstamped inbox verb is not a
- * `comms-tww6`-style attribution accident — it cannot inherit an earlier
- * call's seat, because `boundHttp` consults the binder on every call and
- * refuses outright when the context carries no session id. It simply FAILS.
+ * EMPTY, and it has to stay that way. An unstamped inbox verb cannot inherit an
+ * earlier call's seat, because `boundHttp` consults the binder on every call
+ * and refuses outright when the context carries no session id. It simply FAILS.
  *
  * The matcher was widened to the seven tools that declare `session_id`, which
  * REVERSES commit `0f0e755` (PR #126) — that commit chose id-blind subscribe
@@ -147,18 +145,7 @@ const ATTACHMENT_DEP_ADAPTER_MEMBER: Readonly<Record<string, string>> = {
 const G5ZH3_MATCHER_PENDING = [] as const
 
 /**
- * Tools that reach `boundHttp` while receiving no `session_id` and sitting
- * outside the matcher — the open P1 `comms-tww6`. They run under whatever seat
- * an EARLIER call happened to bind, so their attribution is inherited by
- * accident of ordering rather than established by the call itself.
- *
- * Delete an entry here when that tool gains `session_id`; the assertion below
- * then holds it to the rule.
- */
-const TWW6_EXCEPTIONS = ['resolve_thread', 'set_channel_description', 'unresolve_thread'] as const
-
-/**
- * Every tool that accepts a host-supplied `session_id`. EIGHT, the same eight
+ * Every tool that accepts a host-supplied `session_id`. ELEVEN, the same eleven
  * the PreToolUse matcher stamps today — but the two sets answer different
  * questions and are allowed to diverge again: `subscribe` and `unsubscribe`
  * are here for a non-CC ephemeral host that supplies the UUID itself, and a
@@ -173,8 +160,11 @@ const SESSION_ID_RECEIVING_TOOLS = [
   'edit_message',
   'post',
   'react',
+  'resolve_thread',
+  'set_channel_description',
   'subscribe',
   'unreact',
+  'unresolve_thread',
   'unsubscribe',
   'upload_file',
 ] as const
@@ -340,7 +330,7 @@ test('the set of adapter declarations reaching boundHttp is the pinned one', asy
 // them reads "no tool violates this", which a scan that matches nothing
 // satisfies trivially — so assert first that the scan finds the set it is
 // supposed to find.
-test('the tools accepting a host-supplied session_id are exactly the pinned eight', async () => {
+test('the tools accepting a host-supplied session_id are exactly the pinned eleven', async () => {
   const facts = toolFactsFromToolsSource(await toolsSource())
   const receiving = [...facts]
     .filter(([, f]) => f.receivesSessionId)
@@ -452,18 +442,6 @@ test('the tools that bind via an inbox verb but are unstamped are exactly the re
     .filter((name) => !matched.has(name))
     .sort()
   expect(unstamped).toEqual([...G5ZH3_MATCHER_PENDING])
-})
-
-// The rule stated over ALL bound verbs, including the two helper-backed ones
-// the tool layer never stamps. This is the assertion `comms-tww6` closes.
-test('comms-tww6: the known unstamped bound-path tools are exactly the recorded exceptions', async () => {
-  const facts = toolFactsFromToolsSource(await toolsSource())
-  const boundHttpVerbs = new Set(['resolveThread', 'unresolveThread', 'setChannelDescription'])
-  const unstamped = [...facts]
-    .filter(([, f]) => [...f.verbs].some((v) => boundHttpVerbs.has(v)) && !f.receivesSessionId)
-    .map(([name]) => name)
-    .sort()
-  expect(unstamped).toEqual([...TWW6_EXCEPTIONS])
 })
 
 test('the matcher carries no tool that never reaches boundHttp and never binds', async () => {

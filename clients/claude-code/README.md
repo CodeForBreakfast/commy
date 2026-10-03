@@ -148,8 +148,9 @@ matching events to the MCP host. Identity-free tools — `subscribe`,
 `unsubscribe`, `read_channel`, `read_thread`, `message_link`,
 `list_agents`, `list_humans`, `list_channels`, `get_channel_description`,
 `presence`, `resolve`, `current_identity` — run on minter credentials and work
-pre-acquire. `set_channel_description` is a write and needs the bound identity,
-which must have permission to edit the channel.
+pre-acquire. `set_channel_description`, `resolve_thread` and `unresolve_thread`
+are writes the realm attributes to their actor, so they run as the calling
+session's bound identity, which must have permission to edit the channel.
 
 ## Guidance for connected clients
 

@@ -509,8 +509,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
   const projectForCwd = deps.projectForCwd ?? (() => Effect.succeedNone)
   /**
    * The tools that accept a host-supplied `session_id` (see
-   * {@link ToolDef.hostSuppliedArgs}). EIGHT tools carry it. That is the same
-   * eight Claude Code's PreToolUse matcher stamps today, but the two sets are
+   * {@link ToolDef.hostSuppliedArgs}). ELEVEN tools carry it. That is the same
+   * eleven Claude Code's PreToolUse matcher stamps today, but the two sets are
    * separate questions and are allowed to differ: this one also serves the
    * non-CC ephemeral host that supplies the UUID itself, which is a
    * listen-first seat's only route to an identity. A host stamping the arg on
@@ -1081,10 +1081,12 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         properties: {
           channel_name: { type: 'string', description: 'Channel the thread lives in' },
           thread: { type: 'string', description: 'Thread / topic name within the channel' },
+          cwd: cwdField,
         },
         required: ['channel_name', 'thread'],
         additionalProperties: false,
       },
+      hostSuppliedArgs: hostSuppliedSessionId,
       handler: async (args) => {
         const run = runFor(args)
         await run(
@@ -1108,10 +1110,12 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         properties: {
           channel_name: { type: 'string', description: 'Channel the thread lives in' },
           thread: { type: 'string', description: 'Thread / topic name within the channel' },
+          cwd: cwdField,
         },
         required: ['channel_name', 'thread'],
         additionalProperties: false,
       },
+      hostSuppliedArgs: hostSuppliedSessionId,
       handler: async (args) => {
         const run = runFor(args)
         await run(
@@ -1163,10 +1167,12 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             type: 'string',
             description: "The channel's new description; empty string clears it",
           },
+          cwd: cwdField,
         },
         required: ['channel_name', 'description'],
         additionalProperties: false,
       },
+      hostSuppliedArgs: hostSuppliedSessionId,
       handler: async (args) => {
         const run = runFor(args)
         await run(
