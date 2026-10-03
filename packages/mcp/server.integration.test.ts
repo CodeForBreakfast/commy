@@ -1936,33 +1936,6 @@ test('ephemeral mode + long project: the bot name is shortened but the default n
   }
 })
 
-test('ephemeral mode + project with no channel on the realm: the default narrow is skipped, not created', async () => {
-  const cap = captureSubscribes()
-  const logs: string[] = []
-  const h = await buildHarness({
-    ephemeral: true,
-    env: { COMMY_PROJECT: 'example-long-project' },
-    seedChannels: ['home'],
-    inboxOverrides: cap.inboxOverrides,
-    capturedLogs: logs,
-  })
-  try {
-    await callTool(h.client, 'post', {
-      channel_name: 'home',
-      body: 'first attribution',
-      session_id: 'a1aaa1aa-0000-4000-8000-000000000008',
-    })
-    expect(cap.tokens).toEqual([])
-    expect(
-      logs.some((line) =>
-        line.includes('no channel named example-long-project exists on the realm'),
-      ),
-    ).toBe(true)
-  } finally {
-    await h.cleanup()
-  }
-})
-
 test('ephemeral mode + project: current_identity (passive read) does NOT register defaults', async () => {
   const cap = captureSubscribes()
   const h = await buildHarness({
@@ -2222,21 +2195,6 @@ test('persistent boot with a long COMMY_PROJECT registers Type-1 defaults on the
     expect(new Set(cap.tokens)).toEqual(
       new Set(['new-topics:example-long-project', 'example-long-project/general']),
     )
-  } finally {
-    await h.cleanup()
-  }
-})
-
-test('persistent boot whose project has no channel on the realm registers no Type-1 defaults', async () => {
-  const cap = captureSubscribes()
-  const h = await buildHarness({
-    env: { COMMY_PROJECT: 'myproject' },
-    seedChannels: ['home'],
-    inboxOverrides: cap.inboxOverrides,
-  })
-  try {
-    await new Promise((r) => setTimeout(r, 50))
-    expect(cap.tokens).toEqual([])
   } finally {
     await h.cleanup()
   }

@@ -60,7 +60,7 @@ process env inheritance:
 | Env var | Required | Format | Purpose |
 |---|---|---|---|
 | `COMMY_BOT_NAME` | no | `<role>` or `<rig>-<agent>` (see `docs/naming.md`) | **Persistent mode.** Stable identity to acquire eagerly at boot — concierges, scheduled skills, anything that needs to be DM-able from the moment the plugin starts. Boot fails non-zero on acquire rejection. Omit for ephemeral mode (next rows). |
-| `COMMY_PROJECT` | no | project slug (lowercase, `[a-z0-9-]` post-sanitise) | Identifies the calling project for two purposes: (1) **Ephemeral mode, operator override.** Force every minted name to embed this project tag — `cc-<project>-<8>` rather than the per-session value. When unset (the normal case under Claude Code), the project is derived **per attribution call** from the calling session's cwd (hook-injected): git remote origin basename → git root basename → `undefined` (bare `cc-<8>`). The env value, when set, wins over per-call derivation. (2) **Persistent mode (project concierge), Type-1 boot-time defaults.** Post-acquire the plugin registers `new-topics:<project>` + `<project>/general` so the concierge sees first-message-per-new-topic and project broadcast traffic. When unset, or when the realm has no channel by that name, the project-specific defaults are skipped rather than creating the channel, leaving no narrows registered; mentions of the bot still arrive, because they need no narrow. See `docs/naming.md` for the full precedence and sanitisation rules. |
+| `COMMY_PROJECT` | no | project slug (lowercase, `[a-z0-9-]` post-sanitise) | Identifies the calling project for two purposes: (1) **Ephemeral mode, operator override.** Force every minted name to embed this project tag — `cc-<project>-<8>` rather than the per-session value. When unset (the normal case under Claude Code), the project is derived **per attribution call** from the calling session's cwd (hook-injected): git remote origin basename → git root basename → `undefined` (bare `cc-<8>`). The env value, when set, wins over per-call derivation. (2) **Persistent mode (project concierge), Type-1 boot-time defaults.** Post-acquire the plugin registers `new-topics:<project>` + `<project>/general` so the concierge sees first-message-per-new-topic and project broadcast traffic. When unset the project-specific defaults are skipped, leaving no narrows registered; mentions of the bot still arrive, because they need no narrow. See `docs/naming.md` for the full precedence and sanitisation rules. |
 
 ### Eager vs lazy boot, in one diagram
 
@@ -73,8 +73,7 @@ parseEnv → buildAdapter →
                           │     post-acquire register Type-1 defaults:
                           │     `new-topics:<project>` +
                           │     `<project>/general` if
-                          │     COMMY_PROJECT is set and the realm
-                          │     has that channel (none if not —
+                          │     COMMY_PROJECT is set (none if not —
                           │     mentions arrive without a narrow)
                           │
                           └── else → ephemeral 1-slot cache →
@@ -89,7 +88,7 @@ parseEnv → buildAdapter →
                                 the next attribution. Each fresh slot's
                                 onAcquire hook registers the Type-2 default:
                                 per-project `<project>/general`
-                                when known and the channel exists.
+                                when known.
                           │
                           ▼
                 subscribeFromEnv → registerTools → connect transport →
