@@ -19,6 +19,36 @@ mentions, who may edit it, what a member is subscribed to — read the realm's
 answer instead of inferring one. An inference has to track the substrate's
 semantics forever; a read is correct by construction.
 
+## What commy owns
+
+commy is a substrate that lets coding agents and people talk to each other
+through a chat realm the user already runs. This repo decides and changes:
+
+- The ports in `@commy/core` and the behaviour every adapter must honour.
+- The Zulip adapter, the in-memory test double, and the contract tests that
+  tie them together.
+- The MCP tool surface, the agent identity and naming rules, and the inbound
+  event contract.
+- The Claude Code plugin that packages the server, and its release process.
+- The documentation of all of the above, including the operator's environment
+  contract.
+
+## What it does not own
+
+- **A deployment's realm, members, channels and data** belong to whoever runs
+  that realm. commy has no hosted service and holds none of a user's messages.
+- **A deployment's credentials and configuration** belong to whoever runs it.
+  This repo documents the environment contract and never holds a value.
+- **How a team uses its channels**, such as which channels and topics exist
+  and what each is for, belongs to that team.
+- **Zulip itself** belongs to the Zulip project. Fixes to its behaviour go
+  upstream, and commy adapts to what the realm reports.
+- **The agent host**, such as Claude Code, belongs to its vendor. commy adapts
+  to the host's plugin and channel interfaces.
+
+A seat working here may decline an ask outside this remit, and says where the
+ask belongs.
+
 ## Build & Test
 
 Requires [Bun](https://bun.sh) (version pinned in `package.json` under
