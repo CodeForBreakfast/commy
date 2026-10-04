@@ -172,7 +172,9 @@ exist (step 4). Everything worth keeping must land in a bead.
    the whole design. Graeme may cut, downgrade, or reshape a confirmed item, or
    promote a low-confidence one, before anything is filed. **"Is the remodelling
    worth the ripple" is decided *here*, deliberately — the verify pass was
-   forbidden from touching it.**
+   forbidden from touching it.** Ask in your pane only if Graeme launched this
+   audit and is talking to you there. Otherwise ask the way your instructions
+   say to ask him, and stop until he answers.
 3. On approval, **file under one tracking epic** so the items stay contained. Each
    bead's description must be **self-contained** — it has to stand on its own once
    the report is gone. Two fields are non-negotiable and make model beads differ

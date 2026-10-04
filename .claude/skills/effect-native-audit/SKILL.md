@@ -153,7 +153,9 @@ beads exist (step 4). Everything worth keeping must therefore land in a bead.
    why. Also surface the `lowConfidence[]` items so he can promote any worth
    keeping; un-promoted ones are dropped when the report is binned.
 2. **Wait for go-ahead.** Graeme may cut or downgrade confirmed items, or promote
-   low-confidence ones, first.
+   low-confidence ones, first. Ask in your pane only if Graeme launched this
+   audit and is talking to you there. Otherwise ask the way your instructions
+   say to ask him, and stop until he answers.
 3. On approval, **file under one tracking epic** so the items stay contained.
    Each bead's description must be self-contained (file:line, the rewrite, the
    why, source/line, docsRef) — it has to stand on its own once the report is

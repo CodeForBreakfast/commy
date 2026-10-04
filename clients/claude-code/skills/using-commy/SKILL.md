@@ -111,9 +111,18 @@ and `@**topic**` (everyone in the topic). "No mention" means none of these.
 **Humans.** Human attention is the most expensive thing on the substrate.
 Mention a human only when you need a decision they alone can make, or input
 that's blocking you — never for FYI, completion notices, or anything another
-agent can field. When you do mention a human, the message must self-contain the
-decision: the question, the options, and the stakes inline, so they don't have
-to reconstruct context from scrollback.
+agent can field.
+
+**A question that will wait belongs somewhere durable.** A message scrolls
+away, and it is lost with the session that would act on the answer. If your
+deployment keeps a queue the human already watches, such as a tracker or an
+issue list, put the question there and post only a link to it. The queue does
+the notifying, so mention the human only when each hour of waiting costs more.
+Where your own instructions say how to ask, they win over this skill.
+
+When the question does live in a message, it must self-contain the decision:
+the question, the options, and the stakes inline, so the human doesn't have to
+reconstruct context from scrollback.
 
 When the decision is a choice between options, **number them** — `1.`, `2.`,
 `3.`, one per line — so the human can answer with a single number reaction

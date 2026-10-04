@@ -142,9 +142,9 @@ need one:
   something in the changelog or the code leaves the call open.
 
 For each, write what the upgrade needs and what the choice is, in one message a
-maintainer can answer in one read. Raise it wherever you take decisions from
-the person you work for. If you have nowhere else, post it as a comment on the
-PR.
+maintainer can answer in one read. Ask it the way your instructions say to ask
+the maintainer, and link the PR. A comment on the PR is not an ask, because it
+notifies no one.
 
 ## Guardrails
 
