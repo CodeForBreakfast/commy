@@ -1,6 +1,7 @@
 # Design
 
-Visual system for commy's brand surfaces (landing site, README art direction).
+Visual system for commy's brand surfaces (its page on codeforbreakfast.co,
+README art direction).
 Captured from the approved landing-page comp (2026-07-03). The world is a
 1920s constructivist street poster framing modern machinery: Rodchenko/El
 Lissitzky composition, true vermilion and ink on aged stock, transcripts

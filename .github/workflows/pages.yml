@@ -1,13 +1,8 @@
 name: Pages
 
-# Deploy the static site under `site/` to GitHub Pages. There is no build step:
-# the site is hand-authored HTML/assets, so the deploy artifact is the `site/`
-# directory verbatim (see docs/superpowers/specs/2026-07-03-commy-site-design.md).
-#
-# Enabling Pages itself (Settings → Pages → source "GitHub Actions", the custom
-# domain, enforce HTTPS) is a one-time operator action, not part of this
-# workflow. Until `site/` exists on `main` this workflow never fires — the path
-# filter below gates it.
+# Deploy `site/` to GitHub Pages verbatim. commy.social is served from it, and
+# it holds only redirect pages to commy's page on codeforbreakfast.co until the
+# domain lapses.
 
 on:
   push:
