@@ -117,7 +117,7 @@ inventory to match against).
 4. **Synthesise** — a synthesis agent writes the report prose, deduping
    cross-lens sightings (L1 and L3 overlap **by design** — the same relational
    defect reached by the isolation path and the census path; they dedup by
-   `file:line`). The confirmed / low-confidence **bead partition** is **not**
+   `file:line`). The confirmed / low-confidence **issue partition** is **not**
    trusted to that agent — the workflow derives it deterministically from each
    survivor's own confidence (`splitSurvivors`: dedup by `file:line`, highest
    confidence wins, then split).
@@ -149,60 +149,41 @@ already computed the blast radius; here the ripple *is the whole point*.
    returns `{ confirmed[], lowConfidence[], survivors[], refutedCount, coverage,
    partitionOk }`.
 
-## After it returns — gate, then file (do NOT let the workflow file beads)
+## After it returns — gate, then file
 
-The workflow deliberately returns findings rather than writing to `bd`. Model
-findings are **architectural** — a sweep can surface a handful of type
-remodellings, and auto-filing them straight into `bd ready` clogs the queue with
-work that hasn't been arbitrated.
+The workflow returns findings and does not file them. Model findings are
+**architectural** — a sweep can surface a handful of type remodellings, and
+filing them unreviewed clogs the backlog with work that hasn't been arbitrated.
 
-The report is **working scaffolding for this gate conversation, not a permanent
-record** — beads are the durable artifact, so the report is binned once the beads
-exist (step 4). Everything worth keeping must land in a bead.
+The report is working scaffolding for the review, not a permanent record. File
+what is worth keeping, then delete `docs/effect-model-audit-<date>.md`.
 
-1. **Present** the `confirmed[]` list to the maintainer — `file:line`, unit, lens, the
-   **evidence** (the named illegal value / disagreeing producer-consumer pair /
-   boundary), the proposed remodelling, and the **blastRadius**. Also surface the
-   `lowConfidence[]` items so they can promote any worth keeping; un-promoted ones
-   are dropped when the report is binned.
-2. **Wait for go-ahead — the gate leans harder on the maintainer here than the sibling's.**
-   A model remodelling is a **taste-and-cost call**, not a mechanical helper swap:
-   the finding says a *real* illegal state or role-conflation exists, but whether
-   to split a type, brand a scalar, or absorb the blast radius is a judgment about
-   the whole design. The maintainer may cut, downgrade, or reshape a confirmed item, or
-   promote a low-confidence one, before anything is filed. **"Is the remodelling
-   worth the ripple" is decided *here*, deliberately — the verify pass was
-   forbidden from touching it.**
-3. On approval, **file under one tracking epic** so the items stay contained. Each
-   bead's description must be **self-contained** — it has to stand on its own once
-   the report is gone. Two fields are non-negotiable and make model beads differ
-   from the sibling's:
+1. **Present** the `confirmed[]` list to the maintainer — `file:line`, unit,
+   lens, the **evidence** (the named illegal value / disagreeing
+   producer-consumer pair / boundary), the proposed remodelling, and the
+   **blastRadius**. Also surface the `lowConfidence[]` items so any worth keeping
+   can be promoted; un-promoted ones are dropped with the report.
+2. **Wait for go-ahead — the gate leans harder on the maintainer here than the
+   sibling's.** A model remodelling is a **taste-and-cost call**, not a
+   mechanical helper swap: the finding says a *real* illegal state or
+   role-conflation exists, but whether to split a type, brand a scalar, or absorb
+   the blast radius is a judgment about the whole design. The maintainer may cut,
+   downgrade, or reshape a confirmed item, or promote a low-confidence one,
+   before anything is filed. **"Is the remodelling worth the ripple" is decided
+   *here*, deliberately — the verify pass was forbidden from touching it.**
+3. **File each approved finding** as its own issue, grouped under one tracking
+   issue. Each description must be **self-contained** — it has to stand on its
+   own once the report is gone. Two fields are non-negotiable:
    - the **evidence** — the concrete illegal value, missing state, or disagreeing
      producer/consumer pair (with both sites) that proves the smell is real, and
    - the **blastRadius** — every producer + consumer the remodelling ripples to. A
-     type change is never local; that ripple is the real cost and the bead is
+     type change is never local; that ripple is the real cost and the issue is
      unfileable without it.
 
-   Do **not** add a `report: docs/...` pointer; that doc won't survive.
+   Do not point at the report; it won't survive.
 
-   ```bash
-   bd create "Effect-model audit <YYYY-MM-DD>" --type epic
-   # then per finding being filed (confirmed + any promoted low-confidence):
-   bd create "<unit>: <lens> — <type> honesty" --type task \
-     --parent <epic-id> \
-     -d "<the evidence (named illegal value / disagreeing pair / boundary); the
-         proposed remodelling; the blastRadius (every producer + consumer); the
-         modelling-principle why (strengthening-types / DDD illegal-states / the
-         cited data-types doc)>"
-   ```
-
-4. **Bin the report** — once the beads are generated, delete
-   `docs/effect-model-audit-<date>.md`. The actionable record now lives in the
-   epic tree; the coverage table and any dropped low-confidence items are process
-   metadata, acceptable to lose.
-
-Each filed item is its own remodelling; implement them on their own beads with
-TDD, not as a batch — a type change ripples through its whole census.
+Each filed item is its own remodelling; implement them separately with TDD, not
+as a batch — a type change ripples through its whole census.
 
 ## Notes
 
