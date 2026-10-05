@@ -9,9 +9,6 @@ result-*
 .worktrees/
 CLAUDE.local.md
 
-.dolt/
-*.db
-.beads-credential-key
 .turbo/
 
 # Local databases, credentials and lock files
