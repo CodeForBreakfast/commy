@@ -114,7 +114,7 @@ verdicts**, because their failure modes are opposite:
   and so *must* be sequential.
 
 A synthesis agent writes the report (deduping cross-axis sightings as it
-reasons about the prose). The confirmed / low-confidence **bead partition** is
+reasons about the prose). The confirmed / low-confidence **issue partition** is
 NOT trusted to that agent — the workflow derives it deterministically from each
 survivor's own confidence (dedup by file:line, highest confidence wins, then
 split). An LLM asked to losslessly re-split survivors drops and misfiles them.
@@ -140,44 +140,29 @@ split). An LLM asked to losslessly re-split survivors drops and misfiles them.
 3. The workflow writes the report to `docs/effect-native-audit-<date>.md` and
    returns `{ confirmed[], lowConfidence[], refutedCount, coverage }`.
 
-## After it returns — gate, then file (do NOT let the workflow file beads)
+## After it returns — gate, then file
 
-The workflow deliberately returns findings rather than writing to `bd`. A sweep
-can surface ~25 items; auto-filing them straight into `bd ready` clogs the queue.
+The workflow returns findings and does not file them. A sweep can surface ~25
+items, and filing them all unreviewed clogs the backlog.
 
-The report is **working scaffolding for this gate conversation, not a permanent
-record** — beads are the durable artifact, so the report is binned once the
-beads exist (step 4). Everything worth keeping must therefore land in a bead.
+The report is working scaffolding for the review, not a permanent record. File
+what is worth keeping, then delete `docs/effect-native-audit-<date>.md`.
 
-1. **Present** the `confirmed[]` list to the maintainer — file:line, rolled → native,
-   why. Also surface the `lowConfidence[]` items so they can promote any worth
-   keeping; un-promoted ones are dropped when the report is binned.
-2. **Wait for go-ahead.** The maintainer may cut or downgrade confirmed items, or promote
-   low-confidence ones, first.
-3. On approval, **file under one tracking epic** so the items stay contained.
-   Each bead's description must be self-contained (file:line, the rewrite, the
-   why, source/line, docsRef) — it has to stand on its own once the report is
-   gone. **Structural, modelling, and behaviour findings must carry their `blastRadius`** (the
-   call sites a rewrite ripples to — a representation change moves every producer
-   and consumer of the value) — that ripple is the real cost and the bead is
-   unfileable without it. Do **not** add a `report: docs/...` pointer; that doc
-   won't survive.
+1. **Present** the `confirmed[]` list to the maintainer — file:line, rolled →
+   native, why. Also surface the `lowConfidence[]` items so any worth keeping can
+   be promoted; un-promoted ones are dropped with the report.
+2. **Wait for go-ahead.** The maintainer may cut or downgrade confirmed items, or
+   promote low-confidence ones, first.
+3. **File each approved finding** as its own issue, grouped under one tracking
+   issue. Each description must be self-contained (file:line, the rewrite, the
+   why, source/line, docsRef) because it has to stand on its own once the report
+   is gone. **Structural, modelling, and behaviour findings must carry their
+   `blastRadius`** (the call sites a rewrite ripples to — a representation change
+   moves every producer and consumer of the value). Do not point at the report;
+   it won't survive.
 
-   ```bash
-   bd create "Effect-native audit <YYYY-MM-DD>" --type epic
-   # then per finding being filed (confirmed + any promoted low-confidence):
-   bd create "<file>: <rolled> -> <native>" --type task \
-     --parent <epic-id> \
-     -d "<why, with docsRef and source/line; for structural/modelling/behaviour, the blastRadius>"
-   ```
-
-4. **Bin the report** — once the beads are generated, delete
-   `docs/effect-native-audit-<date>.md`. The actionable record now lives in the
-   epic tree; the coverage table and any dropped low-confidence items are
-   process metadata, acceptable to lose.
-
-Each filed item is its own native swap; implement them on their own beads with
-TDD, not as a batch.
+Each filed item is its own native swap; implement them separately with TDD, not
+as a batch.
 
 ## Notes
 
@@ -189,8 +174,8 @@ TDD, not as a batch.
 - **Two local clones.** Effect source at `~/Development/references/effect`; Effect
   docs at `~/Development/references/effect-website` (Astro/Starlight — the URL
   `…/docs/<slug>/` maps exactly to `…/docs/docs/<slug>.mdx`, and a multi-page
-  section is a directory the finder reads in full). Both are workstation-local
-  (recorded in `CLAUDE.local.md`); a cloud/CI agent falls back to GitHub-raw
+  section is a directory the finder reads in full). Both are workstation-local;
+  a cloud/CI agent falls back to GitHub-raw
   source + `WebFetch` docs, just slower. The coverage section flags any fallback.
 - **Refresh on Effect bumps.** Source paths and docs slugs drift with releases —
   `domains.md` carries the checklist. The authoritative sets are the `DOMAINS`,

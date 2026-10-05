@@ -139,8 +139,7 @@ Each release's changelog is the curated notes on its GitHub Release. Pushing a
 `commy-vX.Y.Z` tag triggers
 [`.github/workflows/release.yml`](.github/workflows/release.yml), which re-checks
 the tag against the plugin manifest (a verify-only lockstep guard) — it does not
-author a Release. The GitHub Release itself is cut by the `release-plugin`
-maintainer skill once the tag's CI is green, with notes written by hand and
+author a Release. The GitHub Release carries the curated notes, written by hand and
 classified by impact rather than drawn from raw `git log`.
 
 ## Licence

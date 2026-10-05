@@ -115,12 +115,9 @@
           ci = pkgs.mkShell {
             packages = gateTools;
           };
-          # The default shell plus `bd`, the client for the maintainers' issue
-          # tracker. That tracker is not part of this repository — external
-          # contributors don't need it and file GitHub issues instead (see
-          # AGENTS.md) — so `bd` lives here rather than in `default`, and
-          # entering this shell is opt-in. Select it locally with an untracked
-          # `.envrc.local` containing `use flake .#maintainer`.
+          # The default shell plus `bd`. Entering this shell is opt-in: select
+          # it locally with an untracked `.envrc.local` containing
+          # `use flake .#maintainer`.
           maintainer = pkgs.mkShell {
             packages = gateTools ++ [
               pkgs.typescript-language-server
