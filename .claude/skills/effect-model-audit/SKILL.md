@@ -160,16 +160,16 @@ The report is **working scaffolding for this gate conversation, not a permanent
 record** — beads are the durable artifact, so the report is binned once the beads
 exist (step 4). Everything worth keeping must land in a bead.
 
-1. **Present** the `confirmed[]` list to Graeme — `file:line`, unit, lens, the
+1. **Present** the `confirmed[]` list to the maintainer — `file:line`, unit, lens, the
    **evidence** (the named illegal value / disagreeing producer-consumer pair /
    boundary), the proposed remodelling, and the **blastRadius**. Also surface the
-   `lowConfidence[]` items so he can promote any worth keeping; un-promoted ones
+   `lowConfidence[]` items so they can promote any worth keeping; un-promoted ones
    are dropped when the report is binned.
-2. **Wait for go-ahead — the gate leans harder on Graeme here than the sibling's.**
+2. **Wait for go-ahead — the gate leans harder on the maintainer here than the sibling's.**
    A model remodelling is a **taste-and-cost call**, not a mechanical helper swap:
    the finding says a *real* illegal state or role-conflation exists, but whether
    to split a type, brand a scalar, or absorb the blast radius is a judgment about
-   the whole design. Graeme may cut, downgrade, or reshape a confirmed item, or
+   the whole design. The maintainer may cut, downgrade, or reshape a confirmed item, or
    promote a low-confidence one, before anything is filed. **"Is the remodelling
    worth the ripple" is decided *here*, deliberately — the verify pass was
    forbidden from touching it.**

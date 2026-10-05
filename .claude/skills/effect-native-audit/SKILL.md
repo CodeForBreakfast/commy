@@ -149,10 +149,10 @@ The report is **working scaffolding for this gate conversation, not a permanent
 record** — beads are the durable artifact, so the report is binned once the
 beads exist (step 4). Everything worth keeping must therefore land in a bead.
 
-1. **Present** the `confirmed[]` list to Graeme — file:line, rolled → native,
-   why. Also surface the `lowConfidence[]` items so he can promote any worth
+1. **Present** the `confirmed[]` list to the maintainer — file:line, rolled → native,
+   why. Also surface the `lowConfidence[]` items so they can promote any worth
    keeping; un-promoted ones are dropped when the report is binned.
-2. **Wait for go-ahead.** Graeme may cut or downgrade confirmed items, or promote
+2. **Wait for go-ahead.** The maintainer may cut or downgrade confirmed items, or promote
    low-confidence ones, first.
 3. On approval, **file under one tracking epic** so the items stay contained.
    Each bead's description must be self-contained (file:line, the rewrite, the
