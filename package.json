@@ -34,7 +34,7 @@
   "overrides": {
     "undici": "^7.30.0",
     "hono": "^4.13.10",
-    "ws": "^8.21.3",
+    "ws": "^8.22.0",
     "fast-uri": "^4.2.1"
   },
   "devDependencies": {
