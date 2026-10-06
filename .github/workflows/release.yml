@@ -39,7 +39,10 @@ name: Release
 # package are public, npm attaches a provenance attestation automatically — no
 # `--provenance` flag, no secret to rotate or leak. Configure the publisher once
 # at npmjs.com → package settings → Trusted Publisher (GitHub Actions, org
-# `CodeForBreakfast`, repo `commy`, workflow `release.yml`).
+# `CodeForBreakfast`, repo `commy`, workflow `release.yml`, environment
+# `npm-publish`). The `release` job declares that environment, whose deployment
+# rule admits only `main`, so a run from any other ref cannot mint a publishing
+# token.
 
 on:
   push:
@@ -90,6 +93,7 @@ jobs:
     needs: detect
     if: needs.detect.outputs.release == 'true'
     runs-on: ubuntu-24.04
+    environment: npm-publish
     permissions:
       contents: write # push the record tag and cut the GitHub Release
       id-token: write # mint the OIDC token npm verifies for trusted publishing

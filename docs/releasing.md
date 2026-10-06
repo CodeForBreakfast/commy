@@ -150,9 +150,13 @@ failed before publishing. The notes file must still be present.
 ## Two constraints that must not be tripped
 
 - **The npm publish step stays in `release.yml`.** npm's Trusted Publisher (OIDC)
-  is pinned to the workflow **filename**. Renaming or moving the workflow makes
-  npm reject the publish — that needs a maintainer-side npm-config change. If a
-  rename ever seems unavoidable, stop and surface it.
+  is pinned to the workflow **filename** and to the `npm-publish` GitHub
+  environment the `release` job declares. Renaming or moving the workflow, or
+  renaming the environment, makes npm reject the publish — that needs a
+  maintainer-side npm-config change. If a rename ever seems unavoidable, stop and
+  surface it. The environment's deployment rule admits only `main`. It is repo
+  configuration, not a file here, and it refuses a manual dispatch from any
+  other branch.
 - **CI triggers on the merge-to-`main`, not on the tag it pushes.** A tag pushed
   by the default `GITHUB_TOKEN` does not trigger another `on: push: tags`
   workflow, so the release must be driven directly off the release commit. Do not
