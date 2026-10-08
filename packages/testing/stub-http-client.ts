@@ -20,6 +20,7 @@
 import {
   type HttpBody,
   HttpClient,
+  HttpClientError,
   type HttpClientRequest,
   HttpClientResponse,
 } from '@effect/platform'
@@ -38,6 +39,14 @@ export type StubHang = {
   readonly hang: true
 }
 
+/**
+ * A realm that cannot be reached — the request is captured, then fails the way
+ * `FetchHttpClient` fails when the host has no route or refuses the connection.
+ */
+export type StubUnreachable = {
+  readonly unreachable: true
+}
+
 export type StubBody = {
   /** Object → JSON-encoded; string → verbatim; `Uint8Array` → raw bytes. */
   readonly body: unknown
@@ -47,7 +56,7 @@ export type StubBody = {
   readonly headers?: Readonly<Record<string, string>>
 }
 
-export type StubResponse = StubBody | StubHang
+export type StubResponse = StubBody | StubHang | StubUnreachable
 
 export type CapturedHttpRequest = {
   readonly method: string
@@ -174,15 +183,23 @@ export const makeStubHttpClient: Effect.Effect<StubHttpClient> = Effect.gen(func
       Effect.flatMap((response) =>
         Predicate.hasProperty(response, 'hang')
           ? Effect.never
-          : Effect.succeed(
-              HttpClientResponse.fromWeb(
-                request,
-                new Response(responseBodyInit(response), {
-                  status: response.status ?? 200,
-                  headers: responseHeaders(response),
+          : Predicate.hasProperty(response, 'unreachable')
+            ? Effect.fail(
+                new HttpClientError.RequestError({
+                  request,
+                  reason: 'Transport',
+                  cause: new Error(`connect EHOSTUNREACH ${url.host}`),
                 }),
+              )
+            : Effect.succeed(
+                HttpClientResponse.fromWeb(
+                  request,
+                  new Response(responseBodyInit(response), {
+                    status: response.status ?? 200,
+                    headers: responseHeaders(response),
+                  }),
+                ),
               ),
-            ),
       ),
     ),
   )

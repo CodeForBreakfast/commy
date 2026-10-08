@@ -1025,6 +1025,12 @@ export class PublisherError extends Data.TaggedError('PublisherError')<{
 export class IdentityError extends Data.TaggedError('IdentityError')<{
   readonly operation: 'acquire' | 'release' | 'resolve'
   readonly cause: unknown
+  /**
+   * The substrate could not be reached or asked us to wait, so the same call
+   * may succeed later without anyone changing anything. False when the
+   * substrate answered and refused, which only an operator can fix.
+   */
+  readonly transient: boolean
 }> {
   override get message(): string {
     return messageOf(this.cause)

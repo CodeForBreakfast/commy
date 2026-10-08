@@ -29,6 +29,7 @@ import {
   decodeMessageIdSync,
   decodeThreadNameSync,
   decodeTimestampSync,
+  IdentityError,
   InboxError,
   MessagePermalinkSchema,
 } from '@commy/core/ports'
@@ -38,6 +39,7 @@ import {
   Duration,
   Effect,
   Exit,
+  Fiber,
   Layer,
   Option,
   Ref,
@@ -177,6 +179,8 @@ interface FakeAdapterCalls {
 const buildFakeAdapter = (
   options: {
     readonly acquireError?: unknown
+    /** Typed failures returned by successive acquires, in order, before one succeeds. */
+    readonly acquireFailures?: ReadonlyArray<IdentityError>
     /** What the substrate says about the bind: a fresh mint, or a bot that was already there. */
     readonly identityOrigin?: IdentityOrigin
     /** Reject every substrate-side subscribe, for the part-way-failure paths. */
@@ -187,6 +191,7 @@ const buildFakeAdapter = (
   const closes = { count: 0 }
   const subscribed: SubscriptionTarget[] = []
   const events: string[] = []
+  const pendingFailures = [...(options.acquireFailures ?? [])]
   const identity: Identity = {
     id: decodeIdentityIdSync('bot:myproject-concierge'),
     name: decodeDisplayNameSync('myproject-concierge'),
@@ -207,6 +212,8 @@ const buildFakeAdapter = (
         events.push(`acquire(${name})`)
         acquired.push(name)
         if (options.acquireError !== undefined) return Effect.die(options.acquireError)
+        const failure = pendingFailures.shift()
+        if (failure !== undefined) return Effect.fail(failure)
         return Effect.succeed(acquiredIdentity)
       }),
     release: () => Effect.void,
@@ -318,6 +325,85 @@ test('main writes acquire failure to stderr in the canonical format, fails boot,
   expect(Exit.isFailure(exit)).toBe(true)
   expect(fake.calls.acquired).toEqual(['myproject-concierge'])
   expect(fake.calls.closes.count).toBe(1)
+})
+
+// A seat that boots while the realm is unreachable retries rather than dying,
+// because the host caches a failed MCP connection for the rest of its session.
+// The retry has to finish inside the host's startup timeout, so it is bounded.
+const unreachable = () =>
+  new IdentityError({
+    operation: 'acquire',
+    cause: new Error('Transport error (GET https://zulip.example.com/api/v1/users)'),
+    transient: true,
+  })
+
+const runProgramOnTestClock = (
+  env: Record<string, string | undefined>,
+  adapter: ZulipAdapter,
+  params: ProgramParams,
+  elapsed: Duration.DurationInput,
+) =>
+  Effect.runPromiseExit(
+    Effect.gen(function* () {
+      const fiber = yield* Effect.fork(provideProgram(env, adapter, params))
+      yield* TestClock.adjust(elapsed)
+      return yield* Fiber.join(fiber)
+    }).pipe(Effect.provide(TestContext.TestContext)),
+  )
+
+test('boot retries an unreachable realm and comes up once it answers', async () => {
+  const fake = buildFakeAdapter({ acquireFailures: [unreachable(), unreachable()] })
+  const logs: string[] = []
+  const exit = await runProgramOnTestClock(
+    validEnv,
+    fake.adapter,
+    { loggerLayer: captureLogger(logs), readGitContext: () => Effect.succeed(NotInRepo()) },
+    '1 minute',
+  )
+  expect(Exit.isSuccess(exit)).toBe(true)
+  expect(fake.calls.acquired).toEqual([
+    'myproject-concierge',
+    'myproject-concierge',
+    'myproject-concierge',
+  ])
+  expect(logs.filter((line) => line.includes('could not reach the realm'))).toHaveLength(2)
+})
+
+test('boot gives up on a realm that stays unreachable, inside the host startup timeout', async () => {
+  const fake = buildFakeAdapter({
+    acquireFailures: Array.from({ length: 100 }, unreachable),
+  })
+  const stderr: string[] = []
+  const exit = await runProgramOnTestClock(
+    validEnv,
+    fake.adapter,
+    { loggerLayer: captureLogger(stderr) },
+    '25 seconds',
+  )
+  expect(Exit.isFailure(exit)).toBe(true)
+  expect(fake.calls.acquired.length).toBeGreaterThan(2)
+  expect(fake.calls.acquired.length).toBeLessThan(100)
+  expect(stderr.at(-1)).toBe(
+    'commy plugin: acquire("myproject-concierge") failed: Transport error (GET https://zulip.example.com/api/v1/users)',
+  )
+  expect(fake.calls.closes.count).toBe(1)
+})
+
+test('boot does not retry a realm that refuses the sign-in', async () => {
+  const fake = buildFakeAdapter({
+    acquireFailures: [
+      new IdentityError({
+        operation: 'acquire',
+        cause: new Error('Invalid API key'),
+        transient: false,
+      }),
+    ],
+  })
+  const stderr: string[] = []
+  const exit = await runProgram(validEnv, fake.adapter, { loggerLayer: captureLogger(stderr) })
+  expect(Exit.isFailure(exit)).toBe(true)
+  expect(fake.calls.acquired).toEqual(['myproject-concierge'])
+  expect(stderr).toEqual(['commy plugin: acquire("myproject-concierge") failed: Invalid API key'])
 })
 
 test('lazy mode (cc-<8> from session id) does NOT acquire at boot', async () => {

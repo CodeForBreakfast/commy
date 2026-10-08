@@ -268,6 +268,20 @@ const classifyEnvelope = (
   })
 }
 
+const TRANSPORT_FAILURE_STATUS = 0
+
+/**
+ * Whether the realm may answer if asked again: it could not be reached, it
+ * asked us to wait, or the proxy in front of it reported it down. Any other
+ * status is the realm refusing, which asking again will not change.
+ */
+export const isTransientZulipError = (err: ZulipApiError): boolean =>
+  err.status === TRANSPORT_FAILURE_STATUS ||
+  err.status === 429 ||
+  err.status === 502 ||
+  err.status === 503 ||
+  err.status === 504
+
 /**
  * Wrap any non-ZulipApiError transport failure (Effect-platform's
  * `RequestError` / `ResponseError`) in a ZulipApiError so the rest of
@@ -276,7 +290,7 @@ const classifyEnvelope = (
 const transportError = (url: string, cause: unknown): ZulipApiError =>
   new ZulipApiError({
     message: messageOf(cause, `transport failure for ${url}`),
-    status: 0,
+    status: TRANSPORT_FAILURE_STATUS,
     code: undefined,
     retryAfter: undefined,
     cause,

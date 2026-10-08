@@ -36,6 +36,7 @@ import {
   makeStubHttpClient,
   type StubBody,
   type StubHttpClient,
+  type StubResponse,
 } from '@commy/testing/stub-http-client'
 import { HttpClient } from '@effect/platform'
 import { Cause, Effect, Exit, Fiber, Option, Redacted, Ref, TestClock, TestContext } from 'effect'
@@ -392,6 +393,76 @@ effectTest('identity.acquire rejects with ZulipApiError when /users lookup fails
   }),
 )
 
+// The boot acquire retries a failure the realm will get over by itself and
+// exits at once on one an operator has to fix, so acquire says which it is.
+const acquireFailureAgainst = (response: StubResponse) =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* stub.respond('GET', '/api/v1/users', response)
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    return yield* Effect.flip(adapter.identity.acquire(decodeBotNameSync('hermes-agent')))
+  })
+
+const gatewayFailure = (status: number): StubResponse => ({
+  body: '<html>Bad Gateway</html>',
+  status,
+  headers: { 'content-type': 'text/html' },
+})
+
+effectTest('identity.acquire marks an unreachable realm as transient', () =>
+  Effect.gen(function* () {
+    const err = yield* acquireFailureAgainst({ unreachable: true })
+    expect(err).toBeInstanceOf(IdentityError)
+    expect((err as IdentityError).transient).toBe(true)
+  }),
+)
+
+effectTest('identity.acquire marks a gateway error from a restarting realm as transient', () =>
+  Effect.gen(function* () {
+    for (const status of [502, 503, 504]) {
+      const err = yield* acquireFailureAgainst(gatewayFailure(status))
+      expect((err as IdentityError).transient).toBe(true)
+    }
+  }),
+)
+
+effectTest(
+  'identity.acquire marks a rate limit that outlasts its retry budget as transient',
+  () =>
+    Effect.gen(function* () {
+      const fiber = yield* Effect.fork(
+        acquireFailureAgainst({
+          body: { result: 'error', msg: 'API usage exceeded rate limit', code: 'RATE_LIMIT_HIT' },
+          status: 429,
+        }),
+      )
+      yield* TestClock.adjust('1 minute')
+      const err = yield* Fiber.join(fiber)
+      expect((err as IdentityError).transient).toBe(true)
+    }),
+  { layer: TestContext.TestContext },
+)
+
+effectTest('identity.acquire marks rejected credentials as not transient', () =>
+  Effect.gen(function* () {
+    const err = yield* acquireFailureAgainst({
+      body: { result: 'error', msg: 'Invalid API key', code: 'BAD_API_KEY' },
+      status: 401,
+    })
+    expect((err as IdentityError).transient).toBe(false)
+  }),
+)
+
+effectTest('identity.acquire marks an attach persona missing from the realm as not transient', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedUsers(stub, [MAINTAINER])
+    const adapter = yield* zulipAdapter(stub, yield* attachConfig('hermes-agent', 'k'))
+    const err = yield* Effect.flip(adapter.identity.acquire(decodeBotNameSync('hermes-agent')))
+    expect((err as IdentityError).transient).toBe(false)
+  }),
+)
+
 // A hung/slow minter call must not wedge acquire indefinitely: the acquire-path
 // HTTP round-trip carries an Effect.timeout, so a parked GET /users surfaces as
 // a prompt IdentityError (which the plugin layer escalates) instead of blocking
@@ -416,6 +487,7 @@ effectTest(
       const err = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined
       expect(err).toBeInstanceOf(IdentityError)
       expect((err as IdentityError).operation).toBe('acquire')
+      expect((err as IdentityError).transient).toBe(true)
     }),
   { layer: TestContext.TestContext },
 )

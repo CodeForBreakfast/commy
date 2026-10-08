@@ -225,6 +225,18 @@ test('a hang response captures the request, then never resolves and stays interr
     }),
   ))
 
+test('an unreachable response captures the request, then fails as a transport error', () =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* stub.respond('GET', '/api/v1/users', { unreachable: true })
+      const error = yield* Effect.flip(stub.client.execute(HttpClientRequest.get(`${REALM}/users`)))
+      expect(error._tag).toBe('RequestError')
+      expect(error.reason).toBe('Transport')
+      expect(yield* stub.captured).toHaveLength(1)
+    }),
+  ))
+
 test('is a drop-in for the HttpClient.HttpClient service', () =>
   Effect.runPromise(
     Effect.gen(function* () {
