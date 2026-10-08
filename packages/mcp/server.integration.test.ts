@@ -33,6 +33,7 @@ import {
   decodeMessageBodySync,
   decodeMessageIdSync,
   decodeTimestampSync,
+  IdentityError,
   InboxError,
   MessagePermalinkSchema,
   userMentions,
@@ -174,6 +175,11 @@ interface AdapterOverrides {
    */
   readonly resumeQueueReplayed?: boolean
   /**
+   * Whether the realm answers a sign-in, asked on every acquire. While it
+   * returns false the acquire fails as a realm that cannot be reached.
+   */
+  readonly realmReachable?: () => boolean
+  /**
    * Capture stderr-shaped log output (default: route to the runner's
    * STDERR via the production logger). Pass an array to collect the
    * diagnostics an Effect emitted — keeps the runner output clean for
@@ -272,7 +278,19 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
     acquire: (name) =>
       Effect.sync(() => {
         acquires.push(name)
-      }).pipe(Effect.flatMap(() => base.identity.acquire(name))),
+      }).pipe(
+        Effect.flatMap(() =>
+          (overrides.realmReachable ?? (() => true))()
+            ? base.identity.acquire(name)
+            : Effect.fail(
+                new IdentityError({
+                  operation: 'acquire',
+                  cause: new Error('Transport error (GET https://zulip.example.com/api/v1/users)'),
+                  transient: true,
+                }),
+              ),
+        ),
+      ),
     release: () =>
       Effect.sync(() => {
         releases += 1
@@ -2470,6 +2488,28 @@ test('boot feeder is a no-op when CLAUDE_CODE_SESSION_ID is absent — deferred 
  * first `listTools()` and the test would pass without ever seeing the tool
  * present.
  */
+test('a seat with a bot name completes the handshake while the realm is down, then signs in once it answers', async () => {
+  let reachable = false
+  const cap = captureSubscribes()
+  const h = await buildHarness({
+    env: { COMMY_PROJECT: 'myproject' },
+    seedChannels: ['myproject'],
+    inboxOverrides: cap.inboxOverrides,
+    realmReachable: () => reachable,
+  })
+  try {
+    await waitFor(() => h.identityCalls.acquires.length >= 2, 2000)
+    expect((await h.client.listTools()).tools.map((t) => t.name)).toContain('post')
+    expect(cap.tokens).toEqual([])
+
+    reachable = true
+    await waitFor(() => cap.tokens.length === 2, 5000)
+    expect(new Set(cap.tokens)).toEqual(new Set(['new-topics:myproject', 'myproject/general']))
+  } finally {
+    await h.cleanup()
+  }
+})
+
 test('an administrator turning message editing off withdraws edit_message from a connected seat', async () => {
   const flip = Deferred.unsafeMake<RealmSettings>(FiberId.none)
   const h = await buildHarness({
