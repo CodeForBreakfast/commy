@@ -7,12 +7,23 @@ import type {
   InboxError,
   MessageInbox,
 } from '@commy/core/ports'
-import { decodeChannelName, decodeThreadName, isBindError } from '@commy/core/ports'
+import { decodeChannelName, decodeThreadName, IdentityError, isBindError } from '@commy/core/ports'
 import { CommandExecutor, FetchHttpClient, FileSystem, type HttpClient } from '@effect/platform'
 import { NodeContext, NodeRuntime } from '@effect/platform-node'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import { Cause, ConfigProvider, Data, Deferred, Effect, Layer, Option, Predicate } from 'effect'
+import {
+  Cause,
+  ConfigProvider,
+  Data,
+  Deferred,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Predicate,
+  Schedule,
+} from 'effect'
 import type { BotName, GitContext, ParsedEnv, ProjectSlug, SessionId } from './bootstrap.ts'
 import {
   readGitContext as defaultReadGitContext,
@@ -30,7 +41,7 @@ import { CursorStoreTag, FileCursorStoreLive } from './cursor-store.ts'
 import { createEnsureBound } from './ensure-bound.ts'
 import type { Notifier } from './event-pump.ts'
 import { channelNotifier, startEventPump } from './event-pump.ts'
-import type { IdentityCache } from './identity-cache.ts'
+import type { EnsureBoundError, IdentityCache } from './identity-cache.ts'
 import { createEphemeralIdentityCache, createSingleIdentityCache } from './identity-cache.ts'
 import { buildMcpServer } from './mcp-server.ts'
 import { type CatchUpError, catchUpMentions } from './mentions-catch-up.ts'
@@ -323,6 +334,23 @@ const buildIdentityCache = (
 }
 
 /**
+ * How long a seat with a bot name keeps retrying a realm it cannot reach at
+ * boot. The acquire runs before the MCP handshake, so the retry has to finish
+ * inside the host's startup timeout — Claude Code's `MCP_TIMEOUT`, 30 seconds
+ * by default — with room left for the rest of boot. A host that gives up
+ * first caches the failure for the rest of its session.
+ */
+const BOOT_ACQUIRE_RETRY_BUDGET = Duration.seconds(20)
+
+const bootAcquireRetrySchedule = Schedule.exponential(Duration.millis(250)).pipe(
+  Schedule.union(Schedule.spaced(Duration.seconds(4))),
+  Schedule.upTo(BOOT_ACQUIRE_RETRY_BUDGET),
+)
+
+const isTransientIdentityFailure = (err: EnsureBoundError): boolean =>
+  err instanceof IdentityError && err.transient
+
+/**
  * The plugin's boot program as ONE composed Effect,
  * from parse → identity → tools → pump, run at a single
  * `runMain` edge. Services (substrate adapter, cursor store,
@@ -348,9 +376,11 @@ const buildIdentityCache = (
  *                          release-then-acquire across session_id
  *                          transitions).
  *   6. env-driven branch on `parsed.botName`:
- *      • Persistent (botName set): eager acquire now. Rejection writes
- *        the canonical diagnostic and FAILS with BootError — runMain's
- *        teardown maps that to exit 1.
+ *      • Persistent (botName set): eager acquire now. A realm it cannot
+ *        reach is retried for up to BOOT_ACQUIRE_RETRY_BUDGET. Rejection,
+ *        or a realm still unreachable after that, writes the canonical
+ *        diagnostic and FAILS with BootError — runMain's teardown maps that
+ *        to exit 1.
  *      • Ephemeral (botName unset): skip the boot acquire; the first
  *        attribution-producing call mints `cc-[<project>-]<sid>` lazily.
  *   7. release finalizer — registered after acquire, gated on
@@ -781,6 +811,14 @@ export const makeProgram = (
         const botName = parsed.botName
         const ensureBound = yield* identityCache.ensureBoundFor(undefined)
         type1Intents = yield* ensureBound().pipe(
+          Effect.tapError((err) =>
+            isTransientIdentityFailure(err)
+              ? Effect.logWarning(
+                  `commy plugin: acquire("${botName}") could not reach the realm: ${err.message}`,
+                )
+              : Effect.void,
+          ),
+          Effect.retry({ schedule: bootAcquireRetrySchedule, while: isTransientIdentityFailure }),
           // `ensureBound()` is the acquire Effect (ensure-bound.ts). Squash the
           // whole Cause — typed acquire failure or an adapter defect — into the
           // BootError the operator must fix.

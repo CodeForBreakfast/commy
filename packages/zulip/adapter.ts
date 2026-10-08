@@ -64,6 +64,7 @@ import {
 import { HttpClient } from '@effect/platform'
 import {
   Array as Arr,
+  Cause,
   Data,
   Duration,
   Effect,
@@ -102,7 +103,14 @@ import type {
   UploadResult,
   ZulipHttpConfig,
 } from './http.ts'
-import { ApiKey, BotEmail, decodeUserUploadPath, makeZulipHttp, ZulipApiError } from './http.ts'
+import {
+  ApiKey,
+  BotEmail,
+  decodeUserUploadPath,
+  isTransientZulipError,
+  makeZulipHttp,
+  ZulipApiError,
+} from './http.ts'
 import {
   type MentionDirectory,
   MentionToken,
@@ -223,6 +231,20 @@ export type ZulipAdapter = AgentComms &
   AttachmentStore & {
     close(): Promise<void>
   }
+
+/**
+ * An identity failure the realm may get over by itself: a minter call that
+ * timed out, or a realm that could not be reached. A refusal wrapped in one of
+ * our own errors, such as `ReactivateForbidden`, is not transient.
+ */
+const identityError = (operation: IdentityError['operation'], cause: unknown): IdentityError =>
+  new IdentityError({
+    operation,
+    cause,
+    transient:
+      Cause.isTimeoutException(cause) ||
+      (cause instanceof ZulipApiError && isTransientZulipError(cause)),
+  })
 
 /**
  * Raised when re-acquiring a deactivated bot needs the admin-only
@@ -1200,7 +1222,7 @@ export const zulipAdapter = (
                     ] as const
                   }),
                 ),
-                Effect.mapError((cause) => new IdentityError({ operation: 'acquire', cause })),
+                Effect.mapError((cause) => identityError('acquire', cause)),
               ),
           }),
         ),
@@ -1249,7 +1271,7 @@ export const zulipAdapter = (
               onSome: (match) => toIdentity(match).pipe(Effect.asSome),
             }),
           ),
-          Effect.mapError((cause) => new IdentityError({ operation: 'resolve', cause })),
+          Effect.mapError((cause) => identityError('resolve', cause)),
         )
       },
     }

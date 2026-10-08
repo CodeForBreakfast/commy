@@ -495,7 +495,11 @@ describe('createEphemeralIdentityCache (ephemeral mode)', () => {
         const cache = yield* createEphemeralIdentityCache({
           acquire: () =>
             Effect.fail(
-              new IdentityError({ operation: 'acquire', cause: new Error('acquire boom') }),
+              new IdentityError({
+                operation: 'acquire',
+                cause: new Error('acquire boom'),
+                transient: false,
+              }),
             ),
           release: () => Effect.void,
           onAcquire: () =>
