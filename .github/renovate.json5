@@ -72,6 +72,13 @@
       groupName: "typescript and @effect/tsgo",
     },
     {
+      // The @effect/* packages track effect's major version, so one of them
+      // cannot land without the rest. @effect/tsgo is excluded: it versions
+      // with TypeScript and already has its own group above.
+      matchPackageNames: ["effect", "@effect/*", "!@effect/tsgo"],
+      groupName: "effect",
+    },
+    {
       // External requirements are compatibility floors, not pinned dependencies.
       // `requires-python` declares the Python range commy supports;
       // `build-system.requires` declares the minimum build tooling. Both must
