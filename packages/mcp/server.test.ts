@@ -185,6 +185,8 @@ const buildFakeAdapter = (
     readonly identityOrigin?: IdentityOrigin
     /** Reject every substrate-side subscribe, for the part-way-failure paths. */
     readonly subscribeError?: InboxError
+    /** How the realm answers the editing-setting probe. */
+    readonly editingAvailable?: MessagePublisher['editingAvailable']
   } = {},
 ): { readonly adapter: ZulipAdapter; readonly calls: FakeAdapterCalls } => {
   const acquired: string[] = []
@@ -222,7 +224,7 @@ const buildFakeAdapter = (
   const publisher: MessagePublisher = {
     post: () => Effect.die(new Error('unused fake')),
     edit: () => Effect.void,
-    editingAvailable: () => Effect.succeed(true),
+    editingAvailable: options.editingAvailable ?? (() => Effect.succeed(true)),
     react: () => Effect.void,
     unreact: () => Effect.void,
     resolveThread: () => Effect.void,
@@ -329,7 +331,6 @@ test('main writes acquire failure to stderr in the canonical format, fails boot,
 
 // A seat that boots while the realm is unreachable retries rather than dying,
 // because the host caches a failed MCP connection for the rest of its session.
-// The retry has to finish inside the host's startup timeout, so it is bounded.
 const unreachable = () =>
   new IdentityError({
     operation: 'acquire',
@@ -369,24 +370,34 @@ test('boot retries an unreachable realm and comes up once it answers', async () 
   expect(logs.filter((line) => line.includes('could not reach the realm'))).toHaveLength(2)
 })
 
-test('boot gives up on a realm that stays unreachable, inside the host startup timeout', async () => {
+test('boot keeps retrying a realm that stays unreachable, long after the host startup timeout', async () => {
   const fake = buildFakeAdapter({
-    acquireFailures: Array.from({ length: 100 }, unreachable),
+    acquireFailures: Array.from({ length: 1000 }, unreachable),
   })
-  const stderr: string[] = []
+  const stillRunning = await Effect.runPromise(
+    Effect.gen(function* () {
+      const fiber = yield* Effect.fork(provideProgram(validEnv, fake.adapter))
+      yield* TestClock.adjust('10 minutes')
+      const exit = yield* Fiber.poll(fiber)
+      yield* Fiber.interrupt(fiber)
+      return Option.isNone(exit)
+    }).pipe(Effect.provide(TestContext.TestContext)),
+  )
+  expect(stillRunning).toBe(true)
+  expect(fake.calls.acquired.length).toBeGreaterThan(20)
+  expect(fake.calls.closes.count).toBe(1)
+})
+
+test('boot does not wait on a realm that never answers the editing-setting probe', async () => {
+  const fake = buildFakeAdapter({ editingAvailable: () => Effect.never })
   const exit = await runProgramOnTestClock(
     validEnv,
     fake.adapter,
-    { loggerLayer: captureLogger(stderr) },
-    '25 seconds',
+    { readGitContext: () => Effect.succeed(NotInRepo()) },
+    '1 minute',
   )
-  expect(Exit.isFailure(exit)).toBe(true)
-  expect(fake.calls.acquired.length).toBeGreaterThan(2)
-  expect(fake.calls.acquired.length).toBeLessThan(100)
-  expect(stderr.at(-1)).toBe(
-    'commy plugin: acquire("myproject-concierge") failed: Transport error (GET https://zulip.example.com/api/v1/users)',
-  )
-  expect(fake.calls.closes.count).toBe(1)
+  expect(Exit.isSuccess(exit)).toBe(true)
+  expect(fake.calls.acquired).toEqual(['myproject-concierge'])
 })
 
 test('boot does not retry a realm that refuses the sign-in', async () => {
