@@ -599,29 +599,19 @@ export const makeProgram = (
       // topic-level intents were recorded for it. See `restoreSubscriptions` for
       // why those two sources and no others.
       //
-      // Runs for BOTH modes, which is new. A pinned pane has no session record —
-      // its session id changes every launch — so before this it came up with
-      // nothing but its boot-time defaults while the realm went on delivering
-      // every channel it had ever joined at runtime. That seat is the one this
-      // fixes; the ephemeral seat merely stops being a special case.
-      //
       // Forked, never awaited inline. The ephemeral record's read parks on the
       // shared session id, and a host that injects none leaves that id
       // unarrived until the seat itself acts — an inline await would hold boot
-      // there. A pinned pane reads no record at all and so would not park, but
-      // it still forks: it re-subscribes, which binds, and nothing on the boot
-      // fiber should wait on a substrate round-trip it does not need.
+      // there. A pinned bot's record is keyed on its bot name and so does not
+      // park, but it still forks: it re-subscribes, which binds, and nothing on
+      // the boot fiber should wait on a substrate round-trip it does not need.
       //
       // Re-subscribing is realm state under the seat's own principal, so the
       // seat's naming inputs have to be in context for the bind to resolve.
-      const persistedTopicIntents: PersistedTopicIntents =
-        parsed.botName === undefined
-          ? subscriptionStore.read()
-          : // A pinned bot's record could never be its own: the store is keyed by
-            // session id and its id is new every launch. Reading one would park
-            // on an id no host supplies, for an answer that would not be about
-            // this bot anyway.
-            Effect.succeedNone
+      const persistedTopicIntents: PersistedTopicIntents = subscriptionStore.read()
+      // A write before the rebuild has loaded would put the boot-time set over
+      // the record the rebuild is about to read.
+      const narrowSetRebuilt = yield* Deferred.make<void>()
       const rebuildNarrowSet: Effect.Effect<void> = (
         parsed.botName === undefined
           ? Deferred.await(sessionIdDeferred).pipe(Effect.asSome)
@@ -647,6 +637,7 @@ export const makeProgram = (
           ).pipe(Effect.zipRight(Effect.sync(() => narrowSet.load(Option.none())))),
         ),
         Effect.provide(loggerLayer),
+        Effect.ensuring(Deferred.succeed(narrowSetRebuilt, undefined)),
       )
       const seedDefaults = (project: ProjectSlug | undefined): Effect.Effect<void> =>
         registerType2Defaults !== undefined ? registerType2Defaults(project) : Effect.void
@@ -679,29 +670,28 @@ export const makeProgram = (
         sessionId: SessionId,
         project: ProjectSlug | undefined,
       ): Effect.Effect<void> => seedIfFresh(sessionId, project)
-      // Persisting is best-effort and id-blind: subscribe/unsubscribe never
-      // carry a session_id, so poll the shared deferred rather than await it —
-      // write the snapshot only when the id is already known (fed by the
-      // boot-env feeder or a prior hooked call), no-op otherwise. Awaiting
-      // instead would park the user's call on a subscribe-first seat whose id
-      // no source has delivered. A disk hiccup logs but never fails the call.
+      // Persisting is best-effort. A disk hiccup logs but never fails the call.
+      const writeTopicRecord: Effect.Effect<void> = Deferred.await(narrowSetRebuilt).pipe(
+        Effect.zipRight(persistSubscriptions(subscriptionStore, narrowSet)),
+        Effect.catchAll((err) =>
+          Effect.logError(
+            `commy plugin: subscription persist failed: ${Predicate.isError(err) ? err.message : String(err)}`,
+          ),
+        ),
+        Effect.provide(loggerLayer),
+      )
+      // An ephemeral seat's record is keyed on its session id, and
+      // subscribe/unsubscribe never carry one, so poll the shared deferred
+      // rather than await it — write the snapshot only when the id is already
+      // known (fed by the boot-env feeder or a prior hooked call), no-op
+      // otherwise. Awaiting instead would park the user's call on a
+      // subscribe-first seat whose id no source has delivered.
       const persistSessionSubscriptions: Effect.Effect<void> =
         parsed.botName !== undefined
-          ? Effect.void
+          ? writeTopicRecord
           : Deferred.poll(sessionIdDeferred).pipe(
               Effect.flatMap(
-                Option.match({
-                  onNone: () => Effect.void,
-                  onSome: () =>
-                    persistSubscriptions(subscriptionStore, narrowSet).pipe(
-                      Effect.catchAll((err) =>
-                        Effect.logError(
-                          `commy plugin: subscription persist failed: ${Predicate.isError(err) ? err.message : String(err)}`,
-                        ),
-                      ),
-                      Effect.provide(loggerLayer),
-                    ),
-                }),
+                Option.match({ onNone: () => Effect.void, onSome: () => writeTopicRecord }),
               ),
             )
 

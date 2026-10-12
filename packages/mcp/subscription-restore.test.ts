@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { decodeChannelNameSync } from '@commy/core/ports'
+import { decodeChannelNameSync, decodeThreadNameSync } from '@commy/core/ports'
 import { Effect } from 'effect'
 import type { ProjectSlug } from './bootstrap.ts'
 import { createNarrowSet } from './narrow-set.ts'
@@ -14,6 +14,11 @@ const newTopics = (name: string): SubscribeIntent => ({
 const channel = (name: string): SubscribeIntent => ({
   kind: 'channel',
   channelName: decodeChannelNameSync(name),
+})
+const thread = (channelName: string, threadName: string): SubscribeIntent => ({
+  kind: 'thread',
+  channelName: decodeChannelNameSync(channelName),
+  threadName: decodeThreadNameSync(threadName),
 })
 const sortIntents = (intents: ReadonlyArray<SubscribeIntent>): ReadonlyArray<SubscribeIntent> =>
   [...intents].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
@@ -100,6 +105,23 @@ describe('persistSubscriptions', () => {
     await Effect.runPromise(persistSubscriptions(store, narrowSet))
     expect(written.length).toBe(1)
     expect(sortIntents(written[0] ?? [])).toEqual(sortIntents([newTopics('general')]))
+  })
+
+  test('drops a topic intent whose channel is held whole, so a restart cannot narrow that channel to the topic', async () => {
+    // The realm row for `commy` reads back as the whole channel, and restore
+    // narrows a row to the topics the record names. Recording `commy/x` beside
+    // a whole-channel `commy` would turn the seat's own channel into one topic
+    // at the next launch.
+    const narrowSet = createNarrowSet()
+    narrowSet.add(channel('commy'))
+    narrowSet.add(thread('commy', 'x'))
+    narrowSet.add(thread('elsewhere', 'y'))
+    const written: ReadonlyArray<SubscribeIntent>[] = []
+    const store: Pick<SubscriptionStore, 'write'> = {
+      write: (intents) => Effect.sync(() => void written.push(intents)),
+    }
+    await Effect.runPromise(persistSubscriptions(store, narrowSet))
+    expect(written).toEqual([[thread('elsewhere', 'y')]])
   })
 
   test('an empty topic slice is still written, so the record stays a true has-run-before signal', async () => {
