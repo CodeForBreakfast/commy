@@ -122,14 +122,15 @@ Places the current implementation fails this reference.
   exactly one test-side module, this one" — and production code has since
   eroded it. (`bootstrap.ts` naming the adapter is fine; that is the
   composition root choosing an implementation.) Principle 2.
-- **What survives a restart is keyed on `session_id`, not identity**
+- **What survives a restart is kept on the client**
   (`packages/mcp/subscription-store.ts`). Mostly closed: a seat now reads its
   channel subscriptions back from the realm under its own principal, so a
   relaunched pinned pane keeps them the way a human relaunching a browser
-  does. What is still session-keyed is the record of TOPIC-level narrows —
-  the part a subscription row cannot express. That record is the last piece
-  of client-side authority here, and the paragraph on topic narrows below
-  says where it belongs instead. Principle 3.
+  does. What is still kept locally is the record of TOPIC-level narrows —
+  the part a subscription row cannot express. A pinned bot's record is keyed
+  on its bot name, and an ephemeral seat's on its `session_id`. That record
+  is the last piece of client-side authority here, and the paragraph on topic
+  narrows below says where it belongs instead. Principle 3.
 - **Exploration is thinner than a human's.** Agents get `read_channel`,
   `read_thread` and `list_channels`; a human member also gets search and
   unread state. Principle 1, prospectively — this is a gap to fill, not

@@ -44,12 +44,8 @@ export interface SubscriptionRestoreDeps {
 }
 
 /**
- * The topic-level record a rebuild narrows the realm's answer with. Supplied by
- * the caller rather than read here, because where it comes from differs by
- * seat: an ephemeral seat has a per-session record on disk, while a pinned bot
- * has none at all — its session id changes every launch, so a session-keyed
- * record could never be its own. Passing it in keeps the pinned seat off a read
- * that would park forever waiting for an id no host supplies.
+ * The topic-level record a rebuild narrows the realm's answer with: an
+ * ephemeral seat's is keyed on its session id, a pinned bot's on its bot name.
  */
 export type PersistedTopicIntents = Effect.Effect<
   Option.Option<ReadonlyArray<SubscribeIntent>>,
@@ -64,10 +60,24 @@ export const isTopicLevel = (intent: SubscribeIntent): boolean => intent.kind !=
  * because the realm already holds them — persisting them would re-create the
  * divergence this design removes, where a local copy and the delivery rules
  * disagree and the local copy wins.
+ *
+ * A topic intent in a channel the set also holds whole is dropped too. The
+ * whole channel already covers it, and a rebuild narrows any channel the
+ * record names down to the topics recorded there.
  */
 export const topicLevelIntents = (
   intents: ReadonlyArray<SubscribeIntent>,
-): ReadonlyArray<SubscribeIntent> => Arr.filter(intents, isTopicLevel)
+): ReadonlyArray<SubscribeIntent> => {
+  const heldWhole = HashSet.fromIterable(
+    Arr.filterMap(intents, (intent) =>
+      isTopicLevel(intent) ? Option.none() : Option.some(intent.channelName),
+    ),
+  )
+  return Arr.filter(
+    intents,
+    (intent) => isTopicLevel(intent) && !HashSet.has(heldWhole, intent.channelName),
+  )
+}
 
 const sameIntent = (a: SubscribeIntent, b: SubscribeIntent): boolean =>
   a.kind === b.kind &&
@@ -140,20 +150,18 @@ export const seedDefaultsIfFresh = (
 /**
  * Rebuild this seat's narrow set: ask the realm what it is subscribed to, and
  * narrow the answer with whatever topic-level intents were recorded for this
- * session.
+ * seat.
  *
- * Runs for every seat, not just a resuming one. A pinned pane has no session
- * record at all — its session id changes every launch — so before this it came
- * up with nothing but its boot-time defaults, and any channel it had joined at
- * runtime was silently dropped even though the realm was still delivering it.
- * Asking the realm covers that seat for the first time.
+ * Runs for every seat, not just a resuming one, so a pinned pane comes back up
+ * hearing every channel it joined at runtime and only the topics it engaged in
+ * elsewhere.
  *
- * Forked at boot rather than awaited: the topic record is session-keyed and its
- * read parks until the session id arrives, which on a seat whose host injects
- * no id means until the seat itself acts. Whatever the outcome, the narrow set
- * is loaded exactly once so the buffering window closes and the deltas
- * journaled since boot replay onto the result — a subscribe that raced the
- * rebuild is never lost.
+ * Forked at boot rather than awaited: an ephemeral seat's record is
+ * session-keyed and its read parks until the session id arrives, which on a
+ * seat whose host injects no id means until the seat itself acts. Whatever the
+ * outcome, the narrow set is loaded exactly once so the buffering window closes
+ * and the deltas journaled since boot replay onto the result — a subscribe that
+ * raced the rebuild is never lost.
  */
 export const restoreSubscriptions = (
   deps: Pick<SubscriptionRestoreDeps, 'narrowSet' | 'inbox'> & {
@@ -203,4 +211,5 @@ export const restoreSubscriptions = (
 export const persistSubscriptions = (
   store: Pick<SubscriptionStore, 'write'>,
   narrowSet: NarrowSet,
-): Effect.Effect<void, PlatformError> => store.write(topicLevelIntents(narrowSet.intents()))
+): Effect.Effect<void, PlatformError> =>
+  Effect.suspend(() => store.write(topicLevelIntents(narrowSet.intents())))

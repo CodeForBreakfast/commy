@@ -6,12 +6,15 @@ import { captureLogger } from '@commy/core/logging'
 import { decodeChannelNameSync, decodeThreadNameSync } from '@commy/core/ports'
 import { FileSystem } from '@effect/platform'
 import { NodeFileSystem } from '@effect/platform-node'
-import { ConfigProvider, Deferred, Effect, Option } from 'effect'
+import { ConfigProvider, Deferred, Effect, Layer, Option } from 'effect'
 import { parseSessionId, type SessionId } from './bootstrap.ts'
+import { SessionIdLive } from './session-id.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 import {
   createFileSubscriptionStore,
+  FileSubscriptionStoreLive,
   type SubscriptionStore,
+  SubscriptionStoreTag,
   subscriptionDirConfig,
 } from './subscription-store.ts'
 
@@ -33,7 +36,7 @@ const boundStore = (dir: string, id: SessionId): SubscriptionStore =>
     Effect.gen(function* () {
       const session = yield* Deferred.make<SessionId>()
       yield* Deferred.succeed(session, id)
-      return createFileSubscriptionStore({ dir, fs, session })
+      return createFileSubscriptionStore({ dir, fs, owner: Deferred.await(session) })
     }),
   )
 
@@ -179,7 +182,7 @@ describe('createFileSubscriptionStore', () => {
       const store = createFileSubscriptionStore({
         dir: tmp.path,
         fs,
-        session,
+        owner: Deferred.await(session),
       })
       writeFileSync(
         join(tmp.path, `${SID_A}.json`),
@@ -255,7 +258,7 @@ describe('createFileSubscriptionStore', () => {
       )
       await Effect.runPromise(store.read().pipe(Effect.provide(captureLogger(lines))))
       expect(lines).toEqual([
-        `commy plugin: subscription-store drop (retired-intent) kind=mentions session=${SID_A}`,
+        `commy plugin: subscription-store drop (retired-intent) kind=mentions record=${SID_A}`,
       ])
     } finally {
       tmp.cleanup()
@@ -286,6 +289,48 @@ describe('createFileSubscriptionStore', () => {
       await Effect.runPromise(store.write([newTopics('general')]))
       const result = await Effect.runPromise(store.read())
       expect(result).toEqual(Option.some([newTopics('general')]))
+    } finally {
+      tmp.cleanup()
+    }
+  })
+})
+
+/**
+ * The production layer, built as one launch builds it: a fresh session-id
+ * deferred that nothing fills, and the environment the launch was given.
+ */
+const launchStore = (env: Record<string, string>): SubscriptionStore =>
+  Effect.runSync(
+    SubscriptionStoreTag.pipe(
+      Effect.provide(
+        FileSubscriptionStoreLive.pipe(
+          Layer.provide(Layer.mergeAll(NodeFileSystem.layer, SessionIdLive)),
+        ),
+      ),
+      Effect.withConfigProvider(ConfigProvider.fromMap(new Map(Object.entries(env)))),
+    ),
+  )
+
+describe('FileSubscriptionStoreLive', () => {
+  test('a pinned bot reads back the record its previous launch wrote, with no session id', async () => {
+    const tmp = buildTmpDir()
+    try {
+      const env = { XDG_STATE_HOME: tmp.path, COMMY_BOT_NAME: 'myproject-concierge' }
+      await Effect.runPromise(launchStore(env).write([thread('elsewhere', 'one-topic')]))
+      const relaunched = await Effect.runPromise(launchStore(env).read())
+      expect(relaunched).toEqual(Option.some([thread('elsewhere', 'one-topic')]))
+    } finally {
+      tmp.cleanup()
+    }
+  })
+
+  test("a pinned bot's record is its own: another bot name reads nothing", async () => {
+    const tmp = buildTmpDir()
+    try {
+      const write = launchStore({ XDG_STATE_HOME: tmp.path, COMMY_BOT_NAME: 'myproject-concierge' })
+      await Effect.runPromise(write.write([thread('elsewhere', 'one-topic')]))
+      const other = launchStore({ XDG_STATE_HOME: tmp.path, COMMY_BOT_NAME: 'other-concierge' })
+      expect(await Effect.runPromise(other.read())).toEqual(Option.none())
     } finally {
       tmp.cleanup()
     }

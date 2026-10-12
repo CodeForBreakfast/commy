@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { ChannelNameSchema, ThreadNameSchema } from '@commy/core/ports'
+import { type BotName, ChannelNameSchema, ThreadNameSchema } from '@commy/core/ports'
 import { FileSystem } from '@effect/platform'
 import type { PlatformError } from '@effect/platform/Error'
 import {
@@ -14,11 +14,12 @@ import {
   type ParseResult,
   Schema,
 } from 'effect'
-import { SessionId, type SessionIdValue } from './session-id.ts'
+import { botNameConfig } from './bootstrap.ts'
+import { SessionId } from './session-id.ts'
 import type { SubscribeIntent } from './subscribe-parser.ts'
 
 /**
- * Per-session_id record of the narrows a subscription row cannot express.
+ * Per-seat record of the narrows a subscription row cannot express.
  *
  * This file used to hold the whole narrow set, and its own reasoning said why:
  * the set was in-memory, rebuilt from `COMMY_SUBSCRIBE` every boot, so a
@@ -32,9 +33,10 @@ import type { SubscribeIntent } from './subscribe-parser.ts'
  * deliberately absent: a second copy of something the realm already holds could
  * only ever disagree with the rows that actually govern delivery.
  *
- * Still keyed on **session_id**, never identity id — Graeme's 2026-06-29
- * ruling, and it survives the shrink intact. Keying on identity would treat
- * each relaunch of a pinned `COMMY_BOT_NAME` pane as a resume of the last one.
+ * An ephemeral seat's record is keyed on its **session_id**. A pinned
+ * `COMMY_BOT_NAME` bot's is keyed on its bot name, because its session id is
+ * new every launch while the realm rows the record narrows belong to the bot
+ * and outlive the pane.
  *
  * `read` yields `Option.none` only when no file exists for the session, which
  * is what marks a first launch. An empty record returns `Option.some([])`, NOT
@@ -55,7 +57,7 @@ export interface SubscriptionStore {
 }
 
 /**
- * Context tag for the per-session subscription store. The boot program
+ * Context tag for the per-seat subscription store. The boot program
  * reads it from context; the app layer registers {@link FileSubscriptionStoreLive}
  * in production, tests register a file-backed temp-dir store directly.
  */
@@ -65,7 +67,7 @@ export class SubscriptionStoreTag extends Context.Tag('SubscriptionStore')<
 >() {}
 
 export interface FileSubscriptionStoreDeps {
-  /** Directory the per-session JSON files live under. Created lazily on first write. */
+  /** Directory the per-seat JSON files live under. Created lazily on first write. */
   readonly dir: string
   /**
    * The filesystem every read/write executes against, injected at
@@ -74,14 +76,13 @@ export interface FileSubscriptionStoreDeps {
    */
   readonly fs: FileSystem.FileSystem
   /**
-   * The one shared session-id deferred, captured at layer build (cheap and
-   * non-blocking — capturing the deferred does not await it). Every read/write
-   * awaits it lazily inside the method to resolve the id-keyed path, so the id
-   * is never threaded through a call site. Awaiting here rather than at build is
-   * load-bearing: a build-time await would block the whole layer build until a
-   * feeder delivers the id.
+   * Whose record this is: the file's key. Every read/write runs it lazily
+   * inside the method, so the key is never threaded through a call site. For an
+   * ephemeral seat it awaits the one shared session-id deferred, and awaiting
+   * here rather than at build is load-bearing: a build-time await would block
+   * the whole layer build until a feeder delivers the id.
    */
-  readonly session: Deferred.Deferred<SessionIdValue>
+  readonly owner: Effect.Effect<string>
 }
 
 /**
@@ -117,9 +118,8 @@ const SubscriptionsFileSchema = Schema.parseJson(Schema.Array(PersistedIntentSch
 /**
  * Shares the `commy plugin: <component> drop (<reason>) …` shape the event
  * pump's discards use (`event-pump.ts`), so one grep answers "what did this
- * seat silently lose?" across both layers. Session rather than identity
- * because the store is keyed on session_id — see the header doc for why
- * keying on identity would be wrong.
+ * seat silently lose?" across both layers. It names the record by its owner,
+ * the session id or the pinned bot's key.
  *
  * Observability only. This is NOT an expiry instrument: the on-disk entry is
  * cleared solely by `persistSubscriptions`, which fires on a runtime
@@ -129,36 +129,32 @@ const SubscriptionsFileSchema = Schema.parseJson(Schema.Array(PersistedIntentSch
  * that matter — silence here is not permission to delete the shim.
  */
 const traceRetiredDiscards = (
-  id: SessionIdValue,
+  owner: string,
   intents: ReadonlyArray<Schema.Schema.Type<typeof PersistedIntentSchema>>,
 ): Effect.Effect<void> =>
   Effect.forEach(Arr.filter(intents, isRetired), (retired) =>
     Effect.logInfo(
-      `commy plugin: subscription-store drop (retired-intent) kind=${retired.kind} session=${id as string}`,
+      `commy plugin: subscription-store drop (retired-intent) kind=${retired.kind} record=${owner}`,
     ),
   ).pipe(Effect.asVoid)
 
 const decodeSubscriptionsFile = (
-  id: SessionIdValue,
+  owner: string,
   raw: string,
 ): Effect.Effect<ReadonlyArray<SubscribeIntent>, ParseResult.ParseError> =>
   Schema.decodeUnknown(SubscriptionsFileSchema)(raw).pipe(
-    Effect.tap((intents) => traceRetiredDiscards(id, intents)),
+    Effect.tap((intents) => traceRetiredDiscards(owner, intents)),
     Effect.map(Arr.filter((intent) => !isRetired(intent))),
   )
 
 const FILENAME_SAFE = /[^a-zA-Z0-9._-]/g
 
 /**
- * Map a session_id onto a single safe filename. A `SessionId` is already
- * UUID-shaped, but the same sanitisation cursor-store applies is kept as
- * defence-in-depth: non-`[a-zA-Z0-9._-]` characters collapse to `_`, so the
- * resulting path is always a direct child of the configured directory.
+ * Map a record's owner onto a single safe filename. Non-`[a-zA-Z0-9._-]`
+ * characters collapse to `_`, the same sanitisation cursor-store applies, so
+ * the resulting path is always a direct child of the configured directory.
  */
-const subscriptionFilename = (id: SessionIdValue): string => {
-  const safe = (id as string).replace(FILENAME_SAFE, '_')
-  return `${safe}.json`
-}
+const subscriptionFilename = (owner: string): string => `${owner.replace(FILENAME_SAFE, '_')}.json`
 
 const isNotFound = (error: PlatformError | ParseResult.ParseError): boolean =>
   error._tag === 'SystemError' && error.reason === 'NotFound'
@@ -170,30 +166,30 @@ const isNotFound = (error: PlatformError | ParseResult.ParseError): boolean =>
  */
 const readSubscriptions = (
   fs: FileSystem.FileSystem,
-  id: SessionIdValue,
+  owner: string,
   path: string,
 ): Effect.Effect<
   Option.Option<ReadonlyArray<SubscribeIntent>>,
   PlatformError | ParseResult.ParseError
 > =>
   fs.readFileString(path).pipe(
-    Effect.flatMap((raw) => decodeSubscriptionsFile(id, raw)),
+    Effect.flatMap((raw) => decodeSubscriptionsFile(owner, raw)),
     Effect.asSome,
     Effect.catchIf(isNotFound, () => Effect.succeed(Option.none<ReadonlyArray<SubscribeIntent>>())),
   )
 
 export const createFileSubscriptionStore = (deps: FileSubscriptionStoreDeps): SubscriptionStore => {
-  const { dir, fs, session } = deps
-  const pathFor = (id: SessionIdValue): string => join(dir, subscriptionFilename(id))
+  const { dir, fs, owner } = deps
+  const pathFor = (key: string): string => join(dir, subscriptionFilename(key))
 
   const read: SubscriptionStore['read'] = () =>
-    Effect.flatMap(Deferred.await(session), (id) => readSubscriptions(fs, id, pathFor(id)))
+    Effect.flatMap(owner, (key) => readSubscriptions(fs, key, pathFor(key)))
 
   const write: SubscriptionStore['write'] = (intents) =>
-    Effect.flatMap(Deferred.await(session), (id) =>
+    Effect.flatMap(owner, (key) =>
       fs
         .makeDirectory(dir, { recursive: true })
-        .pipe(Effect.zipRight(fs.writeFileString(pathFor(id), JSON.stringify(intents)))),
+        .pipe(Effect.zipRight(fs.writeFileString(pathFor(key), JSON.stringify(intents)))),
     )
 
   return { read, write }
@@ -220,14 +216,16 @@ export const subscriptionDirConfig: Config.Config<string> = stateBaseConfig.pipe
 
 /**
  * Production subscription-store layer: a file-backed store under the XDG
- * state home. Reads `FileSystem` and the subscription directory (via
- * {@link subscriptionDirConfig} against the boot-edge ConfigProvider) from
- * context and injects them into the store at construction.
+ * state home. Reads `FileSystem`, the subscription directory (via
+ * {@link subscriptionDirConfig} against the boot-edge ConfigProvider) and the
+ * seat's bot name from context and injects them into the store at
+ * construction.
  *
  * Both dir configs always yield a value (`withDefault` covers the unset/empty
  * case), so a residual `ConfigError` here means the config source itself is
  * unavailable — an unrecoverable boot fault, defected with `orDie` to keep the
- * layer's error channel `never`.
+ * layer's error channel `never`. An invalid bot name is `parseEnv`'s to
+ * report, and it refuses boot, so here it reads as no bot name.
  */
 export const FileSubscriptionStoreLive: Layer.Layer<
   SubscriptionStoreTag,
@@ -235,7 +233,21 @@ export const FileSubscriptionStoreLive: Layer.Layer<
   FileSystem.FileSystem | SessionId
 > = Layer.effect(
   SubscriptionStoreTag,
-  Effect.all([FileSystem.FileSystem, Effect.orDie(subscriptionDirConfig), SessionId]).pipe(
-    Effect.map(([fs, dir, session]) => createFileSubscriptionStore({ dir, fs, session })),
+  Effect.all([
+    FileSystem.FileSystem,
+    Effect.orDie(subscriptionDirConfig),
+    SessionId,
+    Effect.orElseSucceed(botNameConfig, () => Option.none<BotName>()),
+  ]).pipe(
+    Effect.map(([fs, dir, session, botName]) =>
+      createFileSubscriptionStore({
+        dir,
+        fs,
+        owner: Option.match(botName, {
+          onNone: () => Deferred.await(session),
+          onSome: (name) => Effect.succeed(`bot-${name}`),
+        }),
+      }),
+    ),
   ),
 )

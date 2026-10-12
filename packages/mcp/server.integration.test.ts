@@ -32,16 +32,18 @@ import {
   decodeIdentityIdSync,
   decodeMessageBodySync,
   decodeMessageIdSync,
+  decodeThreadNameSync,
   decodeTimestampSync,
   IdentityError,
   InboxError,
   MessagePermalinkSchema,
+  ThreadPermalinkSchema,
   userMentions,
 } from '@commy/core/ports'
 import { memoryAdapter } from '@commy/memory/adapter'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import { Deferred, Effect, FiberId, Layer, Option, Ref, Stream } from 'effect'
+import { Deferred, Effect, FiberId, Layer, Option, Queue, Ref, Stream } from 'effect'
 import { parseEnv, parseSessionId, substrateAdapterLayer } from './bootstrap.ts'
 import type { CursorStore } from './cursor-store.ts'
 import { CursorStoreTag } from './cursor-store.ts'
@@ -74,20 +76,17 @@ const createMemoryCursorStore = (): CursorStore => {
   }
 }
 
-// The session-bound in-memory store: it resolves its id from the shared
-// session-id deferred — never a per-call argument — exactly as the live file
-// store does, so the harness exercises the real session-binding path.
-const createMemorySubscriptionStore = (
-  session: Deferred.Deferred<SessionIdValue>,
-): SubscriptionStore => {
+// The in-memory store, keyed as the live file store keys it: an ephemeral
+// seat's record resolves its id from the shared session-id deferred — never a
+// per-call argument — and a pinned bot's record is its own, needing no id.
+const createMemorySubscriptionStore = (owner: Effect.Effect<string>): SubscriptionStore => {
   const store = new Map<string, ReadonlyArray<SubscribeIntent>>()
   return {
-    read: () =>
-      Effect.map(Deferred.await(session), (id) => Option.fromNullable(store.get(id as string))),
+    read: () => Effect.map(owner, (key) => Option.fromNullable(store.get(key))),
     write: (intents: ReadonlyArray<SubscribeIntent>) =>
-      Effect.flatMap(Deferred.await(session), (id) =>
+      Effect.flatMap(owner, (key) =>
         Effect.sync(() => {
-          store.set(id as string, intents)
+          store.set(key, intents)
         }),
       ),
   }
@@ -379,7 +378,10 @@ const buildHarness = async (overrides: AdapterOverrides = {}): Promise<Harness> 
   const sessionIdDeferred =
     overrides.sessionIdDeferred ?? Deferred.unsafeMake<SessionIdValue>(FiberId.none)
   const subscriptionStore =
-    overrides.subscriptionStore ?? createMemorySubscriptionStore(sessionIdDeferred)
+    overrides.subscriptionStore ??
+    createMemorySubscriptionStore(
+      overrides.ephemeral === true ? Deferred.await(sessionIdDeferred) : Effect.succeed('bot'),
+    )
   // The memory adapter never fires the resume-outcome hook (only the real Zulip
   // adapter's resume wiring does), so pre-resolve the shared deferred the
   // ephemeral onAcquire awaits — default false (catch-up runs) unless a test
@@ -2102,6 +2104,101 @@ test('ephemeral resume recovers its channels from the realm and does NOT re-appl
     expect(new Set(cap.tokens)).toEqual(new Set(['home']))
   } finally {
     await h.cleanup()
+  }
+})
+
+const postedInTopic = (id: string, channel: string, topic: string): InboundEvent => ({
+  kind: 'message-posted',
+  message: {
+    ref: {
+      id: decodeMessageIdSync(id),
+      channel: {
+        id: decodeChannelIdSync(channel),
+        name: decodeChannelNameSync(channel),
+        permalink: ChannelPermalinkSchema.make(
+          `https://zulip.example.com/#narrow/channel/${channel}`,
+        ),
+      },
+      thread: Option.some({
+        name: decodeThreadNameSync(topic),
+        resolved: false,
+        permalink: ThreadPermalinkSchema.make(
+          `https://zulip.example.com/#narrow/channel/${channel}/topic/${topic}`,
+        ),
+      }),
+      permalink: MessagePermalinkSchema.make(
+        `https://zulip.example.com/#narrow/channel/${channel}/topic/${topic}/near/${id}`,
+      ),
+    },
+    sender: {
+      id: decodeIdentityIdSync('peer-agent'),
+      name: decodeDisplayNameSync('peer-agent'),
+      kind: 'agent',
+    },
+    body: decodeMessageBodySync(`a post in ${topic}`),
+    ts: decodeTimestampSync(1),
+    mentions: [],
+    reactions: [],
+  },
+})
+
+test('a pinned bot that posted in one topic of a channel hears only that topic after a restart', async () => {
+  // The record survives the pane, as the file store's does across launches.
+  let record = Option.none<ReadonlyArray<SubscribeIntent>>()
+  const subscriptionStore: SubscriptionStore = {
+    read: () => Effect.sync(() => record),
+    write: (intents) =>
+      Effect.sync(() => {
+        record = Option.some(intents)
+      }),
+  }
+
+  // First launch: posting in a topic is sticky engagement, which writes a
+  // realm row for the whole channel.
+  const firstRealm = captureSubscribes()
+  const first = await buildHarness({
+    seedChannels: ['elsewhere'],
+    subscriptionStore,
+    inboxOverrides: firstRealm.inboxOverrides,
+  })
+  try {
+    await callTool(first.client, 'post', {
+      channel_name: 'elsewhere',
+      thread: 'one-topic',
+      body: 'joining in',
+    })
+    await waitFor(() => Option.isSome(record), 200)
+  } finally {
+    await first.cleanup()
+  }
+  expect(firstRealm.tokens).toContain('elsewhere/one-topic')
+
+  // Second launch: the realm still holds the row, and reads it back as the
+  // whole channel.
+  const realmRows = firstRealm.tokens.map((token) => token.split('/')[0] ?? token)
+  const secondRealm = captureSubscribes(realmRows)
+  const inbound = Effect.runSync(Queue.unbounded<InboundEvent>())
+  const second = await buildHarness({
+    seedChannels: ['elsewhere'],
+    subscriptionStore,
+    inboxOverrides: { ...secondRealm.inboxOverrides, events: () => Stream.fromQueue(inbound) },
+  })
+  try {
+    // The rebuild re-declares what it restored in that channel once it has loaded.
+    await waitFor(() => secondRealm.tokens.some((token) => token.startsWith('elsewhere')), 500)
+    Effect.runSync(Queue.offer(inbound, postedInTopic('other-topic-post', 'elsewhere', 'other')))
+    Effect.runSync(Queue.offer(inbound, postedInTopic('one-topic-post', 'elsewhere', 'one-topic')))
+    await waitFor(
+      () => second.notifications.some((n) => n.method === 'notifications/claude/channel'),
+      200,
+    )
+    await new Promise((r) => setTimeout(r, 50))
+    const delivered = second.notifications
+      .filter((n) => n.method === 'notifications/claude/channel')
+      .map((n) => (n.params as { meta: Record<string, string> }).meta['message_id'])
+    expect(delivered).toEqual(['one-topic-post'])
+  } finally {
+    await second.cleanup()
   }
 })
 

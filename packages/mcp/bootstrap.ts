@@ -403,6 +403,10 @@ const optionalApiKey = (
   )
 }
 
+/** A pinned seat's bot name, or none for an ephemeral seat. */
+export const botNameConfig: Config.Config<Option.Option<BotName>> =
+  optionalBotName('COMMY_BOT_NAME')
+
 const envConfig: Config.Config<ParsedEnv> = Config.all({
   realmUrl: requiredBrand('ZULIP_SITE', realmUrlSchema, (v): RealmUrlType => v as RealmUrlType),
   minterEmail: requiredBrand(
@@ -413,7 +417,7 @@ const envConfig: Config.Config<ParsedEnv> = Config.all({
   minterApiKey: Config.redacted(
     requiredBrand('ZULIP_MINTER_API_KEY', apiKeySchema, (v): ApiKeyType => v as ApiKeyType),
   ),
-  botName: optionalBotName('COMMY_BOT_NAME'),
+  botName: botNameConfig,
   botApiKey: optionalApiKey('COMMY_BOT_API_KEY'),
   subscribe: optionalUserConfig('COMMY_SUBSCRIBE'),
   project: optionalNonEmpty('COMMY_PROJECT'),
