@@ -967,7 +967,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     },
     {
       name: 'unsubscribe',
-      description: 'Unsubscribe the bot from a substrate target. Same token syntax as subscribe.',
+      description:
+        'Unsubscribe the bot from a substrate target. Same token syntax as subscribe. Unsubscribing a whole channel also drops every topic and new-topics narrow held in it, including topics joined by posting or reacting there.',
       inputSchema: {
         type: 'object',
         properties: {

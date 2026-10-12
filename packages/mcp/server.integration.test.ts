@@ -2202,6 +2202,38 @@ test('a pinned bot that posted in one topic of a channel hears only that topic a
   }
 })
 
+test('a seat that unsubscribes a channel stops hearing the topic it posted in there', async () => {
+  const inbound = Effect.runSync(Queue.unbounded<InboundEvent>())
+  const h = await buildHarness({
+    seedChannels: ['elsewhere', 'home'],
+    subscribe: 'home',
+    inboxOverrides: { events: () => Stream.fromQueue(inbound) },
+  })
+  try {
+    await callTool(h.client, 'subscribe', { target: 'elsewhere' })
+    await callTool(h.client, 'post', {
+      channel_name: 'elsewhere',
+      thread: 'one-topic',
+      body: 'joining in',
+    })
+    await callTool(h.client, 'unsubscribe', { target: 'elsewhere' })
+
+    Effect.runSync(Queue.offer(inbound, postedInTopic('left-post', 'elsewhere', 'one-topic')))
+    Effect.runSync(Queue.offer(inbound, postedInTopic('home-post', 'home', 'lobby')))
+    await waitFor(
+      () => h.notifications.some((n) => n.method === 'notifications/claude/channel'),
+      200,
+    )
+    await new Promise((r) => setTimeout(r, 50))
+    const delivered = h.notifications
+      .filter((n) => n.method === 'notifications/claude/channel')
+      .map((n) => (n.params as { meta: Record<string, string> }).meta['message_id'])
+    expect(delivered).toEqual(['home-post'])
+  } finally {
+    await h.cleanup()
+  }
+})
+
 // ─── channel/thread catch-up on persistent-mode boot ─────────────
 
 test('persistent boot surfaces recent channel messages within the catch-up window', async () => {

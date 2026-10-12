@@ -691,6 +691,11 @@ export interface MessageInbox {
    * its own.
    */
   subscribe(target: SubscriptionTarget): Effect.Effect<void, BindError | InboxError>
+  /**
+   * Unsubscribing a whole channel drops every narrow in it, topics and
+   * new-topics included, so no post in that channel reaches the seat
+   * afterwards except one that mentions it.
+   */
   unsubscribe(target: SubscriptionTarget): Effect.Effect<void, BindError | InboxError>
   /**
    * The channels the realm currently delivers to this seat, read back from the
