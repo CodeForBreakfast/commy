@@ -55,7 +55,7 @@ import { buildQueueStateHooks } from './queue-state-hooks.ts'
 import { FileQueueStateStoreLive, QueueStateStoreTag } from './queue-state-store.ts'
 import { ResumeOutcomeLive, ResumeOutcome as ResumeOutcomeService } from './resume-outcome.ts'
 import { makeProgram } from './server.ts'
-import { SessionBinderLive } from './session-binder.ts'
+import { bindThrough, SessionBinder, SessionBinderLive } from './session-binder.ts'
 import { SessionIdLive, SessionId as SessionIdService } from './session-id.ts'
 import { FileSubscriptionStoreLive } from './subscription-store.ts'
 import { testPlatformLayer } from './test-platform.ts'
@@ -126,6 +126,10 @@ const RESUME_SESSION = 'cccccccc-0000-0000-0000-000000000001'
 // post-resume event.
 const DOWNTIME_RESUME_SESSION = 'dddddddd-0000-0000-0000-000000000001'
 
+// The idle seat and the seat that posts to it, for the first-message test.
+const FIRST_MESSAGE_SESSION = 'e1e1e1e1-0000-0000-0000-000000000001'
+const POSTER_SESSION = 'e2e2e2e2-0000-0000-0000-000000000001'
+
 const usersListSchema = Schema.Struct({
   result: Schema.Literal('success'),
   members: Schema.Array(
@@ -164,10 +168,10 @@ const expectStructured = (result: ToolCallResult): Record<string, unknown> => {
   return result.structuredContent as Record<string, unknown>
 }
 
-// Wrap `inbox.events()` so a harness can stop the event pump cleanly on scope
-// close. The deferred fires from the finalizer to interrupt the Stream —
-// without it, the program's `await pump.done` never resolves and the test
-// leaks the long-poll.
+// Wrap both streams the event pump consumes so a harness can stop it cleanly on
+// scope close. The deferred fires from the finalizer to interrupt them — the
+// pump's `done` waits on both, so leaving either running means the program
+// never returns and the test leaks the long-poll.
 const withKillSwitch = (
   adapter: ZulipAdapter,
   killSwitch: Deferred.Deferred<void>,
@@ -176,6 +180,8 @@ const withKillSwitch = (
   inbox: {
     ...adapter.inbox,
     events: () => adapter.inbox.events().pipe(Stream.interruptWhenDeferred(killSwitch)),
+    settingsChanges: () =>
+      adapter.inbox.settingsChanges().pipe(Stream.interruptWhenDeferred(killSwitch)),
   },
 })
 
@@ -297,6 +303,7 @@ const buildResumeHarness = (
           realmUrl: yield* RealmUrl(e.site).pipe(Effect.orDie),
           minterEmail: yield* BotEmail(e.minterEmail).pipe(Effect.orDie),
           minterApiKey: Redacted.make(yield* ApiKey(e.minterApiKey).pipe(Effect.orDie)),
+          bindOnDemand: bindThrough(yield* SessionBinder),
           queueIdleTimeoutSecs: hooks.queueIdleTimeoutSecs,
           onQueueRegister: hooks.onQueueRegister,
           onQueueAdvance: hooks.onQueueAdvance,
@@ -786,5 +793,106 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
         }),
       ),
     120_000,
+  )
+
+  test(
+    "an idle seat subscribed to a topic before it exists is woken by the topic's first message",
+    () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const e = liveEnv()
+          const stateHome = mkdtempSync(join(tmpdir(), 'commy-first-message-'))
+          const posterStateHome = mkdtempSync(join(tmpdir(), 'commy-first-message-poster-'))
+          const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+          const topic = `first-message-${suffix}`
+          const marker = `first-message-marker-${suffix}`
+          // Booted the way a host starts a seat in a project whose channel is the
+          // live channel: the session id in the child's env, no auto-subscribe
+          // tokens, so the seat's only default is its project's general topic.
+          const bootEnv = {
+            CLAUDE_CODE_SESSION_ID: FIRST_MESSAGE_SESSION,
+            XDG_STATE_HOME: stateHome,
+            COMMY_PROJECT: e.channelName,
+          }
+
+          const frames: Array<{ readonly meta: Record<string, string> }> = []
+          const matchingFrame = yield* Effect.scoped(
+            Effect.gen(function* () {
+              yield* Effect.sleep(MINTER_PACE)
+              const client = yield* buildResumeHarness(bootEnv)
+              client.fallbackNotificationHandler = (n: {
+                readonly method: string
+                readonly params?: unknown
+              }): Promise<void> => {
+                if (
+                  n.method === 'notifications/claude/channel' &&
+                  typeof n.params === 'object' &&
+                  n.params !== null
+                ) {
+                  const p = n.params as { readonly meta?: Record<string, string> }
+                  if (p.meta !== undefined) frames.push({ meta: p.meta })
+                }
+                return Promise.resolve()
+              }
+
+              // The seat reads the topic, finds it empty, subscribes to it, and
+              // goes idle: no further tool call until something wakes it.
+              const before = expectStructured(
+                yield* callTool(client, 'read_thread', {
+                  channel_name: e.channelName,
+                  thread: topic,
+                }),
+              )
+              expect(before['messages']).toEqual([])
+              yield* Effect.sleep(MINTER_PACE)
+              yield* callTool(client, 'subscribe', {
+                target: `${e.channelName}/${topic}`,
+                session_id: FIRST_MESSAGE_SESSION,
+              })
+
+              // Another seat creates the topic with its first message.
+              const poster = yield* buildResumeHarness({
+                CLAUDE_CODE_SESSION_ID: POSTER_SESSION,
+                XDG_STATE_HOME: posterStateHome,
+              })
+              yield* Effect.sleep(MINTER_PACE)
+              yield* callTool(poster, 'subscribe', {
+                target: e.channelName,
+                session_id: POSTER_SESSION,
+              })
+              yield* Effect.sleep(MINTER_PACE)
+              const posted = expectStructured(
+                yield* callTool(poster, 'post', {
+                  channel_name: e.channelName,
+                  thread: topic,
+                  body: marker,
+                  session_id: POSTER_SESSION,
+                }),
+              )
+              const messageId = posted['message_id'] as string
+
+              return yield* Effect.suspend(() =>
+                Option.match(
+                  Option.fromNullable(frames.find((f) => f.meta['message_id'] === messageId)),
+                  {
+                    onNone: () => Effect.fail('not-yet' as const),
+                    onSome: (f) => Effect.succeed(f),
+                  },
+                ),
+              ).pipe(
+                Effect.retry(Schedule.spaced(Duration.millis(500))),
+                Effect.timeout(Duration.seconds(30)),
+              )
+            }),
+          )
+
+          expect(matchingFrame.meta['channel_name']).toBe(e.channelName)
+          expect(matchingFrame.meta['thread']).toBe(topic)
+
+          rmSync(stateHome, { recursive: true, force: true })
+          rmSync(posterStateHome, { recursive: true, force: true })
+        }),
+      ),
+    90_000,
   )
 })
