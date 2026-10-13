@@ -2031,17 +2031,28 @@ export const zulipAdapter = (
               const channel = channelOf(target)
               // Drop the narrow, snapshotting whether the channel is still
               // listened to afterward — if so, the seat stays subscribed.
+              // Dropping a whole channel drops every narrow in it, so the row
+              // goes and no topic there keeps reaching the seat.
               return SynchronizedRef.modify(inboxRef, (state) => {
+                const dropNewTopics = {
+                  newTopicsChannels: HashSet.remove(state.newTopicsChannels, channel),
+                  seenTopicsByChannel: HashMap.remove(state.seenTopicsByChannel, channel),
+                }
                 const next: InboxState = Predicate.hasProperty(target, 'kind')
-                  ? {
-                      ...state,
-                      newTopicsChannels: HashSet.remove(state.newTopicsChannels, channel),
-                      seenTopicsByChannel: HashMap.remove(state.seenTopicsByChannel, channel),
-                    }
-                  : {
-                      ...state,
-                      heldNarrows: HashSet.remove(state.heldNarrows, heldNarrowOf(target)),
-                    }
+                  ? { ...state, ...dropNewTopics }
+                  : Predicate.isString(target)
+                    ? {
+                        ...state,
+                        ...dropNewTopics,
+                        heldNarrows: HashSet.filter(
+                          state.heldNarrows,
+                          (narrow) => narrow.channel !== channel,
+                        ),
+                      }
+                    : {
+                        ...state,
+                        heldNarrows: HashSet.remove(state.heldNarrows, heldNarrowOf(target)),
+                      }
                 return [streamIsListening(next, channel), next]
               }).pipe(
                 Effect.flatMap((stillListening) =>

@@ -3056,6 +3056,23 @@ effectTest(
     }),
 )
 
+effectTest('inbox.unsubscribe(channel) drops the row even while a topic there is held', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSubscribeOk(stub, 'general')
+    yield* seedUnsubscribeOk(stub, 'general')
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.inbox.subscribe(generalChannel.name)
+    yield* adapter.inbox.subscribe({
+      channel: generalChannel.name,
+      thread: decodeThreadNameSync('held'),
+    })
+    yield* adapter.inbox.subscribe({ kind: 'new-topics-in-channel', channel: generalChannel.name })
+    yield* adapter.inbox.unsubscribe(generalChannel.name)
+    yield* findRequest(stub, 'DELETE', '/api/v1/users/me/subscriptions')
+  }),
+)
+
 effectTest('inbox.replay(since) returns message-posted events for messages with ts >= since', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient

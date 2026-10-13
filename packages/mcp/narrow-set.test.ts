@@ -426,6 +426,26 @@ test('a buffered unsubscribe of a base member is applied after the base loads', 
   expect(set.matches(buildMessagePosted('home', undefined), seat)).toBe(false)
 })
 
+test('removing a channel removes every narrow in it, and only in it', () => {
+  const set = createNarrowSet()
+  set.add(channelIntent('home'))
+  set.add(threadIntent('home', 'payments'))
+  set.add(newTopicsIntent('home'))
+  set.add(threadIntent('general', 'payments'))
+  set.remove(channelIntent('home'))
+  expect(set.intents()).toEqual([threadIntent('general', 'payments')])
+  expect(set.matches(buildMessagePosted('home', 'payments'), seat)).toBe(false)
+  expect(set.matches(buildMessagePosted('home', 'fresh'), seat)).toBe(false)
+})
+
+test('a buffered channel removal drops the restored topics in that channel', () => {
+  const set = createNarrowSet()
+  set.beginBuffering()
+  set.remove(channelIntent('home'))
+  set.load(Option.some([threadIntent('home', 'payments'), channelIntent('general')]))
+  expect(set.intents()).toEqual([channelIntent('general')])
+})
+
 test('an env seed applied before buffering is not resurrected by load(Some) — dropped stays dropped', () => {
   const set = createNarrowSet()
   // COMMY_SUBSCRIBE base seeded at boot, before the buffering window opens.

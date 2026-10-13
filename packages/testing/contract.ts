@@ -1170,6 +1170,27 @@ export const runAgentCommsContract = (label: string, factory: ContractFactory): 
         ),
       ))
 
+    test('inbox.unsubscribe of a channel also silences a topic held in it', () =>
+      Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const channel = yield* env.seedChannel('lobby')
+            const thread = decodeThreadNameSync('held')
+            yield* env.comms.inbox.subscribe(channel.name)
+            yield* env.comms.inbox.subscribe({ channel: channel.name, thread })
+            yield* env.comms.inbox.unsubscribe(channel.name)
+            const queue = yield* eventQueue(env.comms)
+            yield* env.comms.publisher.post(
+              channel.name,
+              decodeMessageBodySync('should-not-arrive'),
+              { thread },
+            )
+            const result = yield* Queue.take(queue).pipe(Effect.timeoutOption(Duration.millis(100)))
+            expect(Option.isNone(result)).toBe(true)
+          }),
+        ),
+      ))
+
     test('inbox.unsubscribe of one topic leaves another topic in that channel delivering', () =>
       Effect.runPromise(
         Effect.scoped(

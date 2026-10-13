@@ -127,6 +127,16 @@ const keyToIntent = (key: IntentKey): SubscribeIntent =>
     }),
   )
 
+/**
+ * Leaving a channel leaves every topic in it too. The realm holds one row per
+ * channel, so a topic left behind would keep that row, and the seat would go on
+ * hearing a channel it had just been told it left.
+ */
+const withoutIntent = (keys: HashSet.HashSet<IntentKey>, key: IntentKey) =>
+  key.kind === 'channel'
+    ? HashSet.filter(keys, (held) => held.channelName !== key.channelName)
+    : HashSet.remove(keys, key)
+
 const channelKey = (ref: MessageRef): IntentKey => channelKeyOf(ref.channel.name)
 
 const newTopicsKey = (ref: MessageRef): IntentKey => newTopicsKeyOf(ref.channel.name)
@@ -188,7 +198,7 @@ export const createNarrowSet = (): NarrowSet => {
     },
     remove: (intent) => {
       const key = intentKey(intent)
-      intents = HashSet.remove(intents, key)
+      intents = withoutIntent(intents, key)
       if (recording) pending.push({ op: 'remove', key })
     },
     size: () => HashSet.size(intents),
@@ -203,7 +213,7 @@ export const createNarrowSet = (): NarrowSet => {
       })
       intents = pending.reduce(
         (acc, delta) =>
-          delta.op === 'add' ? HashSet.add(acc, delta.key) : HashSet.remove(acc, delta.key),
+          delta.op === 'add' ? HashSet.add(acc, delta.key) : withoutIntent(acc, delta.key),
         seeded,
       )
       pending.length = 0

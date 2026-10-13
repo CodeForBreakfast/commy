@@ -811,9 +811,21 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         requireBound().pipe(
           Effect.zipRight(Ref.update(subscriptions, HashSet.add(subscriptionKey(target)))),
         ),
+      // A whole channel takes every narrow in it with it, as the realm's single
+      // row per channel does in the Zulip adapter.
       unsubscribe: (target) =>
         requireBound().pipe(
-          Effect.zipRight(Ref.update(subscriptions, HashSet.remove(subscriptionKey(target)))),
+          Effect.zipRight(
+            Ref.update(
+              subscriptions,
+              Predicate.isString(target) && target !== 'mentions'
+                ? HashSet.filter(
+                    (key) =>
+                      !Predicate.hasProperty(key, 'channelName') || key.channelName !== target,
+                  )
+                : HashSet.remove(subscriptionKey(target)),
+            ),
+          ),
         ),
       // Mirrors the realm's answer: a subscription row names a CHANNEL, so
       // every narrow over a channel reads back as that channel and `mentions`
