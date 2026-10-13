@@ -47,7 +47,7 @@ import {
   TestClock,
   TestContext,
 } from 'effect'
-import { EnvConfigError, NotInRepo, parseEnv, substrateAdapterLayer } from './bootstrap.ts'
+import { EnvConfigError, InRepo, NotInRepo, parseEnv, substrateAdapterLayer } from './bootstrap.ts'
 import type { CursorStore } from './cursor-store.ts'
 import { CursorStoreTag } from './cursor-store.ts'
 // Above-port unit tests drive the substrate through hand-rolled port fakes and
@@ -462,6 +462,21 @@ test('lazy mode mints at boot when COMMY_SUBSCRIBE gives the seat something to h
   // The one positive trace that the bootstrap ran. It appears at most once in a
   // bot's life, so its absence on a later boot is the design, not a fault.
   expect(logs).toEqual(['commy plugin: applied 1 boot-time subscribe target(s): home'])
+})
+
+test('a seat minted at boot is named after the project it was launched in', async () => {
+  const fake = buildFakeAdapter()
+  const launchCwd = '/home/x/myproject'
+  await runProgram({ ...lazyEnv, COMMY_SUBSCRIBE: 'home' }, fake.adapter, {
+    launchCwd,
+    readGitContext: (cwd) =>
+      Effect.succeed(
+        cwd === launchCwd
+          ? InRepo({ gitRoot: launchCwd, remoteBasename: Option.some('myproject') })
+          : NotInRepo(),
+      ),
+  })
+  expect(fake.calls.acquired).toEqual(['cc-myproject-abcdef12'])
 })
 
 test('lazy mode does NOT mint at boot when COMMY_SUBSCRIBE is unset', async () => {

@@ -47,9 +47,15 @@ attribution-producing tool call**, from the *calling* session's cwd.
 The CC PreToolUse hook injects the harness `cwd` into the tool
 call's `arguments` alongside `session_id`; the plugin reads the cwd
 at the boundary in `tools.ts` and passes the derived project to the
-identity cache. (Deriving once at plugin boot from the plugin's own
-process cwd would leak the plugin's install location into every minted
-name regardless of where the calling session was operating.) Precedence:
+identity cache.
+
+A child that binds at boot, before any tool call has brought a cwd,
+derives the project from its own launch directory instead. That
+happens when a restarted or resumed child finds the session's saved
+subscriptions, or when `COMMY_SUBSCRIBE` gives it something to hold.
+Claude Code launches the child in the session's directory, so the
+restarted child mints the same name the session already had.
+Precedence:
 
 1. **`COMMY_PROJECT` env var** — operator override, set in the
    plugin process's environment. Authoritative when set: every call
