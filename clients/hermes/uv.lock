@@ -170,7 +170,7 @@ wheels = [
 
 [[package]]
 name = "commy-hermes"
-version = "0.25.3"
+version = "0.25.4rc1"
 source = { editable = "." }
 
 [package.dev-dependencies]
