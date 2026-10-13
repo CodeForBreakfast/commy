@@ -106,6 +106,12 @@ export interface ProgramParams {
    */
   readonly readGitContext?: (cwd: string) => Effect.Effect<GitContext>
   /**
+   * The directory the host launched this child in. Claude Code launches it in
+   * the session's own directory, so it names the project for an identity bound
+   * at boot, before any tool call has brought a cwd.
+   */
+  readonly launchCwd?: string
+  /**
    * Logger Layer for diagnostics. Provided both at the program edge (so
    * the boot fiber + forked pump route `Effect.log*` to STDERR off the
    * MCP STDOUT channel) and onto the ephemeral `onAcquire` callback,
@@ -551,9 +557,9 @@ export const makeProgram = (
         (label: string) =>
         (cause: Cause.Cause<never>): Effect.Effect<void> =>
           Effect.logWarning(`commy plugin: ${label} failed: ${Cause.pretty(cause)}`)
-      // Per-call project resolver. Operator override (COMMY_PROJECT)
-      // is authoritative; otherwise derive from the calling session's cwd
-      // at call time — process cwd is irrelevant.
+      // Project resolver. Operator override (COMMY_PROJECT) is authoritative;
+      // otherwise derive from the calling session's cwd at call time, or from
+      // the launch directory for a bind at boot.
       const projectForCwd = (
         cwd: string | undefined,
       ): Effect.Effect<Option.Option<ProjectSlug>> => {
@@ -561,6 +567,7 @@ export const makeProgram = (
         if (cwd === undefined) return Effect.succeedNone
         return deriveProject({ cwd, readGitContext })
       }
+      const launchProject = Option.getOrUndefined(yield* projectForCwd(params.launchCwd))
 
       // Sample the realm-wide editing switch once, before the tool list is
       // built, so a seat on a realm with editing off is never offered
@@ -625,7 +632,7 @@ export const makeProgram = (
               narrowSet,
               inbox: adapter.inbox,
             }),
-            { sessionId: Option.getOrUndefined(sessionId), project: parsed.project },
+            { sessionId: Option.getOrUndefined(sessionId), project: launchProject },
           ),
         ),
         Effect.catchAll((err) =>
@@ -849,7 +856,7 @@ export const makeProgram = (
       ) =>
         withSessionContext(seed, {
           sessionId: Option.getOrUndefined(bootSessionId),
-          project: parsed.project,
+          project: launchProject,
         }).pipe(
           // A seat with no way to bind cannot hold subscriptions at all — the
           // ephemeral bot name is derived from the session id, so there is no name
@@ -1223,6 +1230,7 @@ export const main = (): void =>
     makeProgram({
       transport: new StdioServerTransport(),
       shutdownSignal: clientDisconnect(process.stdin),
+      launchCwd: process.cwd(),
     }).pipe(Effect.provide(MainLive)),
     { disablePrettyLogger: true },
   )

@@ -57,7 +57,8 @@ import { makeProgram } from './server.ts'
 import type { BindOnDemand } from './session-binder.ts'
 import { bindThrough, SessionBinder as SessionBinderTag } from './session-binder.ts'
 import { SessionId as SessionIdTag, type SessionIdValue } from './session-id.ts'
-import { SubscriptionStoreTag } from './subscription-store.ts'
+import type { SubscribeIntent } from './subscribe-parser.ts'
+import { type SubscriptionStore, SubscriptionStoreTag } from './subscription-store.ts'
 import { testBootStoresLayer, testPlatformLayer } from './test-platform.ts'
 
 const REPO_ROOT = join(import.meta.dir, '..', '..')
@@ -142,10 +143,9 @@ const argumentsAfterPreToolUse = async (
 /**
  * The MCP child's environment as a fleet seat launches it. `COMMY_BOT_NAME` is
  * absent, which is how an operator asks for ephemeral mode; and
- * `CLAUDE_CODE_SESSION_ID` is absent, which is how Claude Code launches the
- * child — the harness id reaches the server per call through the hook, not
- * once at boot. Between them these two absences ARE the configuration under
- * test.
+ * `CLAUDE_CODE_SESSION_ID` is absent, so the harness id reaches the server
+ * only per call through the hook. Claude Code does set it, and the restart
+ * test adds it back.
  */
 const CLAUDE_CODE_CHILD_ENV: Record<string, string | undefined> = {
   ZULIP_SITE: 'https://zulip.example.com',
@@ -177,6 +177,17 @@ interface DeployedSeat {
 }
 
 /**
+ * What a second MCP child for the same conversation inherits from the first:
+ * the session's persisted subscriptions, the directory the host launches it
+ * in, and the session id the host puts in its environment.
+ */
+interface SeatRestart {
+  readonly subscriptionStore?: SubscriptionStore
+  readonly launchCwd?: string
+  readonly env?: Record<string, string>
+}
+
+/**
  * Boot a real MCP child in the deployed configuration and give it a client
  * that goes through the PreToolUse stage.
  *
@@ -186,13 +197,11 @@ interface DeployedSeat {
  */
 const bootDeployedSeat = async (
   manifest: HooksManifest,
-  seedChannels: ReadonlyArray<string> = ['home'],
+  restart: SeatRestart = {},
 ): Promise<DeployedSeat> => {
   const binderRef = await Effect.runPromise(Ref.make<Option.Option<BindOnDemand>>(Option.none()))
   const base = await Effect.runPromise(memoryAdapter({ bindOnDemand: bindThrough(binderRef) }))
-  for (const name of seedChannels) {
-    await Effect.runPromise(base.seedChannel(name).pipe(Effect.orDie))
-  }
+  await Effect.runPromise(base.seedChannel('home').pipe(Effect.orDie))
 
   // Unwinding the program means interrupting the pump's stream, exactly as a
   // SIGTERM does under runMain; the memory adapter's `events()` otherwise
@@ -222,26 +231,30 @@ const bootDeployedSeat = async (
     read: () => Effect.succeedNone,
     write: () => Effect.void,
   }
-  const inMemorySubscriptionStore = {
+  const subscriptionStore = restart.subscriptionStore ?? {
     read: () => Effect.succeedNone,
     write: () => Effect.void,
   }
 
   const runExit = Effect.runPromiseExit(
-    makeProgram({ transport: serverTransport, loggerLayer: captureLogger([]) }).pipe(
+    makeProgram({
+      transport: serverTransport,
+      loggerLayer: captureLogger([]),
+      ...(restart.launchCwd !== undefined ? { launchCwd: restart.launchCwd } : {}),
+    }).pipe(
       Effect.provide(
         Layer.provideMerge(
           Layer.mergeAll(
             substrateAdapterLayer(parseEnv.pipe(Effect.as(adapter))),
             Layer.succeed(CursorStoreTag, inMemoryCursorStore),
-            Layer.succeed(SubscriptionStoreTag, inMemorySubscriptionStore),
+            Layer.succeed(SubscriptionStoreTag, subscriptionStore),
             Layer.succeed(SessionIdTag, sessionIdDeferred),
             Layer.succeed(ResumeOutcomeTag, resumeOutcome),
             Layer.succeed(SessionBinderTag, binderRef),
             testBootStoresLayer(),
             captureLogger([]),
           ),
-          testPlatformLayer(CLAUDE_CODE_CHILD_ENV),
+          testPlatformLayer({ ...CLAUDE_CODE_CHILD_ENV, ...restart.env }),
         ),
       ),
     ),
@@ -408,6 +421,60 @@ test('a fresh conversation gets a fresh seat rather than inheriting the last one
   } finally {
     await seat.shutdown()
     cwd.remove()
+  }
+})
+
+/** A subscription store that outlives one MCP child, as the session's file on disk does. */
+const sessionSubscriptionStore = (): SubscriptionStore => {
+  let record = Option.none<ReadonlyArray<SubscribeIntent>>()
+  return {
+    read: () => Effect.sync(() => record),
+    write: (intents) =>
+      Effect.sync(() => {
+        record = Option.some(intents)
+      }),
+  }
+}
+
+/** Resolve once the child holds a binding, which a restored seat takes on its own at boot. */
+const boundNameOnceBound = async (seat: DeployedSeat): Promise<string | undefined> => {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const name = await seat.boundName()
+    if (name !== undefined) return name
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  return undefined
+}
+
+test('a restarted child for the same conversation and directory keeps the seat the first child minted', async () => {
+  const manifest = await readShippedHooksManifest()
+  const restart: SeatRestart = {
+    subscriptionStore: sessionSubscriptionStore(),
+    launchCwd: REPO_ROOT,
+    env: { CLAUDE_CODE_SESSION_ID: SID_CONVERSATION },
+  }
+
+  const first = await bootDeployedSeat(manifest, restart)
+  let firstName: string | undefined
+  try {
+    // A post into a topic leaves a subscription record, which is what makes the
+    // next child for this conversation bind at boot, before any tool call.
+    await first.callAsClaudeCode(
+      'post',
+      { channel_name: 'home', thread: 'work', body: 'before the restart' },
+      { sessionId: SID_CONVERSATION, cwd: REPO_ROOT },
+    )
+    firstName = await first.boundName()
+  } finally {
+    await first.shutdown()
+  }
+  expect(firstName).toMatch(/^cc-.+-aaaaaaaa$/)
+
+  const second = await bootDeployedSeat(manifest, restart)
+  try {
+    expect(await boundNameOnceBound(second)).toBe(firstName)
+  } finally {
+    await second.shutdown()
   }
 })
 
