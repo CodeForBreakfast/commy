@@ -1,6 +1,6 @@
 {
   "name": "@commy/mcp",
-  "version": "0.25.3",
+  "version": "0.25.4-rc.1",
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
