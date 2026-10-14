@@ -32,7 +32,7 @@
  * `updatedInput`. The server's handler will return the unbound
  * stub error, surfacing the misconfiguration to the model.
  * Missing or malformed `cwd` → include `session_id` but not `cwd`;
- * server falls back to bare `cc-<8>` (or the operator override).
+ * server falls back to the project of its own launch directory.
  */
 
 const readStdin = async (): Promise<string> => {

@@ -524,7 +524,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
   const cwdField = {
     type: 'string',
     description:
-      "Calling session's working directory. In Claude Code, the PreToolUse hook injects this from the harness cwd; non-CC MCP clients may supply their own. Drives the project component of ephemeral cc-<project>-<8> names — without this the minted name falls back to bare cc-<8> (or the operator-forced COMMY_PROJECT slug).",
+      "Calling session's working directory. In Claude Code, the PreToolUse hook injects this from the harness cwd; non-CC MCP clients may supply their own. Drives the project component of ephemeral cc-<project>-<8> names — without this, or when it is outside any repo, the minted name takes the project of the directory the server was launched in, or is a bare cc-<8> (an operator-forced COMMY_PROJECT slug overrides all of these).",
   } as const
   // SessionId is a branded type — `parseSessionId` is the single mint point.
   // A non-UUID raw value (model-guessed string, hook misfire) returns

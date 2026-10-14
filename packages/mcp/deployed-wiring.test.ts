@@ -375,6 +375,36 @@ test('the injected cwd names the seat after the calling session project, not the
   }
 })
 
+test('a fresh seat whose first post comes from outside any repo is named after the project it was launched in', async () => {
+  const cwd = nonRepoCwd()
+  const seat = await bootDeployedSeat(await readShippedHooksManifest(), { launchCwd: REPO_ROOT })
+  try {
+    await seat.callAsClaudeCode(
+      'post',
+      { channel_name: 'home', body: 'after a cd out of the checkout' },
+      { sessionId: SID_CONVERSATION, cwd: cwd.path },
+    )
+    expect(await seat.boundName()).toMatch(/^cc-.+-aaaaaaaa$/)
+  } finally {
+    await seat.shutdown()
+    cwd.remove()
+  }
+})
+
+test('a fresh seat whose first post carries no cwd is named after the project it was launched in', async () => {
+  const seat = await bootDeployedSeat(await readShippedHooksManifest(), { launchCwd: REPO_ROOT })
+  try {
+    await seat.callAsClaudeCode(
+      'post',
+      { channel_name: 'home', body: 'from a host event with no cwd' },
+      { sessionId: SID_CONVERSATION },
+    )
+    expect(await seat.boundName()).toMatch(/^cc-.+-aaaaaaaa$/)
+  } finally {
+    await seat.shutdown()
+  }
+})
+
 test('current_identity through the shipped hook chain reads this seat back', async () => {
   const cwd = nonRepoCwd()
   const seat = await bootDeployedSeat(await readShippedHooksManifest())
