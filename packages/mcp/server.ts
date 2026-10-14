@@ -108,7 +108,7 @@ export interface ProgramParams {
   /**
    * The directory the host launched this child in. Claude Code launches it in
    * the session's own directory, so it names the project for an identity bound
-   * at boot, before any tool call has brought a cwd.
+   * at boot, and for a call whose own cwd names no project.
    */
   readonly launchCwd?: string
   /**
@@ -371,7 +371,8 @@ const isTransientIdentityFailure = (err: EnsureBoundError): boolean =>
  *                          drops out of this program.
  *   3. projectForCwd     — per-call project resolver:
  *                          COMMY_PROJECT > caller-cwd git remote
- *                          basename > git root basename > undefined.
+ *                          basename > git root basename > the launch
+ *                          directory's project > undefined.
  *   4. narrowSet + mcp + notifier + resolveNow — built before the cache
  *                          so the ephemeral `onAcquire` callback closes
  *                          over them (Type-2 defaults need narrowSet;
@@ -568,6 +569,11 @@ export const makeProgram = (
         return deriveProject({ cwd, readGitContext })
       }
       const launchProject = Option.getOrUndefined(yield* projectForCwd(params.launchCwd))
+      // A call whose cwd names no project, because the seat's shell has left
+      // its checkout or the host sent no cwd, still belongs to the project the
+      // seat was launched in.
+      const projectForCall = (cwd: string | undefined): Effect.Effect<Option.Option<ProjectSlug>> =>
+        projectForCwd(cwd).pipe(Effect.map(Option.orElse(() => Option.fromNullable(launchProject))))
 
       // Sample the realm-wide editing switch once, before the tool list is
       // built, so a seat on a realm with editing off is never offered
@@ -890,7 +896,7 @@ export const makeProgram = (
         adapter,
         identityCache,
         narrowSet,
-        projectForCwd,
+        projectForCwd: projectForCall,
         ensureSessionSubscriptions,
         persistSessionSubscriptions,
         feedSessionId,

@@ -70,9 +70,12 @@ Precedence:
    --show-toplevel`'s basename. Catches local-only repos; better
    than cwd basename because `~/myproject/scripts/` resolves to
    `myproject`, not `scripts`.
-4. **Undefined** — non-project cwds (`/tmp`, `$HOME`), or sessions
-   whose cwd never reaches the plugin (non-CC clients without the
-   `cwd` arg), fall through to bare `cc-<8>`.
+4. **The launch directory's project** — when the caller's cwd names
+   no project, because the seat's shell has moved to `/tmp` or the
+   call brought no cwd, the seat keeps the project it was launched
+   in. Steps 2 and 3 run against the launch directory.
+5. **Undefined** — a seat launched outside any repo whose call names
+   no project either falls through to bare `cc-<8>`.
 
 Sanitisation, applied uniformly at each step:
 
@@ -95,7 +98,8 @@ the suffix disambiguates anyway, and a trailing `-` it leaves is trimmed.
 | `~/Development/commy`                 | `commy`            | `cc-commy-<8>`                  |
 | `~/long-project` (12 chars)           | `long-project`     | `cc-long-project-<8>` (24 max)  |
 | `~/example-long-project`              | `example-long-project` | `cc-example-long-<8>`       |
-| `/tmp`                                | _undefined_        | `cc-<8>`                        |
+| `/tmp`, launched in `~/myproject`     | `myproject`        | `cc-myproject-<8>`              |
+| `/tmp`, launched in `/tmp`            | _undefined_        | `cc-<8>`                        |
 | `COMMY_PROJECT=custom-name`           | `custom-name`      | `cc-custom-name-<8>`            |
 
 ## Why these conventions, not just free-form strings
