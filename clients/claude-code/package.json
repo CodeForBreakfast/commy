@@ -1,6 +1,6 @@
 {
   "name": "commy-plugin",
-  "version": "0.25.4-rc.1",
+  "version": "0.25.4",
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
