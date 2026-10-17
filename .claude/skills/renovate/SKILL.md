@@ -112,22 +112,11 @@ nix develop .#ci --command bun run check
   `CodeForBreakfast/commy` owner and repo. A `renovate/...` branch name proves
   neither. If the author is anyone else, stop and raise a decision.
 
-  Then enable auto-merge, so the PR lands when CI on the head commit is green —
-
-  ```bash
-  gh pr merge <number> --repo CodeForBreakfast/commy --auto --squash
-  ```
-
-  GitHub refuses `--auto` on a PR that is already clean. In that case merge it
-  directly, still without `--admin` —
-
-  ```bash
-  gh pr merge <number> --repo CodeForBreakfast/commy --squash
-  ```
-
-  `--auto` merges only once the branch ruleset's required `check` passes; it
-  cannot bypass branch protection, so this is the gate enforcing itself, not a
-  shortcut around it. A direct merge is held to the same ruleset.
+  Wait until the required `check` has passed on the PR's head commit, then
+  squash-merge it with the merge command your environment provides for Renovate
+  pull requests, never with `--admin`. The branch ruleset holds that merge to
+  the same required `check` as any other, so this is the gate enforcing itself,
+  not a shortcut around it.
 - **Not confident, or breaking changes are extensive:** leave the PR open and
   raise it as a decision.
 
@@ -146,8 +135,8 @@ maintainer can answer in one read, and post it as a comment on the PR.
 
 ## Guardrails
 
-- **Never force-merge.** `--auto` respects the ruleset; a manual merge that
-  skips a red gate does not — don't.
+- **Never force-merge.** Merge only once the required `check` is green on the
+  head commit.
 - **Ecosystem-blocked majors stay open.** A peer-dep constraint is upstream's to
   resolve; leave the PR for Renovate to keep rebasing (step 4).
 - **Patch / digest / pin / lock-file maintenance are not this skill's job** —
