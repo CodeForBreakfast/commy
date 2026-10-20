@@ -33,7 +33,7 @@ jobs:
   deploy:
     # Pinned to a specific runner image, not `ubuntu-latest`, so a GitHub
     # `-latest` migration can't silently change the environment (matches ci.yml).
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       pages: write # publish the Pages deployment
       id-token: write # mint the OIDC token deploy-pages verifies

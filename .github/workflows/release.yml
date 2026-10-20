@@ -70,7 +70,7 @@ concurrency:
 
 jobs:
   detect:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       release: ${{ steps.detect.outputs.release }}
       version: ${{ steps.detect.outputs.version }}
@@ -92,7 +92,7 @@ jobs:
   release:
     needs: detect
     if: needs.detect.outputs.release == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     environment: npm-publish
     permissions:
       contents: write # push the record tag and cut the GitHub Release
