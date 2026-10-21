@@ -26,6 +26,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
+import { randomUUID } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -123,8 +124,10 @@ const RESUME_SESSION = 'cccccccc-0000-0000-0000-000000000001'
 // resume tests never share an on-disk store or a minted `cc-<8>` bot. This one
 // keys the DOWNTIME queue-replay acceptance: the reaction lands while the seat
 // is dead, so boot-2 must resume the surviving queue rather than catch a live
-// post-resume event.
-const DOWNTIME_RESUME_SESSION = 'dddddddd-0000-0000-0000-000000000001'
+// post-resume event. Fresh each run: COMMY_SUBSCRIBE seeds only a bot's mint, and
+// the test needs boot-1 to start in all-mode, so a bot left over from an earlier
+// run would not do.
+const DOWNTIME_RESUME_SESSION = `${randomUUID().slice(0, 8)}-0000-0000-0000-000000000001`
 
 // The idle seat and the seat that posts to it, for the first-message test.
 const FIRST_MESSAGE_SESSION = 'e1e1e1e1-0000-0000-0000-000000000001'
@@ -214,79 +217,38 @@ const forkAndConnect = (
     return client
   })
 
+// A state home private to one harness. Without it the harness reads and writes
+// the runner's real cursor store, and a persistent bot's stale cursor makes
+// boot's mention catch-up replay the realm's whole history, which outlasts the
+// test timeout.
+const isolatedStateHome: Effect.Effect<string, never, Scope.Scope> = Effect.acquireRelease(
+  Effect.sync(() => mkdtempSync(join(tmpdir(), 'commy-harness-'))),
+  (dir) => Effect.sync(() => rmSync(dir, { recursive: true, force: true })),
+)
+
+// The boot harness wires the production long-idle queue-resume hooks — the
+// write half (register the events queue with the idle timeout, persist
+// `{queueId, lastEventId}`) and the read half (`resumeQueue`) — over the SAME
+// shared `SessionId` / `ResumeOutcome` deferreds the boot program fills, plus a
+// file-backed `QueueStateStore` under the state home. Only a resumed queue
+// survives a downtime window and replays the events that landed while the seat
+// was dead, and an ephemeral seat's first bind awaits the resume verdict that
+// only these hooks report. Topology mirrors `ZulipAdapterLive` — one memoized
+// `SessionId` the boot-env feeder fills and the hooks poll; building the adapter
+// OUTSIDE the layer would mint private deferreds the feeder never fills, so
+// `resumeQueue` would never see the id.
 const buildHarness = (
   envOverrides: Readonly<Record<string, string>> = {},
 ): Effect.Effect<Client, never, Scope.Scope> =>
   Effect.gen(function* () {
     const e = liveEnv()
-
-    const realAdapter = yield* zulipAdapter({
-      realmUrl: yield* RealmUrl(e.site).pipe(Effect.orDie),
-      minterEmail: yield* BotEmail(e.minterEmail).pipe(Effect.orDie),
-      minterApiKey: Redacted.make(yield* ApiKey(e.minterApiKey).pipe(Effect.orDie)),
-    }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient))
-
-    const killSwitch = yield* Deferred.make<void>()
-    const wrappedAdapter = withKillSwitch(realAdapter, killSwitch)
-
-    const mainEnv: Record<string, string | undefined> = {
-      ZULIP_SITE: e.site,
-      ZULIP_MINTER_EMAIL: e.minterEmail,
-      ZULIP_MINTER_API_KEY: e.minterApiKey,
-      ...envOverrides,
-    }
-
-    // The boot program: the real adapter (parse-gated like
-    // production's `ZulipAdapterLive`, so `close()` is a layer-scope
-    // finalizer) and the file-backed cursor store arrive through the app
-    // Layer; the env through an outermost ConfigProvider. No queue-state hooks:
-    // this harness's adapter always registers a fresh queue, so its resume
-    // coverage is the LIVE pump delivering a post-resume event — the DOWNTIME
-    // queue-replay case is `buildResumeHarness` below.
-    return yield* forkAndConnect(killSwitch, (serverTransport) =>
-      makeProgram({ transport: serverTransport }).pipe(
-        Effect.provide(
-          Layer.provideMerge(
-            Layer.mergeAll(
-              substrateAdapterLayer(parseEnv.pipe(Effect.as(wrappedAdapter))),
-              FileCursorStoreLive,
-              FileQueueStateStoreLive,
-              // Feed the one shared session-id deferred into the store, which now
-              // awaits it — mergeAll won't wire a sibling's output to a sibling's
-              // input, so a plain merge leaves the store's SessionId unsatisfied.
-              Layer.provideMerge(FileSubscriptionStoreLive, SessionIdLive),
-              SessionBinderLive,
-              ResumeOutcomeLive,
-              stderrLoggerLayer,
-            ),
-            testPlatformLayer(mainEnv),
-          ),
-        ),
-      ),
-    )
-  })
-
-// Harness variant that wires the production long-idle queue-resume hooks — the
-// write half (register the events queue with the idle timeout, persist
-// `{queueId, lastEventId}`) and the read half (`resumeQueue`) — over the SAME
-// shared `SessionId` / `ResumeOutcome` deferreds the boot program fills, plus a
-// file-backed `QueueStateStore` under the state home. This is the difference
-// from `buildHarness` (which wires NO queue hooks, so its adapter always
-// registers a fresh queue): only a resumed queue survives a downtime window and
-// replays the events that landed while the seat was dead. Topology mirrors
-// `ZulipAdapterLive` — one memoized `SessionId` the boot-env feeder fills and
-// the hooks poll; building the adapter OUTSIDE the layer would mint private
-// deferreds the feeder never fills, so `resumeQueue` would never see the id.
-const buildResumeHarness = (
-  envOverrides: Readonly<Record<string, string>> = {},
-): Effect.Effect<Client, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const e = liveEnv()
+    const stateHome = yield* isolatedStateHome
     const killSwitch = yield* Deferred.make<void>()
     const mainEnv: Record<string, string | undefined> = {
       ZULIP_SITE: e.site,
       ZULIP_MINTER_EMAIL: e.minterEmail,
       ZULIP_MINTER_API_KEY: e.minterApiKey,
+      XDG_STATE_HOME: stateHome,
       ...envOverrides,
     }
 
@@ -318,8 +280,7 @@ const buildResumeHarness = (
     // `ResumeOutcomeLive` / `FileQueueStateStoreLive` are provided ONCE and fed
     // to the adapter hooks, the subscription store, and the program — a single
     // memoized `SessionId` deferred the boot-env feeder fills. The platform base
-    // (`FileSystem` + `ConfigProvider`) is the outermost provide, exactly as
-    // `buildHarness` layers it.
+    // (`FileSystem` + `ConfigProvider`) is the outermost provide.
     return yield* forkAndConnect(killSwitch, (serverTransport) =>
       makeProgram({ transport: serverTransport }).pipe(
         Effect.provide(
@@ -380,12 +341,7 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
                 COMMY_SUBSCRIBE: `${e.channelName}`,
               })
 
-              const ident = expectStructured(yield* callTool(client, 'current_identity'))
-              expect(ident['state']).toBe('bound')
-              const identity = ident['identity'] as { id: string; name: string; kind: string }
-              expect(identity.name).toBe(PERSISTENT_BOT_NAME)
-              expect(identity.kind).toBe('agent')
-
+              // A seat binds on its first write, so identity is read after one.
               const marker = `live-plugin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
               const posted = expectStructured(
                 yield* callTool(client, 'post', { channel_name: e.channelName, body: marker }),
@@ -393,6 +349,12 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
               const messageId = posted['message_id'] as string
               expect(typeof messageId).toBe('string')
               expect(posted['channel_name']).toBe(e.channelName)
+
+              const ident = expectStructured(yield* callTool(client, 'current_identity'))
+              expect(ident['state']).toBe('bound')
+              const identity = ident['identity'] as { id: string; name: string; kind: string }
+              expect(identity.name).toBe(PERSISTENT_BOT_NAME)
+              expect(identity.kind).toBe('agent')
 
               const history = expectStructured(
                 yield* callTool(client, 'read_channel', { channel_name: e.channelName }),
@@ -661,7 +623,7 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
           const messageId = yield* Effect.scoped(
             Effect.gen(function* () {
               yield* Effect.sleep(MINTER_PACE)
-              const client = yield* buildResumeHarness(boot1Env)
+              const client = yield* buildHarness(boot1Env)
               yield* Effect.sleep(MINTER_PACE)
               const posted = expectStructured(
                 yield* callTool(client, 'post', {
@@ -741,7 +703,7 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
           const matchingFrame = yield* Effect.scoped(
             Effect.gen(function* () {
               yield* Effect.sleep(MINTER_PACE)
-              const client = yield* buildResumeHarness(boot2Env)
+              const client = yield* buildHarness(boot2Env)
               client.fallbackNotificationHandler = (n: {
                 readonly method: string
                 readonly params?: unknown
@@ -819,7 +781,7 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
           const matchingFrame = yield* Effect.scoped(
             Effect.gen(function* () {
               yield* Effect.sleep(MINTER_PACE)
-              const client = yield* buildResumeHarness(bootEnv)
+              const client = yield* buildHarness(bootEnv)
               client.fallbackNotificationHandler = (n: {
                 readonly method: string
                 readonly params?: unknown
@@ -851,7 +813,7 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
               })
 
               // Another seat creates the topic with its first message.
-              const poster = yield* buildResumeHarness({
+              const poster = yield* buildHarness({
                 CLAUDE_CODE_SESSION_ID: POSTER_SESSION,
                 XDG_STATE_HOME: posterStateHome,
               })
