@@ -25,12 +25,13 @@
  * deactivate the existing account.
  */
 
-import { describe, expect, test } from 'bun:test'
+import { beforeAll, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stderrLoggerLayer } from '@commy/core/logging'
+import { requireLiveChannel } from '@commy/testing/live-channel'
 import type { ZulipAdapter } from '@commy/zulip/adapter'
 import { zulipAdapter } from '@commy/zulip/adapter'
 import { ApiKey, BotEmail, makeZulipHttp, RealmUrl } from '@commy/zulip/http'
@@ -325,6 +326,20 @@ const fetchActiveStatus = (
 
 describeLive('commy plugin live integration — zulip.example.com', () => {
   const TEST_TIMEOUT_MS = 60_000
+
+  beforeAll(() =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const e = liveEnv()
+        const adapter = yield* zulipAdapter({
+          realmUrl: yield* RealmUrl(e.site).pipe(Effect.orDie),
+          minterEmail: yield* BotEmail(e.minterEmail).pipe(Effect.orDie),
+          minterApiKey: Redacted.make(yield* ApiKey(e.minterApiKey).pipe(Effect.orDie)),
+        }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient))
+        yield* requireLiveChannel(adapter.directory, e.channelName)
+      }),
+    ),
+  )
 
   test(
     'persistent-mode round-trip: current_identity → post → read_channel → react → unreact',

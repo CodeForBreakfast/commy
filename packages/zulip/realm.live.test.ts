@@ -36,7 +36,7 @@
  * - `ZULIP_LIVE_CHANNEL_NAME` an existing channel the live tests post into
  */
 
-import { describe, expect, test } from 'bun:test'
+import { beforeAll, describe, expect, test } from 'bun:test'
 import type {
   BotName,
   Credentials,
@@ -51,6 +51,7 @@ import {
   decodeMessageBodySync,
   decodeThreadNameSync,
 } from '@commy/core/ports'
+import { requireLiveChannel } from '@commy/testing/live-channel'
 import { FetchHttpClient, HttpClient, HttpClientRequest } from '@effect/platform'
 import { Duration, Effect, Encoding, Option, Redacted, Schema, Stream } from 'effect'
 import type { ZulipAdapter } from './adapter.ts'
@@ -313,6 +314,14 @@ const describeLiveChannel =
     : describe
 
 describeLiveChannel('zulip live resolve-then-post — zulip.example.com', () => {
+  beforeAll(() =>
+    Effect.runPromise(
+      buildAdapter().pipe(
+        Effect.flatMap((adapter) => requireLiveChannel(adapter.directory, liveChannelName ?? '')),
+      ),
+    ),
+  )
+
   // The regression this file exists to catch (comms-00t0). Zulip has no
   // resolved flag — resolution *renames* the topic to `✔ <name>` — and Zulip
   // creates topics implicitly on send. So a post addressed to the clean name of
