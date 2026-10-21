@@ -2282,7 +2282,10 @@ export const zulipAdapter = (
                     const threadKey = (channel: ChannelName, thread: ThreadName) =>
                       Data.struct({ channel, thread })
                     let seen = HashMap.empty<ReturnType<typeof threadKey>, RecentThread>()
-                    for (const m of res.messages) {
+                    // Zulip returns the page oldest-first; walk it newest-first so
+                    // the first post seen per thread is its latest.
+                    const newestFirst = Arr.reverse(res.messages)
+                    for (const m of newestFirst) {
                       const channel = yield* decodeChannelName(m.display_recipient)
                       // Surface the clean thread name — a resolved topic's ✔
                       // prefix is a substrate detail, never crosses the port.
