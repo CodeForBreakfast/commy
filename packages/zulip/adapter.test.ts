@@ -850,6 +850,13 @@ const seedSendMessage = (stub: StubHttpClient, id: number): Effect.Effect<void> 
     })
   })
 
+// What the realm reports for a sent message's topic. The send response omits
+// it, so `publisher.post` reads it back from the message itself.
+const seedStoredTopic = (stub: StubHttpClient, id: number, subject: string): Effect.Effect<void> =>
+  stub.respond('GET', `/api/v1/messages/${id}`, {
+    body: { result: 'success', message: { id, subject } },
+  })
+
 // A mention the directory cannot place is put to Zulip's renderer before the
 // write is refused, so a test that expects a refusal seeds the rendering.
 const seedRender = (stub: StubHttpClient, rendered: string): Effect.Effect<void> =>
@@ -885,6 +892,24 @@ effectTest('publisher.post returns a MessageRef built from the response id', () 
     expect(ref.id).toEqual(decodeMessageIdSync('99'))
     expect(ref.channel).toMatchObject(generalChannel)
     expect(ref.thread).toEqual(Option.none())
+  }),
+)
+
+// The realm truncates a topic over its length limit and the send response does
+// not report the topic it kept, so the ref must carry the stored name read back
+// from the realm for a caller to address the topic afterwards.
+effectTest('publisher.post returns the topic name the realm stored, not the one sent', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 77)
+    const sent = 'x'.repeat(70)
+    const stored = `${'x'.repeat(57)}...`
+    yield* seedStoredTopic(stub, 77, stored)
+    const adapter = yield* buildAdapter(stub)
+    const ref = yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hi'), {
+      thread: decodeThreadNameSync(sent),
+    })
+    expect(Option.map(ref.thread, (t) => t.name)).toEqual(Option.some(decodeThreadNameSync(stored)))
   }),
 )
 
@@ -1025,6 +1050,7 @@ effectTest('publisher.post with thread sends topic and threads the returned Mess
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 100)
+    yield* seedStoredTopic(stub, 100, 'planning')
     const adapter = yield* buildAdapter(stub)
     const ref = yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hi'), {
       thread: decodeThreadNameSync('planning'),
@@ -1059,6 +1085,7 @@ effectTest('publisher.post threads the permalink through the topic when a thread
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 100)
+    yield* seedStoredTopic(stub, 100, 'planning')
     const adapter = yield* buildAdapter(stub)
     const ref = yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hi'), {
       thread: decodeThreadNameSync('planning'),
@@ -2077,6 +2104,7 @@ effectTest('publisher.post addresses the ✔-prefixed topic when the thread is r
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 300)
+    yield* seedStoredTopic(stub, 300, '✔ planning')
     yield* stub.respondSequence('GET', '/api/v1/messages', [
       messagesPage([]),
       messagesPage([
@@ -2114,6 +2142,7 @@ effectTest('publisher.post does not unresolve the thread it appends to', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 303)
+    yield* seedStoredTopic(stub, 303, '✔ planning')
     yield* stub.respondSequence('GET', '/api/v1/messages', [
       messagesPage([]),
       messagesPage([
@@ -2142,6 +2171,7 @@ effectTest('publisher.post addresses the bare topic when an unresolved thread al
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 301)
+    yield* seedStoredTopic(stub, 301, 'planning')
     yield* seedMessages(stub, [
       {
         id: 298,
@@ -2167,6 +2197,7 @@ effectTest('publisher.post addresses the bare topic when the thread exists in ne
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 302)
+    yield* seedStoredTopic(stub, 302, 'brand-new')
     const adapter = yield* buildAdapter(stub)
     yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('opening'), {
       thread: decodeThreadNameSync('brand-new'),
