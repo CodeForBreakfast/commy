@@ -258,11 +258,11 @@ const identityError = (operation: IdentityError['operation'], cause: unknown): I
  * an operator provisioning gap, not something to paper over by self-minting.
  */
 class AttachIdentityNotFound extends Data.TaggedError('AttachIdentityNotFound')<{
-  readonly name: BotName
+  readonly botName: BotName
 }> {
   override get message(): string {
     return (
-      `attach mode: no provisioned bot named '${this.name}' on the realm. ` +
+      `attach mode: no provisioned bot named '${this.botName}' on the realm. ` +
       `Provision the persona once and supply its stable api key before attaching.`
     )
   }
@@ -1182,7 +1182,7 @@ export const zulipAdapter = (
         Effect.flatMap(
           Option.match({
             onNone: (): Effect.Effect<BoundBot, AttachIdentityNotFound | ParseResult.ParseError> =>
-              Effect.fail(new AttachIdentityNotFound({ name })),
+              Effect.fail(new AttachIdentityNotFound({ botName: name })),
             onSome: (
               existing,
             ): Effect.Effect<BoundBot, AttachIdentityNotFound | ParseResult.ParseError> =>
