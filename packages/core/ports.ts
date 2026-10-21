@@ -176,7 +176,8 @@ export const decodeEmojiSync = Schema.decodeSync(EmojiSchema)
 export const decodeGroupNameSync = Schema.decodeSync(GroupNameSchema)
 export const decodeAttachmentRefSync = Schema.decodeSync(AttachmentRefSchema)
 
-export type IdentityKind = 'human' | 'agent'
+/** `unknown` is a sender the realm could not place; it is never assumed to be a person. */
+export type IdentityKind = 'human' | 'agent' | 'unknown'
 
 export interface Identity {
   /** Stable, branded handle. Adapters mint via `decodeIdentityId` at the parse boundary. */
