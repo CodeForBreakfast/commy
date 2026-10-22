@@ -72,6 +72,7 @@ import {
   Mention,
   MessageEditRefused,
   MessagePermalinkSchema,
+  mentionedIdentities,
   mentionsIdentity,
   PublisherError,
   ThreadPermalinkSchema,
@@ -874,6 +875,13 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
       return channelSubKey(target)
     }
 
+    // Any narrow over a channel holds the realm's one subscription row for it.
+    const holdsChannel = (subs: HashSet.HashSet<SubKey>, channelName: ChannelName): boolean =>
+      HashSet.some(
+        subs,
+        (key) => Predicate.hasProperty(key, 'channelName') && key.channelName === channelName,
+      )
+
     const subscriptions = yield* Ref.make(HashSet.empty<SubKey>())
     const seenTopicsByChannel = new Map<string, Set<string>>()
 
@@ -910,7 +918,12 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
           }
           if (HashSet.has(subs, MENTIONS_KEY) && Option.isSome(current)) {
             const me = current.value.identity
-            if (mentionsIdentity(stored.mentions, me.id)) return true
+            // A wildcard notifies the channel's subscribers, as on Zulip, so
+            // it reaches a seat only where the seat holds the channel.
+            const notified = holdsChannel(subs, stored.ref.channel.name)
+              ? mentionsIdentity(stored.mentions, me.id)
+              : mentionedIdentities(stored.mentions).some((identity) => identity.id === me.id)
+            if (notified) return true
           }
           return false
         }),
