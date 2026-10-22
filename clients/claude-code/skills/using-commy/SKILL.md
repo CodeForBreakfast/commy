@@ -94,14 +94,9 @@ message only when the reader can't infer meaning from an emoji.
 
 ## Mentions
 
-A notification fires **only** from inline `@**Name**` markup in the body. A
-`mentions[]` field, if your tooling exposes one, is metadata — it notifies no
-one and does not add the markup for you. This cuts both ways: a body carrying
-the markup pings even when `mentions[]` is empty, and a body without it pings no
-one however `mentions[]` is filled. So whether a message pings someone is a fact
-about what the body **contains**, never about the envelope — to be sure you
-haven't pinged anyone, confirm the body carries no mention token; don't trust
-the field.
+A notification fires **only** from inline `@**Name**` markup in the body. So
+whether a message pings someone is a fact about what the body **contains** — to
+be sure you haven't pinged anyone, confirm the body carries no mention token.
 
 The notifying forms, so you can recognise — or scrub — every one: the personal
 `@**Name**` and its id-disambiguated `@**Name|42**`; and the wildcards
@@ -155,6 +150,34 @@ when you leave the work, not to tidy up after each reply.
   follow it with `read_thread` to catch what is already there.
 - **After posting into another project's channel, subscribe to that topic**,
   or the reply lands somewhere you aren't listening.
+
+## Channel charters
+
+A project's charter says what its channel is for and who answers there. Read it
+with `get_channel_description` before you post into a channel you don't know.
+Maintain it with `set_channel_description`. Don't look for it in a pinned
+message or a charter topic.
+
+The description is a single-line pointer, and the detail lives in the project's
+repo:
+
+- **The description** is one line of orientation plus a link to the repo's
+  `CHARTER.md`, at the repo root. Zulip's description is capped in length and
+  rewrites newlines to spaces, so `set_channel_description` refuses a
+  multi-line or over-long value. Structure can only live in the file.
+- **`CHARTER.md`** carries the boundaries, relationships and pointers. It is
+  versioned with the project, so changing the charter is an ordinary change to
+  the repo. Put the source commit in the description if a reader needs to tell
+  which revision they are looking at.
+- **No description means no charter.** An undescribed channel reads back as
+  `null`, and a channel set to the empty string reads the same. Don't try to
+  tell them apart.
+
+To migrate a charter that still lives in a message: write its content into
+`CHARTER.md`, set the description to the one-line pointer, and leave the old
+message alone. The old message is frozen history and you can't reliably edit it
+(see re-posting an anchor above). The description now wins wherever the two
+disagree.
 
 ## Links
 

@@ -9,6 +9,7 @@ import {
   decodeThreadNameSync,
   HistoryError,
   type IdentityError,
+  InboxError,
   type UnknownIdentity,
 } from '@commy/core/ports'
 import type { MemoryAdapterConfig } from '@commy/memory/adapter'
@@ -25,6 +26,7 @@ import type { NarrowSet } from './narrow-set.ts'
 import { createNarrowSet } from './narrow-set.ts'
 import type { BindOnDemand } from './session-binder.ts'
 import { binderFor, bindThrough, installBinder } from './session-binder.ts'
+import type { SubscribeIntent } from './subscribe-parser.ts'
 import type { ToolsCache } from './tools.ts'
 import { registerTools } from './tools.ts'
 
@@ -637,7 +639,7 @@ test('presence reads cache after list_agents populates it', () =>
         )
         expect(result.isError).toBeFalsy()
         const psc = result.structuredContent as { presence: string }
-        expect(['online', 'idle', 'offline']).toContain(psc.presence)
+        expect(psc.presence).toBe('unknown')
       }),
     ),
   ))
@@ -669,7 +671,7 @@ test('presence reads cache after resolve populates it', () =>
         )
         expect(result.isError).toBeFalsy()
         const psc = result.structuredContent as { presence: string }
-        expect(['online', 'idle', 'offline']).toContain(psc.presence)
+        expect(psc.presence).toBe('unknown')
       }),
     ),
   ))
@@ -2257,6 +2259,236 @@ test('upload_file rejects a relative path', () =>
           }),
         )
         expect(error.message).toContain('absolute')
+      }),
+    ),
+  ))
+
+const rejectSubscribes = (adapter: MemoryAdapterRig): void => {
+  adapter.inbox.subscribe = () =>
+    Effect.fail(new InboxError({ operation: 'subscribe', cause: 'realm refused' }))
+}
+
+const callFails = (
+  rig: ConnectedRig,
+  params: { name: string; arguments: Record<string, unknown> },
+) =>
+  Effect.promise(() =>
+    rig.client.callTool(params).then(
+      (result) => result.isError === true,
+      () => true,
+    ),
+  )
+
+const homeRefundsIntent: SubscribeIntent = {
+  kind: 'thread',
+  channelName: decodeChannelNameSync('home'),
+  threadName: decodeThreadNameSync('refunds'),
+}
+
+test('a subscribe the substrate refuses errors and leaves no intent in the narrow set', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const adapter = yield* rigAdapter()
+        rejectSubscribes(adapter)
+        const deps = yield* buildDeps(adapter)
+        yield* adapter.seedChannel('home').pipe(Effect.orDie)
+        const rig = yield* mountAndConnect(adapter, deps)
+
+        expect(
+          yield* callFails(rig, { name: 'subscribe', arguments: { target: 'home/refunds' } }),
+        ).toBe(true)
+        expect(rig.narrowSet.intents()).toEqual([])
+      }),
+    ),
+  ))
+
+test('a refused re-subscribe keeps the intent an earlier subscribe established', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const adapter = yield* rigAdapter()
+        const deps = yield* buildDeps(adapter)
+        yield* adapter.seedChannel('home').pipe(Effect.orDie)
+        const rig = yield* mountAndConnect(adapter, deps)
+        const subscribe = { name: 'subscribe', arguments: { target: 'home/refunds' } }
+
+        expect(yield* callFails(rig, subscribe)).toBe(false)
+        rejectSubscribes(adapter)
+        expect(yield* callFails(rig, subscribe)).toBe(true)
+        expect(rig.narrowSet.intents()).toEqual([homeRefundsIntent])
+      }),
+    ),
+  ))
+
+test('a post whose sticky subscribe the substrate refuses leaves no intent in the narrow set', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const adapter = yield* rigAdapter()
+        rejectSubscribes(adapter)
+        const deps = yield* buildDeps(adapter)
+        const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+        const rig = yield* mountAndConnect(adapter, deps)
+        rig.cache.rememberChannel(channelRef)
+
+        expect(
+          yield* callFails(rig, {
+            name: 'post',
+            arguments: { channel_name: 'home', body: 'hello', thread: 'refunds' },
+          }),
+        ).toBe(true)
+        expect(rig.narrowSet.intents()).toEqual([])
+      }),
+    ),
+  ))
+
+test('a react whose sticky subscribe the substrate refuses leaves no intent in the narrow set', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const adapter = yield* rigAdapter()
+        const deps = yield* buildDeps(adapter)
+        const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+        const rig = yield* mountAndConnect(adapter, deps)
+        rig.cache.rememberChannel(channelRef)
+        const posted = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: { channel_name: 'home', body: 'hello', thread: 'refunds' },
+          }),
+        )
+        const messageId = (posted.structuredContent as { message_id: string }).message_id
+        rig.narrowSet.remove(homeRefundsIntent)
+        rejectSubscribes(adapter)
+
+        expect(
+          yield* callFails(rig, {
+            name: 'react',
+            arguments: { message_id: messageId, emoji: 'tada' },
+          }),
+        ).toBe(true)
+        expect(rig.narrowSet.intents()).toEqual([])
+      }),
+    ),
+  ))
+
+test('list_subscriptions before acquire says there is no seat yet, and does not acquire', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig(() => Effect.void)
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'list_subscriptions', arguments: {} }),
+        )
+        expect(result.isError).toBeFalsy()
+        expect(result.structuredContent).toEqual({ state: 'unbound' })
+        expect(rig.ensureBound.current()).toBeUndefined()
+      }),
+    ),
+  ))
+
+test('list_subscriptions on a bound seat with nothing subscribed returns empty sets', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'list_subscriptions', arguments: {} }),
+        )
+        expect(result.isError).toBeFalsy()
+        expect(result.structuredContent).toEqual({
+          state: 'bound',
+          channels: [],
+          narrows: [],
+          not_in_realm: [],
+        })
+      }),
+    ),
+  ))
+
+test('list_subscriptions reports a channel, a topic and a new-topics narrow from runtime subscribes', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((adapter, ensureBound) =>
+          ensureBound().pipe(
+            Effect.zipRight(adapter.seedChannel('home')),
+            Effect.zipRight(adapter.seedChannel('standup')),
+            Effect.zipRight(adapter.seedChannel('news')),
+            Effect.orDie,
+          ),
+        )
+        for (const target of ['home', 'standup/daily', 'new-topics:news']) {
+          yield* Effect.promise(() =>
+            rig.client.callTool({ name: 'subscribe', arguments: { target } }),
+          )
+        }
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'list_subscriptions', arguments: {} }),
+        )
+        expect(result.isError).toBeFalsy()
+        const sc = result.structuredContent as {
+          state: string
+          channels: string[]
+          narrows: unknown[]
+          not_in_realm: string[]
+        }
+        expect(sc.state).toBe('bound')
+        expect([...sc.channels].sort()).toEqual(['home', 'news', 'standup'])
+        expect(sc.narrows).toHaveLength(2)
+        expect(sc.narrows).toContainEqual({ kind: 'thread', channel: 'standup', thread: 'daily' })
+        expect(sc.narrows).toContainEqual({ kind: 'new-topics', channel: 'news' })
+        expect(sc.not_in_realm).toEqual([])
+      }),
+    ),
+  ))
+
+test('list_subscriptions flags a channel the narrow set holds and the realm does not', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
+        // The phantom intent a failed realm subscribe leaves behind: in the
+        // narrow set, with no row in the realm.
+        rig.narrowSet.add({ kind: 'channel', channelName: decodeChannelNameSync('ghost') })
+        rig.narrowSet.add({
+          kind: 'thread',
+          channelName: decodeChannelNameSync('phantom'),
+          threadName: decodeThreadNameSync('t'),
+        })
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'list_subscriptions', arguments: {} }),
+        )
+        const sc = result.structuredContent as { channels: string[]; not_in_realm: string[] }
+        expect(sc.channels).toEqual([])
+        expect([...sc.not_in_realm].sort()).toEqual(['ghost', 'phantom'])
+      }),
+    ),
+  ))
+
+test('list_subscriptions drops a channel after unsubscribe', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((adapter, ensureBound) =>
+          ensureBound().pipe(Effect.zipRight(adapter.seedChannel('home')), Effect.orDie),
+        )
+        yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'subscribe', arguments: { target: 'home' } }),
+        )
+        yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'unsubscribe', arguments: { target: 'home' } }),
+        )
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'list_subscriptions', arguments: {} }),
+        )
+        expect(result.structuredContent).toEqual({
+          state: 'bound',
+          channels: [],
+          narrows: [],
+          not_in_realm: [],
+        })
       }),
     ),
   ))

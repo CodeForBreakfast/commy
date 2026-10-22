@@ -56,6 +56,7 @@ import {
   isBindError,
   MessageEditRefused,
   mentionsIdentity,
+  notifiesIdentity,
   PublisherError,
   UnboundEphemeralSession,
   UnknownChannel,
@@ -345,6 +346,11 @@ const sentMessageSchema = Schema.Struct({
   id: Schema.Int,
 })
 
+const storedMessageSchema = Schema.Struct({
+  result: Schema.Literal('success'),
+  message: Schema.Struct({ subject: Schema.String }),
+})
+
 const successSchema = Schema.Struct({ result: Schema.Literal('success') })
 
 const renderedSchema = Schema.Struct({
@@ -470,6 +476,7 @@ const senderMessagesResponseSchema = Schema.Struct({
 
 const RECENT_THREADS_DEFAULT_LIMIT = 10
 const RECENT_THREADS_FETCH_LIMIT = 50
+const OUTBOUND_DIRECTORY_TTL = Duration.minutes(1)
 const HISTORY_DEFAULT_LIMIT = 100
 
 /**
@@ -781,7 +788,9 @@ export const zulipAdapter = (
         for (const u of members) {
           const ident = yield* toIdentity(u)
           byId.set(ZulipUserRef(u.user_id), ident)
-          byName.set(u.full_name, ident)
+          const name = u.full_name.toLowerCase()
+          const held = byName.get(name)
+          if (held === undefined || u.is_active || !active.has(held.id)) byName.set(name, ident)
           byIdentityId.set(ident.id, ZulipUserRef(u.user_id))
           if (u.is_active) active.add(ident.id)
         }
@@ -806,6 +815,16 @@ export const zulipAdapter = (
       DirectoryLookup,
       ZulipApiError | ParseResult.ParseError
     > => fetchMembers().pipe(Effect.flatMap(directoryOf))
+
+    // Outbound mention checks run on a third of all posts, so they read the
+    // directory from a short-lived copy. A failed fetch is not kept.
+    const [recentDirectoryLookup, forgetDirectoryLookup] = yield* Effect.cachedInvalidateWithTTL(
+      buildDirectoryLookup(),
+      OUTBOUND_DIRECTORY_TTL,
+    )
+    const cachedDirectoryLookup = recentDirectoryLookup.pipe(
+      Effect.tapError(() => forgetDirectoryLookup),
+    )
 
     // Recipient directory shape consumed by bot-dm-guard — narrower than
     // the full DirectoryLookup so the wrapping helper stays decoupled.
@@ -860,24 +879,36 @@ export const zulipAdapter = (
     // mention-free body — the common case — never pays for a directory fetch
     // onto the rate-limited realm. Only user tokens can be dead, so a body
     // whose only mentions are wildcards or groups skips the fetch too.
+    const deadMentionsAfterFreshRead = (body: string) =>
+      buildDirectoryLookup().pipe(
+        Effect.flatMap((directory) => {
+          const dead = unresolvedMentions(body, notifiableMentionDirectory(directory))
+          return Arr.isEmptyReadonlyArray(dead)
+            ? Effect.succeed(dead)
+            : renderedMentionIds(body).pipe(
+                Effect.flatMap(directory.cover),
+                Effect.map((covered) =>
+                  unresolvedMentions(body, notifiableMentionDirectory(covered)),
+                ),
+              )
+        }),
+      )
+
     const validateOutboundMentions = (
       operation: 'post' | 'edit',
       body: string,
     ): Effect.Effect<void, UnresolvedMention | ZulipApiError | ParseResult.ParseError> =>
       !mentionTokens(body).some(MentionToken.$is('UserToken'))
         ? Effect.void
-        : buildDirectoryLookup().pipe(
-            Effect.flatMap((directory) => {
-              const dead = unresolvedMentions(body, notifiableMentionDirectory(directory))
-              return Arr.isEmptyReadonlyArray(dead)
-                ? Effect.succeed(dead)
-                : renderedMentionIds(body).pipe(
-                    Effect.flatMap(directory.cover),
-                    Effect.map((covered) =>
-                      unresolvedMentions(body, notifiableMentionDirectory(covered)),
-                    ),
-                  )
-            }),
+        : cachedDirectoryLookup.pipe(
+            Effect.map((directory) =>
+              unresolvedMentions(body, notifiableMentionDirectory(directory)),
+            ),
+            // A mention the copy cannot place may name someone who joined,
+            // was renamed or was reactivated since it was taken.
+            Effect.filterOrElse(Arr.isEmptyReadonlyArray, () =>
+              forgetDirectoryLookup.pipe(Effect.zipRight(deadMentionsAfterFreshRead(body))),
+            ),
             Effect.flatMap((dead) =>
               Arr.isEmptyReadonlyArray(dead)
                 ? Effect.void
@@ -1386,6 +1417,18 @@ export const zulipAdapter = (
       subscriptions: Schema.Array(Schema.Struct({ name: Schema.NonEmptyString })),
     })
 
+    // The channels whose subscription rows name the client's own user.
+    const readSubscribedChannels = (
+      http: BotHttp,
+    ): Effect.Effect<ReadonlyArray<ChannelName>, ZulipApiError | ParseResult.ParseError> =>
+      http
+        .get('/users/me/subscriptions', mySubscriptionsResponseSchema)
+        .pipe(
+          Effect.flatMap((res) =>
+            Effect.forEach(res.subscriptions, (row) => decodeChannelName(row.name)),
+          ),
+        )
+
     const streamsListResponseSchema = Schema.Struct({
       result: Schema.Literal('success'),
       streams: Schema.Array(Schema.Struct({ name: Schema.NonEmptyString, stream_id: Schema.Int })),
@@ -1612,7 +1655,10 @@ export const zulipAdapter = (
         )
 
     // Resolution renames the topic (✔ prefix) via change_all, so we PATCH any
-    // message in it. `thread` is the plain name; find the source-state topic
+    // message in it. `thread` is the plain name, looked up exactly as
+    // `readThread` looks it up, so a name read cannot find is one resolve
+    // cannot act on (and a topic already in the target state is left alone, so
+    // the realm posts no second notice). Find the source-state topic
     // and flip it to the target state, treating an absent source whose target
     // already exists as an idempotent no-op, and both absent as a thread that
     // isn't there to (un)resolve. Reads route through the minter; the
@@ -1644,7 +1690,7 @@ export const zulipAdapter = (
       resolved: boolean,
     ): Effect.Effect<void, BindError | PublisherError> => {
       const operation = resolved ? 'resolveThread' : 'unresolveThread'
-      const sourceTopic = applyResolvedPrefix(thread, !resolved)
+      const sourceTopic = resolved ? thread : applyResolvedPrefix(thread, true)
       const targetTopic = applyResolvedPrefix(thread, resolved)
       return boundHttp().pipe(
         Effect.flatMap((http) =>
@@ -1652,12 +1698,14 @@ export const zulipAdapter = (
             Effect.flatMap(
               Option.match({
                 onSome: (id) =>
-                  http
-                    .patch(`/messages/${encodeURIComponent(id)}`, successSchema, {
-                      topic: targetTopic,
-                      propagate_mode: 'change_all',
-                    })
-                    .pipe(Effect.asVoid),
+                  sourceTopic === targetTopic
+                    ? Effect.void
+                    : http
+                        .patch(`/messages/${encodeURIComponent(id)}`, successSchema, {
+                          topic: targetTopic,
+                          propagate_mode: 'change_all',
+                        })
+                        .pipe(Effect.asVoid),
                 onNone: () =>
                   findNewestInTopic(channel, targetTopic).pipe(
                     Effect.flatMap(
@@ -1744,10 +1792,7 @@ export const zulipAdapter = (
                 // the server-canonical "(no topic)" placeholder when the caller
                 // omits a thread — same string Zulip's UI uses for empty
                 // topics; an unnamed thread has no resolution state to probe
-                // for. `opts.mentions` is metadata-only per PostOpts: we
-                // don't fold it into `content`. Zulip pings are driven by
-                // `@**Name**` markup inside the body, so callers that want a
-                // ping write the markup themselves where they want it rendered.
+                // for.
                 (thread === undefined
                   ? Effect.succeed({ topic: '(no topic)', resolved: false })
                   : addressThread(effective.name, thread)
@@ -1762,20 +1807,33 @@ export const zulipAdapter = (
                       })
                       .pipe(
                         Effect.flatMap((sent) =>
-                          decodeMessageId(String(sent.id)).pipe(
-                            Effect.map(
-                              (id): MessageRef =>
-                                // The probe tells us which substrate form the
-                                // message landed in, so the ref reports the
-                                // thread's real resolution state rather than
-                                // assuming an unresolved one.
-                                decorateMessageRef(
-                                  id,
-                                  effective,
-                                  thread === undefined
-                                    ? undefined
-                                    : { name: thread, resolved: addressed.resolved },
+                          Effect.all({
+                            id: decodeMessageId(String(sent.id)),
+                            // The send response omits the topic, and the realm
+                            // truncates one over its length limit, so the stored
+                            // name is read back from the message itself. Its
+                            // resolution state comes from the same read.
+                            stored: Effect.transposeMapOption(Option.fromNullable(thread), () =>
+                              http
+                                .get(
+                                  `/messages/${encodeURIComponent(sent.id)}`,
+                                  storedMessageSchema,
+                                )
+                                .pipe(
+                                  Effect.flatMap(({ message }) => {
+                                    const { name, resolved } = splitTopic(message.subject)
+                                    return decodeThreadName(name).pipe(
+                                      Effect.map((storedName) => ({
+                                        name: storedName,
+                                        resolved,
+                                      })),
+                                    )
+                                  }),
                                 ),
+                            ),
+                          }).pipe(
+                            Effect.map(({ id, stored }) =>
+                              decorateMessageRef(id, effective, Option.getOrUndefined(stored)),
                             ),
                           ),
                         ),
@@ -2041,10 +2099,7 @@ export const zulipAdapter = (
       subscriptions: () =>
         boundHttp().pipe(
           Effect.flatMap((http) =>
-            http.get('/users/me/subscriptions', mySubscriptionsResponseSchema).pipe(
-              Effect.flatMap((res) =>
-                Effect.forEach(res.subscriptions, (row) => decodeChannelName(row.name)),
-              ),
+            readSubscribedChannels(http).pipe(
               Effect.mapError((cause) => new InboxError({ operation: 'subscribe', cause })),
             ),
           ),
@@ -2205,6 +2260,14 @@ export const zulipAdapter = (
             Effect.fork(buildDirectoryLookup()),
             SynchronizedRef.get(boundRef),
           ])
+          // History is read as the minter, so the seat's subscriptions come
+          // from its own rows: a wildcard notifies only the channel's
+          // subscribers, as live delivery's recipient set does.
+          const seatChannels = yield* Option.match(current, {
+            onNone: () => Effect.succeed(HashSet.empty<ChannelName>()),
+            onSome: (bound) =>
+              readSubscribedChannels(bound.http).pipe(Effect.map(HashSet.fromIterable)),
+          })
           // Catch-up has no cap of its own: a seat that was away for a week
           // has to be told everything it missed, however many pages that
           // spans.
@@ -2250,7 +2313,19 @@ export const zulipAdapter = (
                 messageRefCache.set(ev.message.ref.id, ev.message.ref)
               }
             }
-            out.push(...mapped)
+            out.push(
+              ...mapped.filter(
+                (ev) =>
+                  ev.kind !== 'mention-received' ||
+                  Option.exists(current, (bound) =>
+                    notifiesIdentity(
+                      ev.mentions,
+                      bound.identity.id,
+                      HashSet.has(seatChannels, ev.message.ref.channel.name),
+                    ),
+                  ),
+              ),
+            )
           }
           return out
         }).pipe(Effect.mapError((cause) => new InboxError({ operation: 'replay', cause })))
@@ -2307,7 +2382,10 @@ export const zulipAdapter = (
                     const threadKey = (channel: ChannelName, thread: ThreadName) =>
                       Data.struct({ channel, thread })
                     let seen = HashMap.empty<ReturnType<typeof threadKey>, RecentThread>()
-                    for (const m of res.messages) {
+                    // Zulip returns the page oldest-first; walk it newest-first so
+                    // the first post seen per thread is its latest.
+                    const newestFirst = Arr.reverse(res.messages)
+                    for (const m of newestFirst) {
                       const channel = yield* decodeChannelName(m.display_recipient)
                       // Surface the clean thread name — a resolved topic's ✔
                       // prefix is a substrate detail, never crosses the port.

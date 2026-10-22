@@ -6,10 +6,11 @@ import {
   rmSync,
   type Stats,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { captureLogger } from '@commy/core/logging'
 import type {
   Directory,
@@ -115,6 +116,7 @@ const EXPECTED_TOOL_NAMES = [
   'message_link',
   'subscribe',
   'unsubscribe',
+  'list_subscriptions',
   'post',
   'edit_message',
   'react',
@@ -723,15 +725,20 @@ test('download_file: falls back to a $TMPDIR temp dir when COMMY_DOWNLOAD_DIR is
   }
 })
 
-test('upload_file: server FileSystem builder reads the real local file and reports its byte length', async () => {
-  const localPath = join(tmpdir(), `upload-test-${process.pid}.bin`)
-  const payload = new Uint8Array([1, 2, 3, 4, 5])
-  writeFileSync(localPath, payload)
-  const h = await buildHarness({
+const uploadHarness = (uploadDir?: string) =>
+  buildHarness({
     seedChannels: ['home'],
     seedAgents: ['alice'],
     seedHumans: ['carol'],
+    ...(uploadDir === undefined ? {} : { env: { COMMY_UPLOAD_DIR: uploadDir } }),
   })
+
+test('upload_file: a file inside COMMY_UPLOAD_DIR uploads, reporting the real byte length', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'commy-upload-root-'))
+  const localPath = join(root, 'chart.bin')
+  const payload = new Uint8Array([1, 2, 3, 4, 5])
+  writeFileSync(localPath, payload)
+  const h = await uploadHarness(root)
   try {
     const result = await callTool(h.client, 'upload_file', { path: localPath })
     const content = expectStructured(result)
@@ -740,6 +747,73 @@ test('upload_file: server FileSystem builder reads the real local file and repor
     expect(content['size']).toBe(payload.byteLength)
     expect(content['filename']).toBe('stub')
     expect(content['reference']).toBe('[stub](/user_uploads/0/stub)')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    await h.cleanup()
+  }
+})
+
+test('upload_file: refuses a path outside COMMY_UPLOAD_DIR', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'commy-upload-root-'))
+  const outside = mkdtempSync(join(tmpdir(), 'commy-upload-outside-'))
+  const secret = join(outside, 'secret.txt')
+  writeFileSync(secret, 'hunter2')
+  const h = await uploadHarness(root)
+  try {
+    await expect(callTool(h.client, 'upload_file', { path: secret })).rejects.toThrow(
+      'COMMY_UPLOAD_DIR',
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+    await h.cleanup()
+  }
+})
+
+test('upload_file: refuses a ".." path that climbs out of COMMY_UPLOAD_DIR', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'commy-upload-root-'))
+  const outside = mkdtempSync(join(tmpdir(), 'commy-upload-outside-'))
+  writeFileSync(join(outside, 'secret.txt'), 'hunter2')
+  const h = await uploadHarness(root)
+  try {
+    const climbing = join(root, '..', basename(outside), 'secret.txt')
+    await expect(callTool(h.client, 'upload_file', { path: climbing })).rejects.toThrow(
+      'COMMY_UPLOAD_DIR',
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+    await h.cleanup()
+  }
+})
+
+test('upload_file: refuses a symlink inside COMMY_UPLOAD_DIR that points outside it', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'commy-upload-root-'))
+  const outside = mkdtempSync(join(tmpdir(), 'commy-upload-outside-'))
+  const secret = join(outside, 'secret.txt')
+  writeFileSync(secret, 'hunter2')
+  const link = join(root, 'innocent.txt')
+  symlinkSync(secret, link)
+  const h = await uploadHarness(root)
+  try {
+    await expect(callTool(h.client, 'upload_file', { path: link })).rejects.toThrow(
+      'COMMY_UPLOAD_DIR',
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+    await h.cleanup()
+  }
+})
+
+test('upload_file: refuses every path when COMMY_UPLOAD_DIR is unset', async () => {
+  const localPath = join(tmpdir(), `upload-test-${process.pid}.bin`)
+  writeFileSync(localPath, new Uint8Array([1, 2, 3]))
+  const h = await uploadHarness()
+  try {
+    await expect(callTool(h.client, 'upload_file', { path: localPath })).rejects.toThrow(
+      'COMMY_UPLOAD_DIR',
+    )
   } finally {
     rmSync(localPath, { force: true })
     await h.cleanup()
@@ -905,7 +979,7 @@ test('presence (happy): returns presence for a cached identity', async () => {
       }
     ).id
     const body = expectStructured(await callTool(h.client, 'presence', { identity_id: alice }))
-    expect(['online', 'idle', 'offline']).toContain(body['presence'] as string)
+    expect(body['presence'] as string).toBe('unknown')
   } finally {
     await h.cleanup()
   }
@@ -1007,7 +1081,7 @@ test('presence (happy): resolves an identity first seen only via an inbound noti
     const body = expectStructured(
       await callTool(h.client, 'presence', { identity_id: 'stranger-99' }),
     )
-    expect(['online', 'idle', 'offline']).toContain(body['presence'] as string)
+    expect(body['presence'] as string).toBe('unknown')
   } finally {
     await h.cleanup()
   }
@@ -2682,6 +2756,50 @@ test('an administrator turning message editing back on restores edit_message', a
 
     const after = await h.client.listTools()
     expect(after.tools.map((t) => t.name)).toContain('edit_message')
+  } finally {
+    await h.cleanup()
+  }
+})
+
+test('a runtime subscribe on a resumed seat with no boot-env session id keeps the persisted topic record', async () => {
+  const sid = 'c3c3c3c3-0000-4000-8000-000000000009'
+  const sessionIdDeferred = Deferred.unsafeMake<SessionIdValue>(FiberId.none)
+  const topicIntent = (thread: string): SubscribeIntent => ({
+    kind: 'thread',
+    channelName: decodeChannelNameSync('home'),
+    threadName: decodeThreadNameSync(thread),
+  })
+  const records = new Map<string, ReadonlyArray<SubscribeIntent>>([
+    [sid, [topicIntent('payments')]],
+  ])
+  // The boot rebuild is the first reader. Its read is slow, so a write that is
+  // not held back for the rebuild lands before it and the rebuild reads that.
+  let reads = 0
+  const slowFirstReadStore: SubscriptionStore = {
+    read: () =>
+      Deferred.await(sessionIdDeferred).pipe(
+        Effect.tap(() => (reads++ === 0 ? Effect.sleep('300 millis') : Effect.void)),
+        Effect.map((id) => Option.fromNullable(records.get(id as string))),
+      ),
+    write: (intents) =>
+      Deferred.await(sessionIdDeferred).pipe(
+        Effect.flatMap((id) => Effect.sync(() => void records.set(id as string, intents))),
+      ),
+  }
+  const h = await buildHarness({
+    ephemeral: true,
+    seedChannels: ['home'],
+    sessionIdDeferred,
+    subscriptionStore: slowFirstReadStore,
+  })
+  try {
+    await callTool(h.client, 'post', { channel_name: 'home', body: 'resumed', session_id: sid })
+    await callTool(h.client, 'subscribe', { target: 'home/refunds', session_id: sid })
+    await waitFor(
+      () => (records.get(sid) ?? []).some((i) => i.kind === 'thread' && i.threadName === 'refunds'),
+      2000,
+    )
+    expect(records.get(sid)).toContainEqual(topicIntent('payments'))
   } finally {
     await h.cleanup()
   }

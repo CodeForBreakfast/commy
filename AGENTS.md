@@ -71,6 +71,11 @@ run check` to use the lean CI shell). A bare `bun run check` outside the shell
 fails the hermes task with `uv: command not found` whenever its turbo cache is
 cold. CI runs the gate this way too (`.github/workflows/ci.yml`).
 
+**A test of port behaviour goes in the shared contract** under
+`packages/testing/contract/`, never in an adapter's own suite. The contract
+runs against every adapter, which is what lets the in-memory adapter stand in
+for Zulip in tests. See [Test architecture](docs/architecture.md#test-architecture).
+
 **Live tests** (`*.live.test.ts`) hit a real Zulip realm and can rate-limit
 other clients sharing it. They are excluded from default discovery via
 `bunfig.toml` `[test] pathIgnorePatterns`. The `test:live` script clears that
@@ -134,14 +139,3 @@ If you have a local read-only Effect source clone available (path is machine-loc
 | untrusted data via `as` / `JSON.parse` at the edge | `Schema.decodeUnknown` |
 
 This complements the linters, it doesn't repeat them: `@effect/tsgo` and biome catch per-line idiom; this table is for the whole-block / whole-type / whole-module shapes a linter can't see.
-
-<!-- BEGIN:turborepo-agent-rules -->
-
-# This is NOT the Turborepo you know
-
-Turborepo configuration, task behavior, and CLI commands can vary between installed versions and may differ from your training data. Resolve the `turbo` package from this file's directory or relevant workspace; in monorepos, it may not be visible from the repository root. For example, run `node -p "require.resolve('turbo/package.json')"` from a workspace that depends on `turbo`.
-
-Read `docs/README.md` inside that installed package first, then read the relevant pages from its `docs/` directory before changing Turborepo configuration or commands. Heed deprecation notices. These bundled docs match the installed package version and are available without network access.
-
-This block is written and re-added by `turbo` before repository-scoped commands when an AI agent is detected. In the Turborepo source repository, its template is defined in `crates/turborepo-cli/src/cli/agent_guidance.rs`. Removing the managed block while updates are enabled means a later qualifying invocation will add it again. Set `"agentGuidance": false` in the root `turbo.json` or `turbo.jsonc` to opt out; this does not remove an existing block. Keep the block committed with your work to avoid an uncommitted change on the next agent invocation.
-<!-- END:turborepo-agent-rules -->

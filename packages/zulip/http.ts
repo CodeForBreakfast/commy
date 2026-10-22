@@ -405,6 +405,49 @@ export const makeZulipHttp = (
     ): Effect.Effect<string, ZulipApiError> =>
       attempt(url, request).pipe(Effect.retry({ schedule: rateLimitSchedule() }))
 
+    // Single download attempt. A success body is raw bytes, so only a refusal
+    // is read as text, to pick up the realm's retry-after.
+    const attemptDownload = (
+      realmPath: string,
+      url: string,
+      request: HttpClientRequest.HttpClientRequest,
+    ): Effect.Effect<RawDownload, ZulipApiError> =>
+      httpClient.execute(request).pipe(
+        Effect.flatMap((response) => {
+          if (response.status < 200 || response.status >= 300) {
+            return response.text.pipe(
+              Effect.mapError((cause) => transportError(url, cause)),
+              Effect.flatMap((text) =>
+                Effect.fail(
+                  new ZulipApiError({
+                    message: `download ${realmPath}: HTTP ${response.status}`,
+                    status: response.status,
+                    code: undefined,
+                    retryAfter: parseEnvelope(text).pipe(
+                      Option.flatMap((env) => Option.fromNullable(env['retry-after'])),
+                      Option.getOrUndefined,
+                    ),
+                  }),
+                ),
+              ),
+            )
+          }
+          return response.arrayBuffer.pipe(
+            Effect.map(
+              (buf): RawDownload => ({
+                data: new Uint8Array(buf),
+                contentType: response.headers['content-type'] ?? 'application/octet-stream',
+              }),
+            ),
+            Effect.mapError((cause) => transportError(url, cause)),
+          )
+        }),
+        Effect.catchTags({
+          RequestError: (cause) => Effect.fail(transportError(url, cause)),
+          ResponseError: (cause) => Effect.fail(transportError(url, cause)),
+        }),
+      )
+
     const sendJson = <A, I>(
       url: string,
       request: HttpClientRequest.HttpClientRequest,
@@ -466,32 +509,8 @@ export const makeZulipHttp = (
           ? ((): Effect.Effect<RawDownload, ZulipApiError> => {
               const url = realmRoot + realmPath
               const request = HttpClientRequest.get(url)
-              return httpClient.execute(request).pipe(
-                Effect.flatMap((response) => {
-                  if (response.status < 200 || response.status >= 300) {
-                    return Effect.fail(
-                      new ZulipApiError({
-                        message: `download ${realmPath}: HTTP ${response.status}`,
-                        status: response.status,
-                        code: undefined,
-                        retryAfter: undefined,
-                      }),
-                    )
-                  }
-                  return response.arrayBuffer.pipe(
-                    Effect.map(
-                      (buf): RawDownload => ({
-                        data: new Uint8Array(buf),
-                        contentType: response.headers['content-type'] ?? 'application/octet-stream',
-                      }),
-                    ),
-                    Effect.mapError((cause) => transportError(url, cause)),
-                  )
-                }),
-                Effect.catchTags({
-                  RequestError: (cause) => Effect.fail(transportError(url, cause)),
-                  ResponseError: (cause) => Effect.fail(transportError(url, cause)),
-                }),
+              return attemptDownload(realmPath, url, request).pipe(
+                Effect.retry({ schedule: rateLimitSchedule() }),
               )
             })()
           : Effect.die(

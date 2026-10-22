@@ -51,7 +51,11 @@ import {
   decodeChannelNameSync,
   decodeDisplayNameSync,
 } from '@commy/core/ports'
-import { runAgentCommsContract } from '@commy/testing/contract'
+import {
+  type AttachmentContractFactory,
+  runAgentCommsContract,
+  runAttachmentStoreContract,
+} from '@commy/testing/contract'
 import { FetchHttpClient, HttpClient } from '@effect/platform'
 import { Duration, Effect, Option, Redacted, Schema } from 'effect'
 import type { ZulipAdapter } from './adapter.ts'
@@ -237,7 +241,7 @@ if (env === undefined) {
     for (const a of builtAdapters) await a.close()
   })
 
-  runAgentCommsContract('zulip-live', async () => {
+  const liveContractFactory: AttachmentContractFactory = async () => {
     const ns = `${NS_PREFIX}-${runId}-${seq++}`
     const adapter = await Effect.runPromise(buildAdapter())
     builtAdapters.push(adapter)
@@ -246,8 +250,15 @@ if (env === undefined) {
       Effect.sleep(MINTER_PACE).pipe(Effect.zipRight(adapter.identity.acquire(SELF_NAME))),
     )
 
+    // The self bot is persistent, so subscriptions from earlier tests and runs
+    // outlive them and would break the tests that assert the exact set.
+    const held = await Effect.runPromise(adapter.inbox.subscriptions().pipe(Effect.orDie))
+    for (const channel of held)
+      await Effect.runPromise(adapter.inbox.unsubscribe(channel).pipe(Effect.orDie))
+
     return {
       comms: adapter,
+      attachments: adapter,
       seedChannel: (name) => ensureStream(minter, `${ns}-${name}`),
       seedAgent: (name) => ensurePeer(minter, adapter, name),
       // A seeded peer posts (mentioning self) through its own bound adapter so
@@ -261,10 +272,15 @@ if (env === undefined) {
         ),
       // Stream.MAX_DESCRIPTION_LENGTH — the realm's own cap.
       channelDescriptionLimit: 1024,
+      // MAX_TOPIC_NAME_LENGTH — the realm's own cap.
+      threadNameLimit: 60,
       dispose: () =>
         Effect.sleep(MINTER_PACE).pipe(
           Effect.zipRight(adapter.identity.release({ persistent: true })),
         ),
     }
-  })
+  }
+
+  runAgentCommsContract('zulip-live', liveContractFactory)
+  runAttachmentStoreContract('zulip-live', liveContractFactory)
 }
