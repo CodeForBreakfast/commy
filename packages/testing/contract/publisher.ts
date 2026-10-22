@@ -9,6 +9,7 @@ import {
   decodeMessageBodySync,
   decodeMessageIdSync,
   decodeThreadNameSync,
+  type InboundEvent,
   MessageEditRefused,
   MessagePermalinkSchema,
   type MessageRef,
@@ -23,6 +24,14 @@ import { awaitEvent, eventQueue } from './helpers.ts'
 
 /** How long a write must stay silent on `events()` to count as emitting nothing. */
 const SILENCE_WINDOW = Duration.millis(100)
+
+const drainUntilSilent = (queue: Queue.Queue<InboundEvent>): Effect.Effect<void> =>
+  Queue.take(queue).pipe(
+    Effect.timeoutOption(SILENCE_WINDOW),
+    Effect.flatMap(
+      Option.match({ onNone: () => Effect.void, onSome: () => drainUntilSilent(queue) }),
+    ),
+  )
 
 export const publisherContract = (env: () => ContractEnv): void => {
   // Resolution is a status distinct from the thread name: the name a consumer
@@ -439,6 +448,75 @@ export const publisherContract = (env: () => ContractEnv): void => {
           throw new Error('expected reaction-removal target in channel history')
         expect(found.reactions.find((r) => r.emoji === 'thumbs_up')).toBeUndefined()
       }),
+    ))
+  test('publisher.react refuses a duplicate reaction with PublisherError', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const ref = yield* env().comms.publisher.post(
+          channel.name,
+          decodeMessageBodySync('react twice'),
+        )
+        yield* env().comms.publisher.react(ref, decodeEmojiSync('thumbs_up'))
+        const error = yield* Effect.flip(
+          env().comms.publisher.react(ref, decodeEmojiSync('thumbs_up')),
+        )
+        expect(error).toBeInstanceOf(PublisherError)
+      }),
+    ))
+  test('publisher.unreact refuses a reaction that is not there with PublisherError', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const ref = yield* env().comms.publisher.post(
+          channel.name,
+          decodeMessageBodySync('never reacted'),
+        )
+        const error = yield* Effect.flip(
+          env().comms.publisher.unreact(ref, decodeEmojiSync('thumbs_up')),
+        )
+        expect(error).toBeInstanceOf(PublisherError)
+      }),
+    ))
+  test('publisher.react and unreact refuse an unknown message with PublisherError', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const phantom: MessageRef = {
+          id: decodeMessageIdSync('999999999'),
+          channel,
+          thread: Option.none(),
+          permalink: MessagePermalinkSchema.make('999999999'),
+        }
+        const emoji = decodeEmojiSync('thumbs_up')
+        const reactError = yield* Effect.flip(env().comms.publisher.react(phantom, emoji))
+        const unreactError = yield* Effect.flip(env().comms.publisher.unreact(phantom, emoji))
+        expect(reactError).toBeInstanceOf(PublisherError)
+        expect(unreactError).toBeInstanceOf(PublisherError)
+      }),
+    ))
+  test('publisher.react and unreact emit no inbound event when refused', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const channel = yield* env().seedChannel('lobby')
+          yield* env().comms.inbox.subscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          const ref = yield* env().comms.publisher.post(
+            channel.name,
+            decodeMessageBodySync('refused reactions'),
+          )
+          const emoji = decodeEmojiSync('thumbs_up')
+          yield* env().comms.publisher.react(ref, emoji)
+          yield* drainUntilSilent(queue)
+          yield* Effect.flip(env().comms.publisher.react(ref, emoji))
+          yield* env().comms.publisher.unreact(ref, emoji)
+          yield* drainUntilSilent(queue)
+          yield* Effect.flip(env().comms.publisher.unreact(ref, emoji))
+          const result = yield* Queue.take(queue).pipe(Effect.timeoutOption(SILENCE_WINDOW))
+          expect(result).toEqual(Option.none())
+        }),
+      ),
     ))
   test("publisher.edit on a peer's message fails with MessageEditRefused not-original-sender", () =>
     Effect.runPromise(
