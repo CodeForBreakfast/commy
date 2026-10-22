@@ -344,6 +344,11 @@ const sentMessageSchema = Schema.Struct({
   id: Schema.Int,
 })
 
+const storedMessageSchema = Schema.Struct({
+  result: Schema.Literal('success'),
+  message: Schema.Struct({ subject: Schema.String }),
+})
+
 const successSchema = Schema.Struct({ result: Schema.Literal('success') })
 
 const renderedSchema = Schema.Struct({
@@ -1737,20 +1742,33 @@ export const zulipAdapter = (
                       })
                       .pipe(
                         Effect.flatMap((sent) =>
-                          decodeMessageId(String(sent.id)).pipe(
-                            Effect.map(
-                              (id): MessageRef =>
-                                // The probe tells us which substrate form the
-                                // message landed in, so the ref reports the
-                                // thread's real resolution state rather than
-                                // assuming an unresolved one.
-                                decorateMessageRef(
-                                  id,
-                                  effective,
-                                  thread === undefined
-                                    ? undefined
-                                    : { name: thread, resolved: addressed.resolved },
+                          Effect.all({
+                            id: decodeMessageId(String(sent.id)),
+                            // The send response omits the topic, and the realm
+                            // truncates one over its length limit, so the stored
+                            // name is read back from the message itself. Its
+                            // resolution state comes from the same read.
+                            stored: Effect.transposeMapOption(Option.fromNullable(thread), () =>
+                              http
+                                .get(
+                                  `/messages/${encodeURIComponent(sent.id)}`,
+                                  storedMessageSchema,
+                                )
+                                .pipe(
+                                  Effect.flatMap(({ message }) => {
+                                    const { name, resolved } = splitTopic(message.subject)
+                                    return decodeThreadName(name).pipe(
+                                      Effect.map((storedName) => ({
+                                        name: storedName,
+                                        resolved,
+                                      })),
+                                    )
+                                  }),
                                 ),
+                            ),
+                          }).pipe(
+                            Effect.map(({ id, stored }) =>
+                              decorateMessageRef(id, effective, Option.getOrUndefined(stored)),
                             ),
                           ),
                         ),

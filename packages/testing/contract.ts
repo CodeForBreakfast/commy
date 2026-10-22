@@ -104,6 +104,12 @@ export interface ContractEnv {
    * substrate reports its own (Zulip 1024, memory its configured limit).
    */
   readonly channelDescriptionLimit: number
+  /**
+   * Longest thread name this substrate keeps, in characters. A substrate that
+   * cuts a longer name short must return the name it kept from `post`; the
+   * thread-name test builds its over-length input from this limit.
+   */
+  readonly threadNameLimit: number
   /** Tear down whatever the factory stood up. Called once per test. */
   readonly dispose: () => Effect.Effect<void>
 }

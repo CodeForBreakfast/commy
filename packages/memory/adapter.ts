@@ -65,6 +65,7 @@ import {
   decodeDisplayName,
   decodeIdentityId,
   decodeMessageId,
+  decodeThreadName,
   decodeTimestamp,
   type Emoji,
   HistoryError,
@@ -169,9 +170,17 @@ export interface MemoryAdapterConfig {
    * assuming a number is the thing worth proving.
    */
   readonly channelDescriptionLimit?: number
+  /**
+   * Longest thread name this substrate keeps, in characters. A longer name is
+   * stored cut to this length, as a real substrate cuts an over-long topic, and
+   * the returned ref carries the name that was kept. Like the description
+   * limit, deliberately not Zulip's number.
+   */
+  readonly threadNameLimit?: number
 }
 
 const DEFAULT_CHANNEL_DESCRIPTION_LIMIT = 512
+const DEFAULT_THREAD_NAME_LIMIT = 48
 
 export type MemoryAdapter = AgentComms & {
   /**
@@ -242,6 +251,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     // no blank-string entry to tell apart from a missing one.
     const descriptionsByChannel = new Map<string, ChannelDescription>()
     const descriptionLimit = config.channelDescriptionLimit ?? DEFAULT_CHANNEL_DESCRIPTION_LIMIT
+    const threadNameLimit = config.threadNameLimit ?? DEFAULT_THREAD_NAME_LIMIT
     const isThreadResolved = (channelId: string, threadName: string): boolean =>
       resolvedThreadsByChannel.get(channelId)?.has(threadName) ?? false
     const withThreadResolution = (stored: StoredMessage): StoredMessage =>
@@ -605,7 +615,11 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
           const channelRef = yield* resolveChannel(channel)
           const bucket = yield* bucketOf(channelRef)
           const id = String(yield* allocId(nextMessageId))
-          const ref = yield* buildRef(id, channelRef, opts?.thread)
+          const thread =
+            opts?.thread === undefined
+              ? undefined
+              : yield* decodeThreadName(opts.thread.slice(0, threadNameLimit)).pipe(Effect.orDie)
+          const ref = yield* buildRef(id, channelRef, thread)
           // The timestamp counter is a monotonic clock-derived value, always
           // non-negative — orDie the (impossible) ParseError.
           const ts = yield* decodeTimestamp(yield* allocId(nextTs)).pipe(Effect.orDie)
