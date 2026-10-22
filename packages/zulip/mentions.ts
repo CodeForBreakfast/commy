@@ -16,6 +16,8 @@ export interface MentionDirectory {
 // The Zulip web client disambiguates a duplicated full_name by appending the
 // user id: @**Name|user_id** (web/src/people.ts get_mention_syntax). Resolve
 // such a token by id — byName holds only one of two same-named humans.
+// Zulip's UserMentionPattern in zerver/lib/markdown renders no mention when a
+// name is given and is not that user's full name.
 const DISAMBIGUATED = /^(?<name>.*)\|(?<id>\d+)$/
 
 /**
@@ -98,7 +100,10 @@ export const mentionTokens = (content: string): ReadonlyArray<MentionToken> => {
 const resolveUser = (token: string, directory: MentionDirectory): Option.Option<Identity> => {
   const disambiguated = DISAMBIGUATED.exec(token)
   if (disambiguated?.groups !== undefined) {
-    return Option.fromNullable(directory.byUserId(Number(disambiguated.groups['id'])))
+    const name = disambiguated.groups['name'] ?? ''
+    return Option.fromNullable(directory.byUserId(Number(disambiguated.groups['id']))).pipe(
+      Option.filter((identity) => name === '' || identity.name === name),
+    )
   }
   return Option.fromNullable(directory.byName.get(token))
 }

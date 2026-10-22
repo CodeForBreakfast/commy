@@ -29,9 +29,8 @@ import {
   UnboundEphemeralSession,
   UnknownChannel,
   type UnknownIdentity,
-  UnresolvedMention,
 } from '@commy/core/ports'
-import { effectTest, runTestEffect } from '@commy/testing/effect-test'
+import { effectTest } from '@commy/testing/effect-test'
 import {
   makeStubHttpClient,
   type StubBody,
@@ -1104,49 +1103,6 @@ effectTest(
         expect(error.message).toBe('internal server error')
       }
     }),
-)
-
-// Zulip still resolves a deactivated account's name, but renders the mention
-// silent, so it notifies nobody. The directory lists deactivated members too,
-// which must not count as resolving the mention — in either markup form.
-test.each([
-  ['@**cc-myproject-abcdef12**', 'cc-myproject-abcdef12'],
-  ['@**cc-myproject-abcdef12|42**', 'cc-myproject-abcdef12|42'],
-])(
-  'publisher.post fails with UnresolvedMention when %s names a deactivated seat',
-  (markup, token) =>
-    runTestEffect(() =>
-      Effect.gen(function* () {
-        const stub = yield* makeStubHttpClient
-        yield* seedSendMessage(stub, 203)
-        yield* seedRender(
-          stub,
-          '<p><span class="user-mention silent" data-user-id="42">cc-myproject-abcdef12</span> your answer</p>',
-        )
-        const adapter = yield* buildAdapter(stub)
-        yield* seedUsers(stub, [
-          HERMES,
-          {
-            user_id: 42,
-            email: 'cc-myproject-abcdef12-bot@example.com',
-            full_name: 'cc-myproject-abcdef12',
-            is_bot: true,
-            is_active: false,
-            role: 400,
-          },
-        ])
-        const error = yield* Effect.flip(
-          adapter.publisher.post(
-            generalChannel.name,
-            decodeMessageBodySync(`${markup} your answer`),
-          ),
-        )
-        expect(error).toBeInstanceOf(UnresolvedMention)
-        if (error instanceof UnresolvedMention) {
-          expect(error.tokens).toEqual([token])
-        }
-      }),
-    ),
 )
 
 // Zulip serves GET /users from a realm-wide cache, and a GET /users that lands

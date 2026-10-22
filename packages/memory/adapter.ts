@@ -258,6 +258,7 @@ const inRange =
 // Zulip's personal-mention markup, and the code regions it renders no mention
 // inside. Groups are left out: the store has none.
 const MENTION_MARKUP = /@\*\*([^*]+)\*\*/g
+const DISAMBIGUATED = /^(.*)\|(\d+)$/
 const CODE_REGIONS = /```[\s\S]*?```|~~~[\s\S]*?~~~|(`+)[\s\S]*?\1/g
 
 const mentionedNames = (body: string): ReadonlyArray<string> =>
@@ -433,9 +434,23 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
         (identity) => !deactivatedIdentities.has(identity.id),
       )
 
+    // Zulip's `name|id` form names a member by id. Given a name, it must be
+    // that member's, or Zulip renders no mention.
+    const activeIdentityMentioned = (token: string): Option.Option<Identity> => {
+      const disambiguated = DISAMBIGUATED.exec(token)
+      if (disambiguated === null) return activeIdentityNamed(token)
+      const [, name = '', id = ''] = disambiguated
+      return Option.fromNullable(identitiesById.get(id)).pipe(
+        Option.filter(
+          (identity) =>
+            (name === '' || identity.name === name) && !deactivatedIdentities.has(identity.id),
+        ),
+      )
+    }
+
     const mentionOf = (token: string): Option.Option<Mention> =>
       Option.orElse(wildcardMention(token), () =>
-        Option.map(activeIdentityNamed(token), (identity) => Mention.UserMention({ identity })),
+        Option.map(activeIdentityMentioned(token), (identity) => Mention.UserMention({ identity })),
       )
 
     // Who a body mentions, as Zulip renders it: each mention once, in the
