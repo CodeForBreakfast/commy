@@ -777,6 +777,47 @@ effectTest('downloadRaw throws ZulipApiError on non-2xx response', () =>
   }),
 )
 
+effectTest(
+  'downloadRaw retries after a 429 (under TestClock) and returns the bytes',
+  () =>
+    Effect.gen(function* () {
+      const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47])
+      const stub = yield* makeStubHttpClient
+      yield* stub.respondSequence('GET', '/user_uploads/1/abc/photo.png', [
+        rateLimited(0.25),
+        { body: bytes, headers: { 'content-type': 'image/png' } },
+      ])
+      const http = yield* makeHttp(stub)
+      const result = yield* settleUnderTestClock(
+        http.downloadRaw('/user_uploads/1/abc/photo.png'),
+        Duration.millis(250),
+        4,
+      )
+      expect(new Uint8Array(result.data)).toEqual(bytes)
+      expect(result.contentType).toBe('image/png')
+      expect((yield* stub.captured).length).toBe(2)
+    }),
+  { layer: TestContext.TestContext },
+)
+
+effectTest(
+  'downloadRaw gives up and surfaces the realm retry-after once the retry budget is spent',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* stub.respond('GET', '/user_uploads/1/abc/photo.png', rateLimited(5))
+      const http = yield* makeHttp(stub)
+      const err = yield* settleUnderTestClock(
+        Effect.flip(http.downloadRaw('/user_uploads/1/abc/photo.png')),
+        Duration.seconds(5),
+        8,
+      )
+      expect((err as ZulipApiError).status).toBe(429)
+      expect((err as ZulipApiError).retryAfter).toBe(5)
+    }),
+  { layer: TestContext.TestContext },
+)
+
 effectTest('downloadRaw fails with a TypeError defect when path does not start with /', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
