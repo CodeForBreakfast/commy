@@ -64,6 +64,7 @@ import {
   decodeChannelName,
   decodeDisplayName,
   decodeIdentityId,
+  decodeMessageBody,
   decodeMessageId,
   decodeThreadName,
   decodeTimestamp,
@@ -289,6 +290,13 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     const nextCredentialsId = yield* Ref.make(1)
     const nextTs = yield* Ref.make(Math.floor((yield* Clock.currentTimeMillis) / 1000))
     const bound = yield* Ref.make(Option.none<Binding>())
+    // The sender of the notices the substrate posts itself. It is no member,
+    // so the directory never lists it.
+    const notificationBot: Identity = {
+      id: yield* decodeIdentityId('notification-bot').pipe(Effect.orDie),
+      name: yield* decodeDisplayName('Notification Bot').pipe(Effect.orDie),
+      kind: 'agent',
+    }
 
     const allowlist =
       config.acquirableNames === undefined ? undefined : new Set(config.acquirableNames)
@@ -517,6 +525,26 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         ),
       )
 
+    const deliver = (
+      sender: Identity,
+      channelRef: ChannelRef,
+      body: MessageBodyType,
+      thread: PostOpts['thread'],
+    ): Effect.Effect<MessageRef> =>
+      Effect.gen(function* () {
+        const bucket = yield* bucketOf(channelRef)
+        const id = String(yield* allocId(nextMessageId))
+        const ref = yield* buildRef(id, channelRef, thread)
+        // The timestamp counter is a monotonic clock-derived value, always
+        // non-negative — orDie the (impossible) ParseError.
+        const ts = yield* decodeTimestamp(yield* allocId(nextTs)).pipe(Effect.orDie)
+        const stored: StoredMessage = { ref, sender, body, ts, mentions: mentionsIn(body) }
+        bucket.push(stored)
+        messagesById.set(id, stored)
+        yield* fanOutOnPost(stored)
+        return ref
+      })
+
     const collectReactions = (messageId: string): ReadonlyArray<Reaction> => {
       const byEmoji = reactionsByMessage.get(messageId)
       if (byEmoji === undefined) return []
@@ -542,47 +570,47 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
 
     // Resolution is tracked as a status separate from the thread name (the name
     // never encodes it), surfaced on reads via ObservedThread.resolved.
-    // Idempotent — re-setting the same state is a no-op. Like edit, emits no
-    // InboundEvent. Mirrors the Zulip adapter's "no messages in the thread →
-    // PublisherError" so the contract holds across both substrates; an unknown
-    // channel likewise has no such thread and surfaces the same failure.
+    // Idempotent — re-setting the same state is a no-op. A flip posts into the
+    // thread the notice Zulip's Notification Bot posts. Mirrors the Zulip
+    // adapter's "no messages in the thread → PublisherError" so the contract
+    // holds across both substrates; an unknown channel likewise has no such
+    // thread and surfaces the same failure.
     const setThreadResolved = (
       channel: ChannelName,
       thread: ThreadName,
       resolved: boolean,
     ): Effect.Effect<void, BindError | PublisherError> => {
       const operation = resolved ? 'resolveThread' : 'unresolveThread'
-      return requireBound().pipe(
-        Effect.flatMap(() =>
-          resolveChannel(channel).pipe(
-            Effect.mapError((cause): PublisherError => new PublisherError({ operation, cause })),
-            Effect.flatMap((channelRef) => {
-              const bucket = messagesByChannel.get(channelRef.id) ?? []
-              const hasThread = bucket.some((m) =>
-                Option.exists(m.ref.thread, (t) => t.name === thread),
-              )
-              if (!hasThread) {
-                return Effect.fail(
-                  new PublisherError({
-                    operation,
-                    cause: new Error(
-                      `memoryAdapter: no thread '${thread}' in ${channelRef.name} to ${
-                        resolved ? 'resolve' : 'unresolve'
-                      }`,
-                    ),
-                  }),
-                )
-              }
-              const resolvedNames = resolvedThreadsByChannel.get(channelRef.id) ?? new Set<string>()
-              if (resolved) resolvedNames.add(thread)
-              else resolvedNames.delete(thread)
-              if (resolvedNames.size > 0) resolvedThreadsByChannel.set(channelRef.id, resolvedNames)
-              else resolvedThreadsByChannel.delete(channelRef.id)
-              return Effect.void
-            }),
-          ),
-        ),
-      )
+      return Effect.gen(function* () {
+        const self = yield* requireBound()
+        const channelRef = yield* resolveChannel(channel).pipe(
+          Effect.mapError((cause): PublisherError => new PublisherError({ operation, cause })),
+        )
+        const bucket = messagesByChannel.get(channelRef.id) ?? []
+        const hasThread = bucket.some((m) => Option.exists(m.ref.thread, (t) => t.name === thread))
+        if (!hasThread) {
+          return yield* new PublisherError({
+            operation,
+            cause: new Error(
+              `memoryAdapter: no thread '${thread}' in ${channelRef.name} to ${
+                resolved ? 'resolve' : 'unresolve'
+              }`,
+            ),
+          })
+        }
+        if (isThreadResolved(channelRef.id, thread) === resolved) return
+        const resolvedNames = resolvedThreadsByChannel.get(channelRef.id) ?? new Set<string>()
+        if (resolved) resolvedNames.add(thread)
+        else resolvedNames.delete(thread)
+        if (resolvedNames.size > 0) resolvedThreadsByChannel.set(channelRef.id, resolvedNames)
+        else resolvedThreadsByChannel.delete(channelRef.id)
+        // A known display name and id make the body non-empty — orDie the
+        // (impossible) ParseError.
+        const notice = yield* decodeMessageBody(
+          `@_**${self.name}|${self.id}** has marked this topic as ${resolved ? 'resolved' : 'unresolved'}.`,
+        ).pipe(Effect.orDie)
+        yield* deliver(notificationBot, channelRef, notice, thread)
+      })
     }
 
     // A real peer implementation, not a stub: the description round-trips
@@ -639,27 +667,11 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         Effect.gen(function* () {
           const self = yield* requireBound()
           const channelRef = yield* resolveChannel(channel)
-          const bucket = yield* bucketOf(channelRef)
-          const id = String(yield* allocId(nextMessageId))
           const thread =
             opts?.thread === undefined
               ? undefined
               : yield* decodeThreadName(opts.thread.slice(0, threadNameLimit)).pipe(Effect.orDie)
-          const ref = yield* buildRef(id, channelRef, thread)
-          // The timestamp counter is a monotonic clock-derived value, always
-          // non-negative — orDie the (impossible) ParseError.
-          const ts = yield* decodeTimestamp(yield* allocId(nextTs)).pipe(Effect.orDie)
-          const stored: StoredMessage = {
-            ref,
-            sender: self,
-            body,
-            ts,
-            mentions: mentionsIn(body),
-          }
-          bucket.push(stored)
-          messagesById.set(id, stored)
-          yield* fanOutOnPost(stored)
-          return ref
+          return yield* deliver(self, channelRef, body, thread)
         }),
       // Editing before acquire is an invariant violation (a defect via
       // requireBound's die); editing a message the store has never seen
@@ -1077,24 +1089,9 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       body: MessageBodyType,
       opts?: PostOpts,
     ): Effect.Effect<MessageRef, UnknownChannel> =>
-      Effect.gen(function* () {
-        const channelRef = yield* resolveChannel(channel)
-        const bucket = yield* bucketOf(channelRef)
-        const id = String(yield* allocId(nextMessageId))
-        const ref = yield* buildRef(id, channelRef, opts?.thread)
-        const ts = yield* decodeTimestamp(yield* allocId(nextTs)).pipe(Effect.orDie)
-        const stored: StoredMessage = {
-          ref,
-          sender: peer,
-          body,
-          ts,
-          mentions: mentionsIn(body),
-        }
-        bucket.push(stored)
-        messagesById.set(id, stored)
-        yield* fanOutOnPost(stored)
-        return ref
-      })
+      resolveChannel(channel).pipe(
+        Effect.flatMap((channelRef) => deliver(peer, channelRef, body, opts?.thread)),
+      )
 
     return {
       // Memory's `ts` is a monotonic counter, so any two posts already differ —
