@@ -225,7 +225,7 @@ const mentionedUser = (state: RealmState, token: string): Option.Option<RealmUse
   const disambiguated = DISAMBIGUATED.exec(token)
   if (disambiguated !== null) {
     return HashMap.get(state.users, Number(disambiguated[2])).pipe(
-      Option.filter((u) => sameName(u.fullName, disambiguated[1] ?? '')),
+      Option.filter((u) => u.fullName === (disambiguated[1] ?? '')),
     )
   }
   const named = Arr.filter(Arr.fromIterable(HashMap.values(state.users)), (u) =>
