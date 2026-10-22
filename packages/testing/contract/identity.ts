@@ -95,6 +95,28 @@ export const identityContract = (env: () => ContractEnv): void => {
         expect(agents.map((a) => a.id)).toContain(first.identity.id)
       }),
     ))
+  for (const { release, expected, label } of [
+    { release: undefined, expected: false, label: 'an ephemeral release takes' },
+    { release: { persistent: true }, expected: true, label: 'a persistent release leaves' },
+  ]) {
+    test(`identity.release: ${label} the agent in the directory`, () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const build = env().newUnacquiredAdapter
+          if (build === undefined) return
+          const current = yield* env().comms.identity.currentIdentity()
+          const fresh = yield* build()
+          const { identity } = yield* fresh.identity.acquire(
+            decodeBotNameSync(`${current.name}-released`),
+          )
+          yield* fresh.identity.release(release)
+          const found = yield* env().comms.identity.resolve(identity.name)
+          expect(Option.isSome(found)).toBe(expected)
+          const agents = yield* env().comms.directory.listAgents()
+          expect(agents.map((a) => a.id).includes(identity.id)).toBe(expected)
+        }),
+      ))
+  }
   test('identity.acquire binds the adapter to the identity it returns', () =>
     Effect.runPromise(
       Effect.gen(function* () {
