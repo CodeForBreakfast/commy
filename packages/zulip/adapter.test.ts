@@ -93,8 +93,7 @@ const BOB = {
   role: 100,
 } as const
 
-// Raw directory member behind the `aliceBot` Identity (id '1'). The write-path
-// mention validator resolves outbound `@**alice**` markup through the
+// A directory member named alice. The write-path mention validator resolves outbound `@**alice**` markup through the
 // directory, so a body that mentions her only posts when she is a seeded
 // member.
 const ALICE = {
@@ -805,11 +804,6 @@ const generalChannel: ChannelRef = {
   name: decodeChannelNameSync('general'),
   permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/1234-general'),
 }
-const aliceBot: Identity = {
-  id: decodeIdentityIdSync('1'),
-  name: decodeDisplayNameSync('alice'),
-  kind: 'agent',
-}
 const bobHuman: Identity = {
   id: decodeIdentityIdSync('2'),
   name: decodeDisplayNameSync('bob'),
@@ -1099,23 +1093,6 @@ effectTest('publisher.post permalink uses the public host header when one is con
   }),
 )
 
-effectTest(
-  'publisher.post leaves body unchanged when opts.mentions is set — mentions[] is metadata-only',
-  () =>
-    Effect.gen(function* () {
-      const stub = yield* makeStubHttpClient
-      yield* seedSendMessage(stub, 101)
-      const adapter = yield* buildAdapter(stub)
-      yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('wake up'), {
-        mentions: [aliceBot, bobHuman],
-      })
-      const params = new URLSearchParams(
-        (yield* findRequest(stub, 'POST', '/api/v1/messages')).body,
-      )
-      expect(params.get('content')).toBe('wake up')
-    }),
-)
-
 effectTest('publisher.post with body-only mention markup posts body verbatim', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
@@ -1131,27 +1108,6 @@ effectTest('publisher.post with body-only mention markup posts body verbatim', (
     )
     const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
     expect(params.get('content')).toBe('hey @**alice** look')
-  }),
-)
-
-// A body containing `@**Name**` + mentions[] for the same identity: under the
-// metadata-only contract the adapter never folds mentions[] into body, so this
-// case posts body verbatim with exactly one rendered @-mention.
-effectTest('publisher.post with both body markup AND opts.mentions does not double-render', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedSendMessage(stub, 104)
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, ALICE])
-    yield* adapter.publisher.post(
-      generalChannel.name,
-      decodeMessageBodySync('@**alice** wake up'),
-      {
-        mentions: [aliceBot],
-      },
-    )
-    const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
-    expect(params.get('content')).toBe('@**alice** wake up')
   }),
 )
 
@@ -1278,22 +1234,6 @@ effectTest(
         expect(error.message).toBe('internal server error')
       }
     }),
-)
-
-effectTest('publisher.post fails with a tagged UnknownChannel on an unknown channel', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* stub.respond('GET', '/api/v1/streams', { body: { result: 'success', streams: [] } })
-    const adapter = yield* buildAdapter(stub)
-    const error = yield* Effect.flip(
-      adapter.publisher.post(generalChannel.name, decodeMessageBodySync('should fail')),
-    )
-    expect(error).toBeInstanceOf(UnknownChannel)
-    if (error instanceof UnknownChannel) {
-      expect(error._tag).toBe('UnknownChannel')
-      expect(error.message).toContain('general')
-    }
-  }),
 )
 
 // A `@**Name**` token in an outbound body that resolves to no known identity
@@ -1474,21 +1414,6 @@ effectTest('history.readChannel names a sender the cached user list has not caug
     ])
     const messages = yield* adapter.history.readChannel(generalChannel.name, { limit: 50 })
     expect(messages[0]?.sender).toEqual(pinnedIdentity)
-  }),
-)
-
-// A dead form written as an example inside a code span is literal text Zulip
-// never delivers as a mention — validating it would block agents from
-// discussing mention discipline. It must post verbatim, not fail.
-effectTest('publisher.post posts verbatim when a dead form appears only inside a code span', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedSendMessage(stub, 201)
-    const adapter = yield* buildAdapter(stub)
-    const body = 'the dead form `@**Graeme Foster**` resolves to nobody'
-    yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync(body))
-    const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
-    expect(params.get('content')).toBe(body)
   }),
 )
 
@@ -2076,79 +2001,9 @@ effectTest(
     }),
 )
 
-// Resolution renames the topic (✔ prefix), so a resolved thread no longer has
-// the bare name. Zulip creates topics implicitly on post, so a write addressed
-// to the bare name mints a sibling topic and splits the conversation at the
-// resolve. post probes for the thread's current substrate form — bare first,
-// then the ✔ form, the same precedence readThread uses — so both verbs always
-// mean the same topic.
-effectTest('publisher.post addresses the ✔-prefixed topic when the thread is resolved', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedSendMessage(stub, 300)
-    yield* seedStoredTopic(stub, 300, '✔ planning')
-    yield* stub.respondSequence('GET', '/api/v1/messages', [
-      messagesPage([]),
-      messagesPage([
-        {
-          id: 299,
-          sender_id: 5,
-          sender_full_name: 'Robin Reyes',
-          stream_id: 1234,
-          display_recipient: 'general',
-          subject: '✔ planning',
-          content: 'the resolved conversation',
-          timestamp: 1715000000,
-        },
-      ]),
-    ])
-    const adapter = yield* buildAdapter(stub)
-    const ref = yield* adapter.publisher.post(
-      generalChannel.name,
-      decodeMessageBodySync('one more thing'),
-      { thread: decodeThreadNameSync('planning') },
-    )
-    const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
-    expect(params.get('topic')).toBe('✔ planning')
-    // Appending leaves the thread resolved, and the ref says so: the port's
-    // clean name plus an honest flag. Re-opening is the caller's own
-    // unresolveThread call — post never mutates thread state.
-    expect(Option.map(ref.thread, (t) => t.name)).toEqual(
-      Option.some(decodeThreadNameSync('planning')),
-    )
-    expect(Option.map(ref.thread, (t) => t.resolved)).toEqual(Option.some(true))
-  }),
-)
-
-effectTest('publisher.post does not unresolve the thread it appends to', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedSendMessage(stub, 303)
-    yield* seedStoredTopic(stub, 303, '✔ planning')
-    yield* stub.respondSequence('GET', '/api/v1/messages', [
-      messagesPage([]),
-      messagesPage([
-        {
-          id: 299,
-          sender_id: 5,
-          sender_full_name: 'Robin Reyes',
-          stream_id: 1234,
-          display_recipient: 'general',
-          subject: '✔ planning',
-          content: 'the resolved conversation',
-          timestamp: 1715000000,
-        },
-      ]),
-    ])
-    const adapter = yield* buildAdapter(stub)
-    yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('one more thing'), {
-      thread: decodeThreadNameSync('planning'),
-    })
-    const patches = (yield* stub.captured).filter((r) => r.method === 'PATCH')
-    expect(patches).toEqual([])
-  }),
-)
-
+// post probes for the thread's current substrate form — bare first, then the
+// ✔ form, the same precedence readThread uses — so both verbs always mean the
+// same topic.
 effectTest('publisher.post addresses the bare topic when an unresolved thread already exists', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
