@@ -155,6 +155,12 @@ export interface ParsedEnv {
    * Unset → `$TMPDIR` fallback. Existence is validated once at boot.
    */
   readonly downloadDir?: string
+  /**
+   * Operator-set root (`COMMY_UPLOAD_DIR`) that `upload_file` reads under.
+   * A path that resolves outside it is refused. Unset → `upload_file` refuses
+   * every path. Existence is validated once at boot.
+   */
+  readonly uploadDir?: string
 }
 
 const placeholderShape = /^\$\{[^}]+\}$/
@@ -424,6 +430,7 @@ const envConfig: Config.Config<ParsedEnv> = Config.all({
   catchupWindowSeconds: optionalNonNegativeInt('COMMY_CATCHUP_WINDOW_SECONDS'),
   queueIdleTimeoutSecs: queueIdleTimeoutSecs('COMMY_QUEUE_IDLE_TIMEOUT_SECS'),
   downloadDir: optionalNonEmpty('COMMY_DOWNLOAD_DIR'),
+  uploadDir: optionalNonEmpty('COMMY_UPLOAD_DIR'),
 }).pipe(
   Config.mapOrFail((raw) => {
     // Attach mode needs both halves: a key with no name has no identity to bind
@@ -458,6 +465,10 @@ const envConfig: Config.Config<ParsedEnv> = Config.all({
       ...Option.match(raw.downloadDir, {
         onNone: () => ({}),
         onSome: (downloadDir) => ({ downloadDir }),
+      }),
+      ...Option.match(raw.uploadDir, {
+        onNone: () => ({}),
+        onSome: (uploadDir) => ({ uploadDir }),
       }),
     })
   }),

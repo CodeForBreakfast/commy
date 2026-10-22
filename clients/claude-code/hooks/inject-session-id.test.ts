@@ -61,7 +61,7 @@ test('preserves the original tool_input fields alongside session_id and cwd', as
         channel_name: 'home',
         body: 'hello',
         thread: 'general',
-        mentions: ['id-1', 'id-2'],
+        reply_to: '42',
       },
     }),
   )
@@ -69,7 +69,7 @@ test('preserves the original tool_input fields alongside session_id and cwd', as
     channel_name: 'home',
     body: 'hello',
     thread: 'general',
-    mentions: ['id-1', 'id-2'],
+    reply_to: '42',
     session_id: 'sess-abcdef',
     cwd: '/home/x/y',
   })

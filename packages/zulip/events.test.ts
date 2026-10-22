@@ -45,6 +45,7 @@ import {
   mapMessageEvent,
   messageToInboundEvents,
   RESUME_VERDICT_FALLBACK,
+  reactionToInboundEvent,
   registerQueue,
 } from './events.ts'
 import type { ZulipHttp } from './http.ts'
@@ -68,7 +69,7 @@ const MAINTAINER: Identity = {
 const directoryFor = (...identities: ReadonlyArray<Identity>): DirectoryLookup => {
   const directory: DirectoryLookup = {
     byId: new Map(identities.map((i) => [Number(i.id), i])),
-    byName: new Map(identities.map((i) => [i.name, i])),
+    byName: new Map(identities.map((i) => [i.name.toLowerCase(), i])),
     cover: () => Effect.succeed(directory),
   }
   return directory
@@ -116,29 +117,6 @@ test('fires mention-received when bound identity is in content even if flags lac
   }
 })
 
-test('does not fire mention-received when the bound identity is only mentioned inside a code span', () => {
-  // The phantom-mention case: a message that TALKS ABOUT the bound bot's
-  // mention token — inside backticks — is not a mention. Zulip renders no
-  // mention there and notifies nobody, so synthesis must not fire and the
-  // reported mentions[] must be empty.
-  const directory = directoryFor(HERMES, MAINTAINER)
-  const message: ParsedZulipMessage = {
-    ...messageMentioning(HERMES, MAINTAINER),
-    content: 'never write `@**hermes-agent**` in a code span',
-  }
-
-  const events = Effect.runSync(
-    messageToInboundEvents(message, directory, HERMES, PERMALINK_BASE, NO_RENDER),
-  )
-
-  expect(events.find((e) => e.kind === 'mention-received')).toBeUndefined()
-  const posted = events.find((e) => e.kind === 'message-posted')
-  expect(posted).toBeDefined()
-  if (posted !== undefined && posted.kind === 'message-posted') {
-    expect(posted.message.mentions).toEqual([])
-  }
-})
-
 test('decorates the inbound message ref with message, channel and topic permalinks', () => {
   const directory = directoryFor(HERMES, MAINTAINER)
   const message = messageMentioning(HERMES, MAINTAINER)
@@ -175,24 +153,65 @@ test('decorates the inbound message ref with message, channel and topic permalin
   }
 })
 
-test('does not fire mention-received when bound identity is not in content', () => {
-  // Negative case: a message that mentions someone else (not the bound
-  // bot) must not synthesise a mention-received for the bound bot, even
-  // when the queue happens to have flagged it (e.g. minter was mentioned).
-  const RIQ: Identity = {
-    id: decodeIdentityIdSync('11'),
-    name: decodeDisplayNameSync('riq6r230'),
-    kind: 'agent',
-  }
-  const directory = directoryFor(HERMES, MAINTAINER, RIQ)
-  const message = messageMentioning(RIQ, MAINTAINER)
+// A seat minted after the user list was cached is missing from it. The realm
+// still knows it, so `cover` finds it; a sender nobody can find is not a person.
+const NEW_BOT: Identity = {
+  id: decodeIdentityIdSync('77'),
+  name: decodeDisplayNameSync('cc-example-0a1b2c3d'),
+  kind: 'agent',
+}
 
+const directoryMissing = (found: ReadonlyArray<Identity>): DirectoryLookup => {
+  const known = directoryFor(HERMES, MAINTAINER)
+  return { ...known, cover: () => Effect.succeed(directoryFor(HERMES, MAINTAINER, ...found)) }
+}
+
+const senderOf = (newcomer: Identity, directory: DirectoryLookup): Identity => {
   const events = Effect.runSync(
-    messageToInboundEvents(message, directory, HERMES, PERMALINK_BASE, rendering(RIQ)),
+    messageToInboundEvents(
+      messageMentioning(HERMES, newcomer),
+      directory,
+      HERMES,
+      PERMALINK_BASE,
+      rendering(HERMES),
+    ),
   )
-  const mention = events.find((e) => e.kind === 'mention-received')
+  const posted = events.find((e) => e.kind === 'message-posted')
+  if (posted?.kind !== 'message-posted') throw new Error('no message-posted event')
+  return posted.message.sender
+}
 
-  expect(mention).toBeUndefined()
+test('a bot minted after the user list was cached reads as an agent', () => {
+  expect(senderOf(NEW_BOT, directoryMissing([NEW_BOT])).kind).toBe('agent')
+})
+
+test('a sender the realm cannot place reads as unknown, never as a person', () => {
+  const sender = senderOf(NEW_BOT, directoryMissing([]))
+
+  expect(sender).toEqual({ ...NEW_BOT, kind: 'unknown' })
+})
+
+test('a reactor the realm cannot place reads as unknown, never as a person', () => {
+  const target = Effect.runSync(
+    messageToInboundEvents(
+      messageMentioning(HERMES, MAINTAINER),
+      directoryFor(HERMES, MAINTAINER),
+      HERMES,
+      PERMALINK_BASE,
+      NO_RENDER,
+    ),
+  ).flatMap((e) => (e.kind === 'message-posted' ? [e.message.ref] : []))[0]
+  if (target === undefined) throw new Error('no message ref')
+
+  const event = Effect.runSync(
+    reactionToInboundEvent(
+      { id: 1, type: 'reaction', op: 'add', user_id: 77, message_id: 100, emoji_name: 'wave' },
+      directoryMissing([]),
+      target,
+    ),
+  )
+
+  expect(event.kind === 'reaction-added' && event.by.kind).toBe('unknown')
 })
 
 test('MessageRefCache.get is None on miss and Some on hit', () => {

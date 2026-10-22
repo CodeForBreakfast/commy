@@ -38,7 +38,6 @@ import type {
   IdentityOrigin,
   IdentityPort,
   InboundEvent,
-  Mention,
   Message,
   MessageBody as MessageBodyType,
   MessageId,
@@ -64,18 +63,24 @@ import {
   decodeChannelName,
   decodeDisplayName,
   decodeIdentityId,
+  decodeMessageBody,
   decodeMessageId,
+  decodeThreadName,
   decodeTimestamp,
   type Emoji,
   HistoryError,
+  IdentityError,
+  Mention,
+  MessageEditRefused,
   MessagePermalinkSchema,
   mentionsIdentity,
+  notifiesIdentity,
   PublisherError,
   ThreadPermalinkSchema,
   UnboundEphemeralSession,
   UnknownChannel,
   UnknownIdentity,
-  userMentions,
+  UnresolvedMention,
 } from '@commy/core/ports'
 import {
   Array as Arr,
@@ -83,6 +88,7 @@ import {
   Data,
   Duration,
   Effect,
+  Equal,
   HashMap,
   HashSet,
   Option,
@@ -132,6 +138,16 @@ interface Binding {
 
 type Emit = (event: InboundEvent) => void
 
+interface SeatFanOut {
+  readonly onPost: (stored: StoredMessage) => Effect.Effect<void>
+  readonly onReaction: (
+    messageId: string,
+    kind: 'reaction-added' | 'reaction-removed',
+    emoji: Emoji,
+    by: Identity,
+  ) => Effect.Effect<void>
+}
+
 export interface MemoryAdapterConfig {
   /**
    * When set, `acquire(name)` succeeds only for names in this list and
@@ -169,9 +185,23 @@ export interface MemoryAdapterConfig {
    * assuming a number is the thing worth proving.
    */
   readonly channelDescriptionLimit?: number
+  /**
+   * Longest thread name this substrate keeps, in characters. A longer name is
+   * stored cut to this length, as a real substrate cuts an over-long topic, and
+   * the returned ref carries the name that was kept. Like the description
+   * limit, deliberately not Zulip's number.
+   */
+  readonly threadNameLimit?: number
 }
 
+/** What one seat decides for itself; the limits belong to the realm it sits on. */
+export type MemorySeatConfig = Pick<
+  MemoryAdapterConfig,
+  'acquirableNames' | 'bindOnDemand' | 'selfKind'
+>
+
 const DEFAULT_CHANNEL_DESCRIPTION_LIMIT = 512
+const DEFAULT_THREAD_NAME_LIMIT = 48
 
 export type MemoryAdapter = AgentComms & {
   /**
@@ -189,6 +219,13 @@ export type MemoryAdapter = AgentComms & {
    * tests and for modelling humans in MCP plugin tests.
    */
   readonly seedHuman: (name: string) => Effect.Effect<Identity, ParseResult.ParseError>
+  /** Deactivate `agent`, so the directory no longer lists it. */
+  readonly deactivateAgent: (agent: Identity) => Effect.Effect<void>
+  /** Report `presence` for `human` from `directory.presence` from now on. */
+  readonly setPresence: (
+    human: Identity,
+    presence: Exclude<Presence, 'unknown'>,
+  ) => Effect.Effect<void>
   /**
    * Inject a message authored by `peer` (sender ≠ the bound self) into the
    * substrate, running the same fan-out as a real post. The contract's
@@ -203,6 +240,12 @@ export type MemoryAdapter = AgentComms & {
     body: MessageBodyType,
     opts?: PostOpts,
   ) => Effect.Effect<MessageRef, UnknownChannel>
+  /**
+   * Stand up another seat on this adapter's realm. It starts unacquired,
+   * sees the same members, channels and messages, and keeps its own
+   * binding and subscriptions.
+   */
+  readonly newSeat: (config?: MemorySeatConfig) => Effect.Effect<MemoryAdapter>
 }
 
 const inRange =
@@ -213,6 +256,26 @@ const inRange =
     return true
   }
 
+// Zulip's personal-mention markup, and the code regions it renders no mention
+// inside. Groups are left out: the store has none.
+const MENTION_MARKUP = /@\*\*([^*]+)\*\*/g
+const DISAMBIGUATED = /^(.*)\|(\d+)$/
+const CODE_REGIONS = /```[\s\S]*?```|~~~[\s\S]*?~~~|(`+)[\s\S]*?\1/g
+
+const mentionedNames = (body: string): ReadonlyArray<string> =>
+  Arr.map([...body.replace(CODE_REGIONS, ' ').matchAll(MENTION_MARKUP)], ([, name]) => name ?? '')
+
+// Zulip's wildcards, matched case-sensitively as `zerver/lib/mention.py` does.
+const CHANNEL_WILDCARDS: ReadonlySet<string> = new Set(['all', 'everyone', 'stream', 'channel'])
+const TOPIC_WILDCARD = 'topic'
+
+const wildcardMention = (token: string): Option.Option<Mention> =>
+  CHANNEL_WILDCARDS.has(token)
+    ? Option.some(Mention.ChannelWildcardMention())
+    : token === TOPIC_WILDCARD
+      ? Option.some(Mention.TopicWildcardMention())
+      : Option.none()
+
 const toMessage = (stored: StoredMessage, reactions: ReadonlyArray<Reaction>): Message => ({
   ref: stored.ref,
   sender: stored.sender,
@@ -222,13 +285,16 @@ const toMessage = (stored: StoredMessage, reactions: ReadonlyArray<Reaction>): M
   reactions,
 })
 
-export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<MemoryAdapter> =>
+// The state every seat on one realm shares, and the fan-out of each seat on
+// it, so a post or a reaction reaches every seat that hears it.
+const makeRealm = (config: MemoryAdapterConfig) =>
   Effect.gen(function* () {
     const presenceByIdentity = new Map<string, Presence>()
     const channelsById = new Map<string, ChannelRef>()
     const channelsByName = new Map<string, ChannelRef>()
     const identitiesById = new Map<string, Identity>()
     const identitiesByName = new Map<string, Identity>()
+    const deactivatedIdentities = new Set<string>()
     const messagesByChannel = new Map<string, StoredMessage[]>()
     const messagesById = new Map<string, StoredMessage>()
     const reactionsByMessage = new Map<string, Map<Emoji, Set<string>>>()
@@ -242,6 +308,73 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     // no blank-string entry to tell apart from a missing one.
     const descriptionsByChannel = new Map<string, ChannelDescription>()
     const descriptionLimit = config.channelDescriptionLimit ?? DEFAULT_CHANNEL_DESCRIPTION_LIMIT
+    const threadNameLimit = config.threadNameLimit ?? DEFAULT_THREAD_NAME_LIMIT
+    const nextChannelId = yield* Ref.make(1)
+    const nextIdentityId = yield* Ref.make(1)
+    const nextMessageId = yield* Ref.make(1)
+    const nextCredentialsId = yield* Ref.make(1)
+    const nextTs = yield* Ref.make(Math.floor((yield* Clock.currentTimeMillis) / 1000))
+    // The sender of the notices the substrate posts itself. It is no member,
+    // so the directory never lists it.
+    const notificationBot: Identity = {
+      id: yield* decodeIdentityId('notification-bot').pipe(Effect.orDie),
+      name: yield* decodeDisplayName('Notification Bot').pipe(Effect.orDie),
+      kind: 'agent',
+    }
+    const seats = new Set<SeatFanOut>()
+    return {
+      presenceByIdentity,
+      channelsById,
+      channelsByName,
+      identitiesById,
+      identitiesByName,
+      deactivatedIdentities,
+      messagesByChannel,
+      messagesById,
+      reactionsByMessage,
+      resolvedThreadsByChannel,
+      descriptionsByChannel,
+      descriptionLimit,
+      threadNameLimit,
+      nextChannelId,
+      nextIdentityId,
+      nextMessageId,
+      nextCredentialsId,
+      nextTs,
+      notificationBot,
+      seats,
+    }
+  })
+
+type MemoryRealm = Effect.Effect.Success<ReturnType<typeof makeRealm>>
+
+export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<MemoryAdapter> =>
+  makeRealm(config).pipe(Effect.flatMap((realm) => memorySeat(realm, config)))
+
+const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect<MemoryAdapter> =>
+  Effect.gen(function* () {
+    const {
+      presenceByIdentity,
+      channelsById,
+      channelsByName,
+      identitiesById,
+      identitiesByName,
+      deactivatedIdentities,
+      messagesByChannel,
+      messagesById,
+      reactionsByMessage,
+      resolvedThreadsByChannel,
+      descriptionsByChannel,
+      descriptionLimit,
+      threadNameLimit,
+      nextChannelId,
+      nextIdentityId,
+      nextMessageId,
+      nextCredentialsId,
+      nextTs,
+      notificationBot,
+      seats,
+    } = realm
     const isThreadResolved = (channelId: string, threadName: string): boolean =>
       resolvedThreadsByChannel.get(channelId)?.has(threadName) ?? false
     const withThreadResolution = (stored: StoredMessage): StoredMessage =>
@@ -259,16 +392,14 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         }),
       })
 
-    const nextChannelId = yield* Ref.make(1)
-    const nextIdentityId = yield* Ref.make(1)
-    const nextMessageId = yield* Ref.make(1)
-    const nextCredentialsId = yield* Ref.make(1)
-    const nextTs = yield* Ref.make(Math.floor((yield* Clock.currentTimeMillis) / 1000))
     const bound = yield* Ref.make(Option.none<Binding>())
 
     const allowlist =
       config.acquirableNames === undefined ? undefined : new Set(config.acquirableNames)
     const selfKind: IdentityKind = config.selfKind ?? 'agent'
+
+    const fanOutToSeats = (f: (seat: SeatFanOut) => Effect.Effect<void>): Effect.Effect<void> =>
+      Effect.forEach(seats, f, { discard: true })
 
     const allocId = (counter: Ref.Ref<number>): Effect.Effect<number> =>
       Ref.getAndUpdate(counter, (n) => n + 1)
@@ -296,6 +427,68 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         identitiesByName.set(name, identity)
         return { identity, origin: 'minted' as const }
       })
+
+    // Zulip derives a bot's address from the lowercased name, so a name that
+    // differs from a member's only by case asks for the same address.
+    const isCaseVariantOfExisting = (name: string): boolean =>
+      !identitiesByName.has(name) &&
+      Arr.some([...identitiesByName.keys()], (held) => held.toLowerCase() === name.toLowerCase())
+
+    // Zulip will not mint a bot whose full name an active member already holds.
+    const isNameOfHuman = (name: string): boolean => identitiesByName.get(name)?.kind === 'human'
+
+    // As on Zulip, a deactivated member no longer answers to its name.
+    const activeIdentityNamed = (name: string): Option.Option<Identity> =>
+      Option.filter(
+        Option.fromNullable(identitiesByName.get(name)),
+        (identity) => !deactivatedIdentities.has(identity.id),
+      )
+
+    // A plain `@**name**` mention matches the name whatever its case, as
+    // Zulip's `full_name__iexact` does.
+    const activeIdentityNamedIgnoringCase = (name: string): Option.Option<Identity> =>
+      Arr.findFirst(
+        [...identitiesByName.values()],
+        (identity) =>
+          identity.name.toLowerCase() === name.toLowerCase() &&
+          !deactivatedIdentities.has(identity.id),
+      )
+
+    // Zulip's `name|id` form names a member by id. Given a name, it must be
+    // that member's, or Zulip renders no mention.
+    const activeIdentityMentioned = (token: string): Option.Option<Identity> => {
+      const disambiguated = DISAMBIGUATED.exec(token)
+      if (disambiguated === null) return activeIdentityNamedIgnoringCase(token)
+      const [, name = '', id = ''] = disambiguated
+      return Option.fromNullable(identitiesById.get(id)).pipe(
+        Option.filter(
+          (identity) =>
+            (name === '' || identity.name === name) && !deactivatedIdentities.has(identity.id),
+        ),
+      )
+    }
+
+    const mentionOf = (token: string): Option.Option<Mention> =>
+      Option.orElse(wildcardMention(token), () =>
+        Option.map(activeIdentityMentioned(token), (identity) => Mention.UserMention({ identity })),
+      )
+
+    // Who a body mentions, as Zulip renders it: each mention once, in the
+    // order written. A name nobody holds mentions nobody.
+    const mentionsIn = (body: MessageBodyType): ReadonlyArray<Mention> =>
+      Arr.dedupeWith(Arr.filterMap(mentionedNames(body), mentionOf), Equal.equals)
+
+    const refuseDeadMentions = (
+      operation: 'post' | 'edit',
+      body: MessageBodyType,
+    ): Effect.Effect<void, UnresolvedMention> => {
+      const tokens = Arr.dedupe(
+        Arr.filter(mentionedNames(body), (name) => Option.isNone(mentionOf(name))),
+      )
+      return Arr.isEmptyReadonlyArray(tokens)
+        ? Effect.void
+        : Effect.fail(new UnresolvedMention({ operation, tokens, substrate: 'memory' }))
+    }
 
     // With no strategy wired, an explicit `acquire` is the only way to bind:
     // use whatever is already bound, and refuse otherwise.
@@ -400,55 +593,86 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
                         `memoryAdapter: already bound to ${b.acquiredName} — release() before acquiring ${name}`,
                       ),
                     ),
-              onNone: () =>
+              onNone: (): Effect.Effect<AcquiredIdentity, UnknownIdentity | IdentityError> =>
                 allowlist !== undefined && !allowlist.has(name)
                   ? Effect.fail(new UnknownIdentity({ name, substrate: 'memory' }))
-                  : // `name` is a validated non-empty BotName, so DisplayName
-                    // decode inside registerIdentity cannot fail — orDie the
-                    // (impossible) ParseError to keep acquire's typed channel
-                    // UnknownIdentity-only.
-                    registerIdentity(name, selfKind).pipe(
-                      Effect.orDie,
-                      Effect.flatMap(({ identity: ident, origin }) =>
-                        allocId(nextCredentialsId).pipe(
-                          Effect.flatMap((credId) => {
-                            const credentials: Credentials = {
-                              substrate: 'memory',
-                              identityId: ident.id,
-                              token: `memory-credential-${credId}`,
-                            }
-                            const acquired: Binding = {
-                              acquiredName: name,
-                              identity: ident,
-                              credentials,
-                              origin,
-                            }
-                            // Atomic check-then-set: claim the slot only if
-                            // still free, otherwise honour the winner. Loses
-                            // a counter id under contention, never the bind.
-                            return Ref.modify(
-                              bound,
-                              (current): [AcquiredIdentity, Option.Option<Binding>] =>
-                                Option.match(current, {
-                                  onNone: () => [acquired, Option.some(acquired)],
-                                  onSome: (winner) => [winner, current],
-                                }),
-                            ).pipe(
-                              Effect.tap((winner) =>
-                                winner === acquired
-                                  ? Ref.update(subscriptions, HashSet.add<SubKey>(MENTIONS_KEY))
-                                  : Effect.void,
-                              ),
-                            )
-                          }),
+                  : isCaseVariantOfExisting(name) || isNameOfHuman(name)
+                    ? Effect.fail(
+                        new IdentityError({
+                          operation: 'acquire',
+                          cause: new Error(
+                            `'${name}' is already held by, or differs only by case from, an existing member`,
+                          ),
+                          transient: false,
+                        }),
+                      )
+                    : // `name` is a validated non-empty BotName, so DisplayName
+                      // decode inside registerIdentity cannot fail — orDie the
+                      // (impossible) ParseError out of acquire's typed channel.
+                      registerIdentity(name, selfKind).pipe(
+                        Effect.orDie,
+                        Effect.flatMap(({ identity: ident, origin }) =>
+                          allocId(nextCredentialsId).pipe(
+                            Effect.flatMap((credId) => {
+                              const credentials: Credentials = {
+                                substrate: 'memory',
+                                identityId: ident.id,
+                                token: `memory-credential-${credId}`,
+                              }
+                              const acquired: Binding = {
+                                acquiredName: name,
+                                identity: ident,
+                                credentials,
+                                origin,
+                              }
+                              // Atomic check-then-set: claim the slot only if
+                              // still free, otherwise honour the winner. Loses
+                              // a counter id under contention, never the bind.
+                              return Ref.modify(
+                                bound,
+                                (current): [AcquiredIdentity, Option.Option<Binding>] =>
+                                  Option.match(current, {
+                                    onNone: () => [acquired, Option.some(acquired)],
+                                    onSome: (winner) => [winner, current],
+                                  }),
+                              ).pipe(
+                                Effect.tap((winner) =>
+                                  winner === acquired
+                                    ? Effect.all(
+                                        [
+                                          Ref.update(
+                                            subscriptions,
+                                            HashSet.add<SubKey>(MENTIONS_KEY),
+                                          ),
+                                          // As on Zulip, acquiring a deactivated agent's name reactivates it.
+                                          Effect.sync(() => deactivatedIdentities.delete(ident.id)),
+                                        ],
+                                        { discard: true },
+                                      )
+                                    : Effect.void,
+                                ),
+                              )
+                            }),
+                          ),
                         ),
                       ),
-                    ),
             }),
           ),
         ),
-      release: () => Ref.set(bound, Option.none()),
-      resolve: (name) => Effect.sync(() => Option.fromNullable(identitiesByName.get(name))),
+      release: (opts) =>
+        Ref.getAndSet(bound, Option.none()).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.void,
+              onSome: (b) =>
+                opts?.persistent === true
+                  ? Effect.void
+                  : // As on Zulip, an ephemeral release deactivates the agent.
+                    deactivateAgent(b.identity),
+            }),
+          ),
+        ),
+      resolve: (name) => Effect.sync(() => activeIdentityNamed(name)),
     }
 
     const buildRef = (
@@ -473,13 +697,33 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
                 channel,
                 thread: Option.some({
                   name: thread,
-                  resolved: false,
+                  resolved: isThreadResolved(channel.id, thread),
                   permalink: synthTopicPermalink(channel.id, thread),
                 }),
                 permalink: synthMessagePermalink(channel.id, messageId, thread),
               },
         ),
       )
+
+    const deliver = (
+      sender: Identity,
+      channelRef: ChannelRef,
+      body: MessageBodyType,
+      thread: PostOpts['thread'],
+    ): Effect.Effect<MessageRef> =>
+      Effect.gen(function* () {
+        const bucket = yield* bucketOf(channelRef)
+        const id = String(yield* allocId(nextMessageId))
+        const ref = yield* buildRef(id, channelRef, thread)
+        // The timestamp counter is a monotonic clock-derived value, always
+        // non-negative — orDie the (impossible) ParseError.
+        const ts = yield* decodeTimestamp(yield* allocId(nextTs)).pipe(Effect.orDie)
+        const stored: StoredMessage = { ref, sender, body, ts, mentions: mentionsIn(body) }
+        bucket.push(stored)
+        messagesById.set(id, stored)
+        yield* fanOutToSeats((seat) => seat.onPost(stored))
+        return ref
+      })
 
     const collectReactions = (messageId: string): ReadonlyArray<Reaction> => {
       const byEmoji = reactionsByMessage.get(messageId)
@@ -506,47 +750,47 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
 
     // Resolution is tracked as a status separate from the thread name (the name
     // never encodes it), surfaced on reads via ObservedThread.resolved.
-    // Idempotent — re-setting the same state is a no-op. Like edit, emits no
-    // InboundEvent. Mirrors the Zulip adapter's "no messages in the thread →
-    // PublisherError" so the contract holds across both substrates; an unknown
-    // channel likewise has no such thread and surfaces the same failure.
+    // Idempotent — re-setting the same state is a no-op. A flip posts into the
+    // thread the notice Zulip's Notification Bot posts. Mirrors the Zulip
+    // adapter's "no messages in the thread → PublisherError" so the contract
+    // holds across both substrates; an unknown channel likewise has no such
+    // thread and surfaces the same failure.
     const setThreadResolved = (
       channel: ChannelName,
       thread: ThreadName,
       resolved: boolean,
     ): Effect.Effect<void, BindError | PublisherError> => {
       const operation = resolved ? 'resolveThread' : 'unresolveThread'
-      return requireBound().pipe(
-        Effect.flatMap(() =>
-          resolveChannel(channel).pipe(
-            Effect.mapError((cause): PublisherError => new PublisherError({ operation, cause })),
-            Effect.flatMap((channelRef) => {
-              const bucket = messagesByChannel.get(channelRef.id) ?? []
-              const hasThread = bucket.some((m) =>
-                Option.exists(m.ref.thread, (t) => t.name === thread),
-              )
-              if (!hasThread) {
-                return Effect.fail(
-                  new PublisherError({
-                    operation,
-                    cause: new Error(
-                      `memoryAdapter: no thread '${thread}' in ${channelRef.name} to ${
-                        resolved ? 'resolve' : 'unresolve'
-                      }`,
-                    ),
-                  }),
-                )
-              }
-              const resolvedNames = resolvedThreadsByChannel.get(channelRef.id) ?? new Set<string>()
-              if (resolved) resolvedNames.add(thread)
-              else resolvedNames.delete(thread)
-              if (resolvedNames.size > 0) resolvedThreadsByChannel.set(channelRef.id, resolvedNames)
-              else resolvedThreadsByChannel.delete(channelRef.id)
-              return Effect.void
-            }),
-          ),
-        ),
-      )
+      return Effect.gen(function* () {
+        const self = yield* requireBound()
+        const channelRef = yield* resolveChannel(channel).pipe(
+          Effect.mapError((cause): PublisherError => new PublisherError({ operation, cause })),
+        )
+        const bucket = messagesByChannel.get(channelRef.id) ?? []
+        const hasThread = bucket.some((m) => Option.exists(m.ref.thread, (t) => t.name === thread))
+        if (!hasThread) {
+          return yield* new PublisherError({
+            operation,
+            cause: new Error(
+              `memoryAdapter: no thread '${thread}' in ${channelRef.name} to ${
+                resolved ? 'resolve' : 'unresolve'
+              }`,
+            ),
+          })
+        }
+        if (isThreadResolved(channelRef.id, thread) === resolved) return
+        const resolvedNames = resolvedThreadsByChannel.get(channelRef.id) ?? new Set<string>()
+        if (resolved) resolvedNames.add(thread)
+        else resolvedNames.delete(thread)
+        if (resolvedNames.size > 0) resolvedThreadsByChannel.set(channelRef.id, resolvedNames)
+        else resolvedThreadsByChannel.delete(channelRef.id)
+        // A known display name and id make the body non-empty — orDie the
+        // (impossible) ParseError.
+        const notice = yield* decodeMessageBody(
+          `@_**${self.name}|${self.id}** has marked this topic as ${resolved ? 'resolved' : 'unresolved'}.`,
+        ).pipe(Effect.orDie)
+        yield* deliver(notificationBot, channelRef, notice, thread)
+      })
     }
 
     // A real peer implementation, not a stub: the description round-trips
@@ -603,50 +847,42 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         Effect.gen(function* () {
           const self = yield* requireBound()
           const channelRef = yield* resolveChannel(channel)
-          const bucket = yield* bucketOf(channelRef)
-          const id = String(yield* allocId(nextMessageId))
-          const ref = yield* buildRef(id, channelRef, opts?.thread)
-          // The timestamp counter is a monotonic clock-derived value, always
-          // non-negative — orDie the (impossible) ParseError.
-          const ts = yield* decodeTimestamp(yield* allocId(nextTs)).pipe(Effect.orDie)
-          const stored: StoredMessage = {
-            ref,
-            sender: self,
-            body,
-            ts,
-            mentions: userMentions(opts?.mentions ?? []),
-          }
-          bucket.push(stored)
-          messagesById.set(id, stored)
-          yield* fanOutOnPost(stored)
-          return ref
+          yield* refuseDeadMentions('post', body)
+          const thread =
+            opts?.thread === undefined
+              ? undefined
+              : yield* decodeThreadName(opts.thread.slice(0, threadNameLimit)).pipe(Effect.orDie)
+          return yield* deliver(self, channelRef, body, thread)
         }),
       // Editing before acquire is an invariant violation (a defect via
       // requireBound's die); editing a message the store has never seen
       // is a non-fatal domain failure surfaced as a typed PublisherError,
       // mirroring the Zulip adapter's PATCH-on-unknown-id → PublisherError.
       edit: (message, body) =>
-        requireBound().pipe(
-          Effect.flatMap(() => {
-            const stored = messagesById.get(message.id)
-            if (stored === undefined) {
-              return Effect.fail(
-                new PublisherError({
-                  operation: 'edit',
-                  cause: new Error(`memoryAdapter: no message ${message.id} to edit`),
-                }),
-              )
-            }
-            const updated: StoredMessage = { ...stored, body }
-            messagesById.set(message.id, updated)
-            const bucket = messagesByChannel.get(stored.ref.channel.id)
-            if (bucket !== undefined) {
-              const idx = bucket.indexOf(stored)
-              if (idx !== -1) bucket[idx] = updated
-            }
-            return Effect.void
-          }),
-        ),
+        Effect.gen(function* () {
+          const self = yield* requireBound()
+          const stored = messagesById.get(message.id)
+          if (stored === undefined) {
+            return yield* new PublisherError({
+              operation: 'edit',
+              cause: new Error(`memoryAdapter: no message ${message.id} to edit`),
+            })
+          }
+          if (stored.sender.id !== self.id) {
+            return yield* new MessageEditRefused({
+              reason: 'not-original-sender',
+              cause: new Error(`memoryAdapter: message ${message.id} was sent by someone else`),
+            })
+          }
+          yield* refuseDeadMentions('edit', body)
+          const updated: StoredMessage = { ...stored, body, mentions: mentionsIn(body) }
+          messagesById.set(message.id, updated)
+          const bucket = messagesByChannel.get(stored.ref.channel.id)
+          if (bucket !== undefined) {
+            const idx = bucket.indexOf(stored)
+            if (idx !== -1) bucket[idx] = updated
+          }
+        }),
       // The in-memory store has no realm-wide editing switch to turn off, so
       // editing is always available — the honest answer for a substrate whose
       // only edit refusals are per-message.
@@ -658,7 +894,9 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
             const reactors = byEmoji.get(emoji) ?? new Set<string>()
             reactors.add(self.id)
             byEmoji.set(emoji, reactors)
-            return fanOutOnReaction(message.id, 'reaction-added', emoji, self)
+            return fanOutToSeats((seat) =>
+              seat.onReaction(message.id, 'reaction-added', emoji, self),
+            )
           }),
         ),
       unreact: (message, emoji) =>
@@ -670,7 +908,9 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
               reactors.delete(self.id)
               if (reactors.size === 0) byEmoji?.delete(emoji)
             }
-            return fanOutOnReaction(message.id, 'reaction-removed', emoji, self)
+            return fanOutToSeats((seat) =>
+              seat.onReaction(message.id, 'reaction-removed', emoji, self),
+            )
           }),
         ),
       resolveThread: (channel, thread) => setThreadResolved(channel, thread, true),
@@ -700,6 +940,13 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         return threadSubKey(target.channel, target.thread)
       return channelSubKey(target)
     }
+
+    // Any narrow over a channel holds the realm's one subscription row for it.
+    const holdsChannel = (subs: HashSet.HashSet<SubKey>, channelName: ChannelName): boolean =>
+      HashSet.some(
+        subs,
+        (key) => Predicate.hasProperty(key, 'channelName') && key.channelName === channelName,
+      )
 
     const subscriptions = yield* Ref.make(HashSet.empty<SubKey>())
     const seenTopicsByChannel = new Map<string, Set<string>>()
@@ -737,7 +984,10 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
           }
           if (HashSet.has(subs, MENTIONS_KEY) && Option.isSome(current)) {
             const me = current.value.identity
-            if (mentionsIdentity(stored.mentions, me.id)) return true
+            if (
+              notifiesIdentity(stored.mentions, me.id, holdsChannel(subs, stored.ref.channel.name))
+            )
+              return true
           }
           return false
         }),
@@ -794,6 +1044,8 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         ),
       )
     }
+
+    yield* Effect.sync(() => seats.add({ onPost: fanOutOnPost, onReaction: fanOutOnReaction }))
 
     const inbox: MessageInbox = {
       // Declaring interest BINDS, in step with the Zulip adapter (comms-g5zh.2
@@ -874,8 +1126,8 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       // A read, so it never binds — the state a read touches belongs to
       // whoever wrote it. Reaching here unbound stays a caller defect.
       replay: (since: TimestampType) =>
-        readBound().pipe(
-          Effect.map((me) => {
+        Effect.all([readBound(), Ref.get(subscriptions)]).pipe(
+          Effect.map(([me, subs]) => {
             const ordered: StoredMessage[] = []
             for (const bucket of messagesByChannel.values()) {
               for (const stored of bucket) {
@@ -894,7 +1146,13 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
                 collectReactions(stored.ref.id),
               )
               out.push({ kind: 'message-posted', message: portMessage })
-              if (mentionsIdentity(stored.mentions, me.id)) {
+              if (
+                notifiesIdentity(
+                  stored.mentions,
+                  me.id,
+                  holdsChannel(subs, stored.ref.channel.name),
+                )
+              ) {
                 out.push({
                   kind: 'mention-received',
                   message: portMessage,
@@ -910,7 +1168,8 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     const applyLimit = (
       messages: ReadonlyArray<StoredMessage>,
       limit: number | undefined,
-    ): ReadonlyArray<StoredMessage> => (limit === undefined ? messages : messages.slice(0, limit))
+    ): ReadonlyArray<StoredMessage> =>
+      limit === undefined ? messages : Arr.takeRight(messages, limit)
 
     const projectStored = (stored: StoredMessage): Message =>
       toMessage(withThreadResolution(stored), collectReactions(stored.ref.id))
@@ -992,17 +1251,23 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         }),
     }
 
+    const activeMembersOfKind = (kind: IdentityKind): ReadonlyArray<Identity> =>
+      [...identitiesById.values()].filter(
+        (i) => i.kind === kind && !deactivatedIdentities.has(i.id),
+      )
+
     const directory: Directory = {
-      listAgents: () =>
-        Effect.succeed([...identitiesById.values()].filter((i) => i.kind === 'agent')),
-      listHumans: () =>
-        Effect.succeed([...identitiesById.values()].filter((i) => i.kind === 'human')),
+      listAgents: () => Effect.succeed(activeMembersOfKind('agent')),
+      listHumans: () => Effect.succeed(activeMembersOfKind('human')),
       listChannels: () => Effect.succeed([...channelsById.values()]),
       channelDescription: (channel) =>
         resolveChannel(channel).pipe(
           Effect.map((channelRef) => Option.fromNullable(descriptionsByChannel.get(channelRef.id))),
         ),
-      presence: (target) => Effect.succeed(presenceByIdentity.get(target.id) ?? 'offline'),
+      presence: (target) =>
+        Effect.succeed(
+          target.kind === 'agent' ? 'unknown' : (presenceByIdentity.get(target.id) ?? 'offline'),
+        ),
     }
 
     // seed* expose the registration Effects directly: a malformed name
@@ -1013,6 +1278,17 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       registerIdentity(name, 'agent').pipe(Effect.map((registered) => registered.identity))
     const seedHuman = (name: string): Effect.Effect<Identity, ParseResult.ParseError> =>
       registerIdentity(name, 'human').pipe(Effect.map((registered) => registered.identity))
+    const deactivateAgent = (agent: Identity): Effect.Effect<void> =>
+      Effect.sync(() => {
+        deactivatedIdentities.add(agent.id)
+      })
+    const setPresence = (
+      human: Identity,
+      presence: Exclude<Presence, 'unknown'>,
+    ): Effect.Effect<void> =>
+      Effect.sync(() => {
+        presenceByIdentity.set(human.id, presence)
+      })
 
     // Authored by `peer`, not the bound self: mirrors publisher.post's store +
     // fan-out path but stamps `sender: peer` and skips requireBound. The
@@ -1024,24 +1300,9 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       body: MessageBodyType,
       opts?: PostOpts,
     ): Effect.Effect<MessageRef, UnknownChannel> =>
-      Effect.gen(function* () {
-        const channelRef = yield* resolveChannel(channel)
-        const bucket = yield* bucketOf(channelRef)
-        const id = String(yield* allocId(nextMessageId))
-        const ref = yield* buildRef(id, channelRef, opts?.thread)
-        const ts = yield* decodeTimestamp(yield* allocId(nextTs)).pipe(Effect.orDie)
-        const stored: StoredMessage = {
-          ref,
-          sender: peer,
-          body,
-          ts,
-          mentions: userMentions(opts?.mentions ?? []),
-        }
-        bucket.push(stored)
-        messagesById.set(id, stored)
-        yield* fanOutOnPost(stored)
-        return ref
-      })
+      resolveChannel(channel).pipe(
+        Effect.flatMap((channelRef) => deliver(peer, channelRef, body, opts?.thread)),
+      )
 
     return {
       // Memory's `ts` is a monotonic counter, so any two posts already differ —
@@ -1055,6 +1316,9 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       seedChannel,
       seedAgent,
       seedHuman,
+      deactivateAgent,
+      setPresence,
       peerPost,
+      newSeat: (seatConfig = {}) => memorySeat(realm, seatConfig),
     }
   })

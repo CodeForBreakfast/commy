@@ -145,7 +145,7 @@ const ATTACHMENT_DEP_ADAPTER_MEMBER: Readonly<Record<string, string>> = {
 const G5ZH3_MATCHER_PENDING = [] as const
 
 /**
- * Every tool that accepts a host-supplied `session_id`. ELEVEN, the same eleven
+ * Every tool that accepts a host-supplied `session_id`. TWELVE, the same twelve
  * the PreToolUse matcher stamps today — but the two sets answer different
  * questions and are allowed to diverge again: `subscribe` and `unsubscribe`
  * are here for a non-CC ephemeral host that supplies the UUID itself, and a
@@ -158,6 +158,7 @@ const G5ZH3_MATCHER_PENDING = [] as const
 const SESSION_ID_RECEIVING_TOOLS = [
   'current_identity',
   'edit_message',
+  'list_subscriptions',
   'post',
   'react',
   'resolve_thread',
@@ -330,7 +331,7 @@ test('the set of adapter declarations reaching boundHttp is the pinned one', asy
 // them reads "no tool violates this", which a scan that matches nothing
 // satisfies trivially — so assert first that the scan finds the set it is
 // supposed to find.
-test('the tools accepting a host-supplied session_id are exactly the pinned eleven', async () => {
+test('the tools accepting a host-supplied session_id are exactly the pinned twelve', async () => {
   const facts = toolFactsFromToolsSource(await toolsSource())
   const receiving = [...facts]
     .filter(([, f]) => f.receivesSessionId)

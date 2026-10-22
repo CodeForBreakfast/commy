@@ -111,6 +111,18 @@ const requestBodyInit = (body: HttpBody.HttpBody): string | Uint8Array | FormDat
   }
 }
 
+/**
+ * The web `Request` `FetchHttpClient` would put on the wire for `request`, so
+ * a fake can read its body — form-urlencoded or multipart — the way a server
+ * would.
+ */
+export const webRequestOf = (request: HttpClientRequest.HttpClientRequest, url: URL): Request =>
+  new Request(url.href, {
+    method: request.method,
+    headers: { ...request.headers },
+    body: requestBodyInit(request.body),
+  })
+
 const responseBodyInit = (response: StubBody): string | Uint8Array => {
   if (Predicate.isUint8Array(response.body)) return response.body
   if (Predicate.isString(response.body)) return response.body
@@ -163,11 +175,7 @@ export const makeStubHttpClient: Effect.Effect<StubHttpClient> = Effect.gen(func
 
   const capture = (request: HttpClientRequest.HttpClientRequest, url: URL): Effect.Effect<void> =>
     Effect.promise(async () => {
-      const webRequest = new Request(url.href, {
-        method: request.method,
-        headers: { ...request.headers },
-        body: requestBodyInit(request.body),
-      })
+      const webRequest = webRequestOf(request, url)
       const body = await webRequest.text()
       return {
         method: request.method,

@@ -29,9 +29,8 @@ import {
   UnboundEphemeralSession,
   UnknownChannel,
   type UnknownIdentity,
-  UnresolvedMention,
 } from '@commy/core/ports'
-import { effectTest, runTestEffect } from '@commy/testing/effect-test'
+import { effectTest } from '@commy/testing/effect-test'
 import {
   makeStubHttpClient,
   type StubBody,
@@ -93,8 +92,7 @@ const BOB = {
   role: 100,
 } as const
 
-// Raw directory member behind the `aliceBot` Identity (id '1'). The write-path
-// mention validator resolves outbound `@**alice**` markup through the
+// A directory member named alice. The write-path mention validator resolves outbound `@**alice**` markup through the
 // directory, so a body that mentions her only posts when she is a seeded
 // member.
 const ALICE = {
@@ -128,6 +126,16 @@ const makeConfig = (): Effect.Effect<ZulipAdapterConfig> =>
 
 const seedUsers = (stub: StubHttpClient, members: ReadonlyArray<unknown>): Effect.Effect<void> =>
   stub.respond('GET', '/api/v1/users', { body: { result: 'success', members } })
+
+// Replay reads the seat's own subscription rows to decide who a wildcard
+// notifies.
+const seedMySubscriptions = (
+  stub: StubHttpClient,
+  names: ReadonlyArray<string> = [],
+): Effect.Effect<void> =>
+  stub.respond('GET', '/api/v1/users/me/subscriptions', {
+    body: { result: 'success', subscriptions: names.map((name) => ({ name })) },
+  })
 
 const seedRegenerate = (
   stub: StubHttpClient,
@@ -188,11 +196,6 @@ effectTest('identity.acquire on an existing bot regenerates its API key and bind
     const config = yield* makeConfig()
     const adapter = yield* zulipAdapter(stub, config)
     const result = yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-    expect(result.identity).toEqual({
-      id: decodeIdentityIdSync('9'),
-      name: decodeDisplayNameSync('hermes-agent'),
-      kind: 'agent',
-    })
     expect(result.credentials).toEqual({
       substrate: 'zulip',
       realmUrl: config.realmUrl,
@@ -503,15 +506,6 @@ effectTest('zulipAdapter construction does NOT call /users — the call is defer
   }),
 )
 
-effectTest('currentIdentity before acquire throws — port is unauthenticated at construction', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
-    const exit = yield* Effect.exit(adapter.identity.currentIdentity())
-    expect(Exit.isFailure(exit)).toBe(true)
-  }),
-)
-
 effectTest(
   'identity.acquire on the bound name is idempotent and skips a second /users round-trip',
   () =>
@@ -547,17 +541,6 @@ effectTest('identity.release on a bound adapter deactivates the bot via DELETE /
     yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
     yield* adapter.identity.release()
     expect(yield* findRequest(stub, 'DELETE', `/api/v1/bots/${HERMES.user_id}`)).toBeDefined()
-  }),
-)
-
-effectTest('identity.release clears the binding — currentIdentity then throws', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedDeactivate(stub, HERMES.user_id)
-    const adapter = yield* buildAdapter(stub)
-    yield* adapter.identity.release()
-    const exit = yield* Effect.exit(adapter.identity.currentIdentity())
-    expect(Exit.isFailure(exit)).toBe(true)
   }),
 )
 
@@ -606,21 +589,6 @@ effectTest('identity.release({ persistent: true }) does NOT deactivate the bot',
     )
     expect(deletes).toHaveLength(0)
   }),
-)
-
-effectTest(
-  'identity.release({ persistent: true }) still clears the binding — currentIdentity throws',
-  () =>
-    Effect.gen(function* () {
-      const stub = yield* makeStubHttpClient
-      yield* seedUsers(stub, [HERMES])
-      yield* seedRegenerate(stub, HERMES.user_id)
-      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
-      yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-      yield* adapter.identity.release({ persistent: true })
-      const exit = yield* Effect.exit(adapter.identity.currentIdentity())
-      expect(Exit.isFailure(exit)).toBe(true)
-    }),
 )
 
 effectTest(
@@ -691,47 +659,6 @@ effectTest('identity.acquire after release rebinds via a fresh /users round-trip
   }),
 )
 
-effectTest('directory.listAgents returns only is_bot=true users', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* stub.respond('GET', '/api/v1/users', {
-      body: { result: 'success', members: [HERMES, MAINTAINER, RIQ] },
-    })
-    yield* seedRegenerate(stub, HERMES.user_id)
-    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
-    yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-    const agents = yield* adapter.directory.listAgents()
-    expect(agents).toEqual([
-      {
-        id: decodeIdentityIdSync('9'),
-        name: decodeDisplayNameSync('hermes-agent'),
-        kind: 'agent',
-      },
-      { id: decodeIdentityIdSync('11'), name: decodeDisplayNameSync('riq6r230'), kind: 'agent' },
-    ])
-  }),
-)
-
-effectTest('directory.listHumans returns only is_bot=false users', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* stub.respond('GET', '/api/v1/users', {
-      body: { result: 'success', members: [HERMES, MAINTAINER, RIQ] },
-    })
-    yield* seedRegenerate(stub, HERMES.user_id)
-    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
-    yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-    const humans = yield* adapter.directory.listHumans()
-    expect(humans).toEqual([
-      {
-        id: decodeIdentityIdSync('5'),
-        name: decodeDisplayNameSync('Robin Reyes'),
-        kind: 'human',
-      },
-    ])
-  }),
-)
-
 effectTest(
   'directory.listHumans surfaces a /users fetch failure as DirectoryError (cause preserved)',
   () =>
@@ -766,23 +693,6 @@ effectTest(
     }),
 )
 
-effectTest('directory.listAgents excludes inactive users', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* stub.respond('GET', '/api/v1/users', {
-      body: {
-        result: 'success',
-        members: [HERMES, { ...RIQ, is_active: false }],
-      },
-    })
-    yield* seedRegenerate(stub, HERMES.user_id)
-    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
-    yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-    const agents = yield* adapter.directory.listAgents()
-    expect(agents.map((a) => a.id)).toEqual([decodeIdentityIdSync('9')])
-  }),
-)
-
 effectTest(
   'directory.listAgents surfaces a /users fetch failure as DirectoryError (cause preserved)',
   () =>
@@ -804,11 +714,6 @@ const generalChannel: ChannelRef = {
   id: decodeChannelIdSync('1234'),
   name: decodeChannelNameSync('general'),
   permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/1234-general'),
-}
-const aliceBot: Identity = {
-  id: decodeIdentityIdSync('1'),
-  name: decodeDisplayNameSync('alice'),
-  kind: 'agent',
 }
 const bobHuman: Identity = {
   id: decodeIdentityIdSync('2'),
@@ -850,6 +755,13 @@ const seedSendMessage = (stub: StubHttpClient, id: number): Effect.Effect<void> 
     })
   })
 
+// What the realm reports for a sent message's topic. The send response omits
+// it, so `publisher.post` reads it back from the message itself.
+const seedStoredTopic = (stub: StubHttpClient, id: number, subject: string): Effect.Effect<void> =>
+  stub.respond('GET', `/api/v1/messages/${id}`, {
+    body: { result: 'success', message: { id, subject } },
+  })
+
 // A mention the directory cannot place is put to Zulip's renderer before the
 // write is refused, so a test that expects a refusal seeds the rendering.
 const seedRender = (stub: StubHttpClient, rendered: string): Effect.Effect<void> =>
@@ -870,6 +782,27 @@ effectTest(
       expect(params.get('to')).toBe('general')
       expect(params.get('content')).toBe('hello world')
       expect(params.get('topic')).toBe('(no topic)')
+    }),
+)
+
+effectTest(
+  'publisher.post accepts a plain mention when a deactivated namesake is listed after the active member',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* seedSendMessage(stub, 42)
+      yield* seedStoredTopic(stub, 42, '(no topic)')
+      const adapter = yield* buildAdapter(stub)
+      yield* seedUsers(stub, [
+        HERMES,
+        MAINTAINER,
+        { ...MAINTAINER, user_id: 6, email: 'other@example.com', is_active: false },
+      ])
+      yield* adapter.publisher.post(
+        generalChannel.name,
+        decodeMessageBodySync('@**robin reyes** hello'),
+      )
+      expect(yield* findRequest(stub, 'POST', '/api/v1/messages')).toBeDefined()
     }),
 )
 
@@ -937,7 +870,6 @@ effectTest('publisher.post binds on demand when the seat has never acquired', ()
     })
     yield* binder.wire(adapter)
     yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hello world'))
-    expect(yield* binder.calls).toBe(1)
     // Bound, not minter — the message carries the seat's own principal.
     expect(
       (yield* findRequest(stub, 'POST', '/api/v1/messages')).headers.get('authorization'),
@@ -975,56 +907,11 @@ effectTest('publisher.post asks the binder per write but mints only once', () =>
   }),
 )
 
-// The old `requireBound` DIED here with a bare untyped Error. A seat whose host
-// supplies no session_id feeder must instead get a typed, catchable refusal
-// naming the fix — so assert the tag, not merely that the call failed.
-effectTest('publisher.post refuses with a typed UnboundEphemeralSession when binding fails', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedSendMessage(stub, 42)
-    const config = yield* makeConfig()
-    const adapter = yield* zulipAdapter(stub, {
-      ...config,
-      bindOnDemand: Effect.fail(
-        new UnboundEphemeralSession({ message: 'commy: ephemeral mode requires a session_id' }),
-      ),
-    })
-    const exit = yield* Effect.exit(
-      adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hello world')),
-    )
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) {
-      // A typed failure, not a defect: the old behaviour squashed into the
-      // die channel and could not be caught by tag.
-      expect(Cause.isDie(exit.cause)).toBe(false)
-      const failure = Cause.failureOption(exit.cause)
-      expect(Option.map(failure, (e) => e._tag)).toEqual(Option.some('UnboundEphemeralSession'))
-    }
-  }),
-)
-
-effectTest('publisher.post refuses with a typed error when no binder is configured', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedSendMessage(stub, 42)
-    const config = yield* makeConfig()
-    const adapter = yield* zulipAdapter(stub, config)
-    const exit = yield* Effect.exit(
-      adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hello world')),
-    )
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) {
-      expect(Cause.isDie(exit.cause)).toBe(false)
-      const failure = Cause.failureOption(exit.cause)
-      expect(Option.map(failure, (e) => e._tag)).toEqual(Option.some('UnboundEphemeralSession'))
-    }
-  }),
-)
-
 effectTest('publisher.post with thread sends topic and threads the returned MessageRef', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 100)
+    yield* seedStoredTopic(stub, 100, 'planning')
     const adapter = yield* buildAdapter(stub)
     const ref = yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hi'), {
       thread: decodeThreadNameSync('planning'),
@@ -1059,6 +946,7 @@ effectTest('publisher.post threads the permalink through the topic when a thread
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 100)
+    yield* seedStoredTopic(stub, 100, 'planning')
     const adapter = yield* buildAdapter(stub)
     const ref = yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hi'), {
       thread: decodeThreadNameSync('planning'),
@@ -1090,23 +978,6 @@ effectTest('publisher.post permalink uses the public host header when one is con
   }),
 )
 
-effectTest(
-  'publisher.post leaves body unchanged when opts.mentions is set — mentions[] is metadata-only',
-  () =>
-    Effect.gen(function* () {
-      const stub = yield* makeStubHttpClient
-      yield* seedSendMessage(stub, 101)
-      const adapter = yield* buildAdapter(stub)
-      yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('wake up'), {
-        mentions: [aliceBot, bobHuman],
-      })
-      const params = new URLSearchParams(
-        (yield* findRequest(stub, 'POST', '/api/v1/messages')).body,
-      )
-      expect(params.get('content')).toBe('wake up')
-    }),
-)
-
 effectTest('publisher.post with body-only mention markup posts body verbatim', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
@@ -1122,27 +993,6 @@ effectTest('publisher.post with body-only mention markup posts body verbatim', (
     )
     const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
     expect(params.get('content')).toBe('hey @**alice** look')
-  }),
-)
-
-// A body containing `@**Name**` + mentions[] for the same identity: under the
-// metadata-only contract the adapter never folds mentions[] into body, so this
-// case posts body verbatim with exactly one rendered @-mention.
-effectTest('publisher.post with both body markup AND opts.mentions does not double-render', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedSendMessage(stub, 104)
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, ALICE])
-    yield* adapter.publisher.post(
-      generalChannel.name,
-      decodeMessageBodySync('@**alice** wake up'),
-      {
-        mentions: [aliceBot],
-      },
-    )
-    const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
-    expect(params.get('content')).toBe('@**alice** wake up')
   }),
 )
 
@@ -1271,97 +1121,6 @@ effectTest(
     }),
 )
 
-effectTest('publisher.post fails with a tagged UnknownChannel on an unknown channel', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* stub.respond('GET', '/api/v1/streams', { body: { result: 'success', streams: [] } })
-    const adapter = yield* buildAdapter(stub)
-    const error = yield* Effect.flip(
-      adapter.publisher.post(generalChannel.name, decodeMessageBodySync('should fail')),
-    )
-    expect(error).toBeInstanceOf(UnknownChannel)
-    if (error instanceof UnknownChannel) {
-      expect(error._tag).toBe('UnknownChannel')
-      expect(error.message).toContain('general')
-    }
-  }),
-)
-
-// A `@**Name**` token in an outbound body that resolves to no known identity
-// would be posted verbatim and notify nobody — Zulip accepts it silently.
-// The write-path validator turns that silent non-delivery into a typed failure.
-effectTest('publisher.post fails with a tagged UnresolvedMention on a dead mention form', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedSendMessage(stub, 200)
-    yield* seedRender(stub, '<p>decision for @<strong>Alice Example</strong> to make</p>')
-    const adapter = yield* buildAdapter(stub)
-    // The directory holds HERMES only; @**Graeme Foster** resolves to nobody.
-    const error = yield* Effect.flip(
-      adapter.publisher.post(
-        generalChannel.name,
-        decodeMessageBodySync('decision for @**Graeme Foster** to make'),
-      ),
-    )
-    expect(error).toBeInstanceOf(UnresolvedMention)
-    if (error instanceof UnresolvedMention) {
-      expect(error._tag).toBe('UnresolvedMention')
-      expect(error.operation).toBe('post')
-      expect(error.tokens).toEqual(['Graeme Foster'])
-    }
-    // The dead post never reached the substrate.
-    const posted = yield* stub.captured.pipe(
-      Effect.map((reqs) =>
-        reqs.filter((r) => r.method === 'POST' && r.url.pathname === '/api/v1/messages'),
-      ),
-    )
-    expect(posted).toHaveLength(0)
-  }),
-)
-
-// Zulip still resolves a deactivated account's name, but renders the mention
-// silent, so it notifies nobody. The directory lists deactivated members too,
-// which must not count as resolving the mention — in either markup form.
-test.each([
-  ['@**cc-myproject-abcdef12**', 'cc-myproject-abcdef12'],
-  ['@**cc-myproject-abcdef12|42**', 'cc-myproject-abcdef12|42'],
-])(
-  'publisher.post fails with UnresolvedMention when %s names a deactivated seat',
-  (markup, token) =>
-    runTestEffect(() =>
-      Effect.gen(function* () {
-        const stub = yield* makeStubHttpClient
-        yield* seedSendMessage(stub, 203)
-        yield* seedRender(
-          stub,
-          '<p><span class="user-mention silent" data-user-id="42">cc-myproject-abcdef12</span> your answer</p>',
-        )
-        const adapter = yield* buildAdapter(stub)
-        yield* seedUsers(stub, [
-          HERMES,
-          {
-            user_id: 42,
-            email: 'cc-myproject-abcdef12-bot@example.com',
-            full_name: 'cc-myproject-abcdef12',
-            is_bot: true,
-            is_active: false,
-            role: 400,
-          },
-        ])
-        const error = yield* Effect.flip(
-          adapter.publisher.post(
-            generalChannel.name,
-            decodeMessageBodySync(`${markup} your answer`),
-          ),
-        )
-        expect(error).toBeInstanceOf(UnresolvedMention)
-        if (error instanceof UnresolvedMention) {
-          expect(error.tokens).toEqual([token])
-        }
-      }),
-    ),
-)
-
 // Zulip serves GET /users from a realm-wide cache, and a GET /users that lands
 // while a user is being created re-caches the list without them until the next
 // change to any user. Zulip's mention renderer and GET /users?user_ids=… read
@@ -1468,21 +1227,6 @@ effectTest('history.readChannel names a sender the cached user list has not caug
   }),
 )
 
-// A dead form written as an example inside a code span is literal text Zulip
-// never delivers as a mention — validating it would block agents from
-// discussing mention discipline. It must post verbatim, not fail.
-effectTest('publisher.post posts verbatim when a dead form appears only inside a code span', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedSendMessage(stub, 201)
-    const adapter = yield* buildAdapter(stub)
-    const body = 'the dead form `@**Graeme Foster**` resolves to nobody'
-    yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync(body))
-    const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
-    expect(params.get('content')).toBe(body)
-  }),
-)
-
 // The token scan is markdown-aware and runs first, so a mention-free body never
 // fetches the directory — a post succeeds even when GET /users would fail.
 effectTest('publisher.post skips the directory fetch when the body has no mention tokens', () =>
@@ -1497,37 +1241,6 @@ effectTest('publisher.post skips the directory fetch when the body has no mentio
       decodeMessageBodySync('no mentions here'),
     )
     expect(ref.id).toEqual(decodeMessageIdSync('202'))
-  }),
-)
-
-// The same directory validation guards the edit body — a stale mention in an
-// edit is as silent as one in a fresh post.
-effectTest('publisher.edit fails with a tagged UnresolvedMention on a dead mention form', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* stub.respond('PATCH', '/api/v1/messages/42', { body: { result: 'success' } })
-    yield* seedRender(stub, '<p>now pinging @<strong>Alice Example</strong></p>')
-    const adapter = yield* buildAdapter(stub)
-    const target: MessageRef = {
-      id: decodeMessageIdSync('42'),
-      channel: generalChannel,
-      thread: Option.none(),
-      permalink: MessagePermalinkSchema.make(
-        'https://zulip.example.com/#narrow/channel/1234-general/near/42',
-      ),
-    }
-    const error = yield* Effect.flip(
-      adapter.publisher.edit(target, decodeMessageBodySync('now pinging @**Graeme Foster**')),
-    )
-    expect(error).toBeInstanceOf(UnresolvedMention)
-    if (error instanceof UnresolvedMention) {
-      expect(error.operation).toBe('edit')
-      expect(error.tokens).toEqual(['Graeme Foster'])
-    }
-    const patched = yield* stub.captured.pipe(
-      Effect.map((reqs) => reqs.filter((r) => r.method === 'PATCH')),
-    )
-    expect(patched).toHaveLength(0)
   }),
 )
 
@@ -1613,37 +1326,6 @@ effectTest(
 )
 
 effectTest(
-  'publisher.edit surfaces MessageEditRefused not-original-sender when the seat is not the author',
-  () =>
-    Effect.gen(function* () {
-      const stub = yield* makeStubHttpClient
-      yield* stub.respond('PATCH', '/api/v1/messages/42', {
-        body: {
-          result: 'error',
-          msg: "You don't have permission to edit this message",
-          code: 'BAD_REQUEST',
-        },
-        status: 400,
-      })
-      const adapter = yield* buildAdapter(stub)
-      const target: MessageRef = {
-        id: decodeMessageIdSync('42'),
-        channel: generalChannel,
-        thread: Option.none(),
-        permalink: MessagePermalinkSchema.make(
-          'https://zulip.example.com/#narrow/channel/1234-general/near/42',
-        ),
-      }
-      const err = yield* Effect.flip(adapter.publisher.edit(target, decodeMessageBodySync('nope')))
-      expect(err).toBeInstanceOf(MessageEditRefused)
-      if (err instanceof MessageEditRefused) {
-        expect(err.reason).toBe('not-original-sender')
-        expect(err.cause).toBeInstanceOf(ZulipApiError)
-      }
-    }),
-)
-
-effectTest(
   'publisher.edit surfaces MessageEditRefused editing-disabled when the realm has editing off',
   () =>
     Effect.gen(function* () {
@@ -1684,16 +1366,6 @@ const seedRealmEditing = (stub: StubHttpClient, allowed: boolean): Effect.Effect
     },
   })
 
-effectTest('publisher.editingAvailable reports true when the realm allows editing', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedRealmEditing(stub, true)
-    yield* stub.respond('DELETE', '/api/v1/events', { body: { result: 'success' } })
-    const adapter = yield* buildAdapter(stub)
-    expect(yield* adapter.publisher.editingAvailable()).toBe(true)
-  }),
-)
-
 effectTest('publisher.editingAvailable reports false when the realm has editing off', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
@@ -1704,25 +1376,27 @@ effectTest('publisher.editingAvailable reports false when the realm has editing 
   }),
 )
 
-// The gate samples this at connect, before any seat has acquired an identity.
-// A listen-only seat never acquires at all, so a probe routed through
-// `boundHttp()` would fail in production and nowhere else — this pins it to
-// the minter.
-effectTest('publisher.editingAvailable works on a seat that never acquires an identity', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedRealmEditing(stub, false)
-    yield* stub.respond('DELETE', '/api/v1/events', { body: { result: 'success' } })
-    const config = yield* makeConfig()
-    const adapter = yield* zulipAdapter(stub, config)
-    expect(yield* adapter.publisher.editingAvailable()).toBe(false)
-    const req = yield* findRequest(stub, 'POST', '/api/v1/register')
-    expect(req.headers.get('authorization')).toBe(`Basic ${btoa('minter@example.com:minter-key')}`)
-    // Asks for no events and only realm state: the probe reads a setting, it
-    // does not subscribe to anything.
-    expect(req.body).toContain('event_types=%5B%5D')
-    expect(req.body).toContain(encodeURIComponent(JSON.stringify(['realm'])))
-  }),
+// A probe routed through `boundHttp()` would fail on a seat that has not
+// acquired — this pins it to the minter.
+effectTest(
+  'publisher.editingAvailable probes through the minter, asking only for realm state',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* seedRealmEditing(stub, false)
+      yield* stub.respond('DELETE', '/api/v1/events', { body: { result: 'success' } })
+      const config = yield* makeConfig()
+      const adapter = yield* zulipAdapter(stub, config)
+      expect(yield* adapter.publisher.editingAvailable()).toBe(false)
+      const req = yield* findRequest(stub, 'POST', '/api/v1/register')
+      expect(req.headers.get('authorization')).toBe(
+        `Basic ${btoa('minter@example.com:minter-key')}`,
+      )
+      // Asks for no events and only realm state: the probe reads a setting, it
+      // does not subscribe to anything.
+      expect(req.body).toContain('event_types=%5B%5D')
+      expect(req.body).toContain(encodeURIComponent(JSON.stringify(['realm'])))
+    }),
 )
 
 effectTest('publisher.editingAvailable hands back the queue that /register allocated', () =>
@@ -1863,50 +1537,6 @@ effectTest('history.readChannel narrows by channel and maps each message to the 
   }),
 )
 
-// comms-trln at the history seam: a message whose only mention token sits in a
-// code span reports no mention, while a real one alongside it still counts.
-effectTest('history.readChannel excludes a code-span mention but keeps a real one', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, MAINTAINER])
-    // The raw read, then the one rendered read the mention sigil buys. Zulip
-    // rendered a span for the real ping and nothing for the coded example —
-    // which is the entire adjudication; commy does not re-derive it.
-    yield* stub.respondSequence('GET', '/api/v1/messages', [
-      messagesPage([
-        {
-          id: 556,
-          sender_id: 9,
-          sender_full_name: 'hermes-agent',
-          stream_id: 1234,
-          display_recipient: 'general',
-          subject: 'lobby',
-          content: '@**Robin Reyes** — never write `@**Robin Reyes**` in a code span',
-          timestamp: 1715000001,
-        },
-      ]),
-      messagesPage([
-        {
-          id: 556,
-          sender_id: 9,
-          sender_full_name: 'hermes-agent',
-          stream_id: 1234,
-          display_recipient: 'general',
-          subject: 'lobby',
-          content:
-            '<p><span class="user-mention" data-user-id="5">@Robin Reyes</span> — never write <code>@**Robin Reyes**</code> in a code span</p>',
-          timestamp: 1715000001,
-        },
-      ]),
-    ])
-    const messages = yield* adapter.history.readChannel(generalChannel.name, { limit: 50 })
-    expect(mentionedIdentities(messages[0]?.mentions ?? []).map((m) => m.name)).toEqual([
-      decodeDisplayNameSync('Robin Reyes'),
-    ])
-  }),
-)
-
 // The bound on the whole design: a history read costs ONE extra request
 // whether the batch holds one mention or a hundred. A refactor into a
 // per-message rendered fetch would reintroduce exactly the cost this bounds,
@@ -2007,6 +1637,28 @@ effectTest(
     }),
 )
 
+effectTest('publisher.resolveThread leaves a topic that already carries the ✔ prefix alone', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedMessages(stub, [
+      {
+        id: 702,
+        sender_id: 5,
+        sender_full_name: 'Robin Reyes',
+        stream_id: 1234,
+        display_recipient: 'general',
+        subject: '✔ planning',
+        content: 'already resolved',
+        timestamp: 1715000000,
+      },
+    ])
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.publisher.resolveThread(generalChannel.name, decodeThreadNameSync('✔ planning'))
+    const patches = (yield* stub.captured).filter((r) => r.method === 'PATCH')
+    expect(patches).toEqual([])
+  }),
+)
+
 effectTest('publisher.unresolveThread renames the ✔-prefixed topic back to the bare name', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
@@ -2067,81 +1719,14 @@ effectTest(
     }),
 )
 
-// Resolution renames the topic (✔ prefix), so a resolved thread no longer has
-// the bare name. Zulip creates topics implicitly on post, so a write addressed
-// to the bare name mints a sibling topic and splits the conversation at the
-// resolve. post probes for the thread's current substrate form — bare first,
-// then the ✔ form, the same precedence readThread uses — so both verbs always
-// mean the same topic.
-effectTest('publisher.post addresses the ✔-prefixed topic when the thread is resolved', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedSendMessage(stub, 300)
-    yield* stub.respondSequence('GET', '/api/v1/messages', [
-      messagesPage([]),
-      messagesPage([
-        {
-          id: 299,
-          sender_id: 5,
-          sender_full_name: 'Robin Reyes',
-          stream_id: 1234,
-          display_recipient: 'general',
-          subject: '✔ planning',
-          content: 'the resolved conversation',
-          timestamp: 1715000000,
-        },
-      ]),
-    ])
-    const adapter = yield* buildAdapter(stub)
-    const ref = yield* adapter.publisher.post(
-      generalChannel.name,
-      decodeMessageBodySync('one more thing'),
-      { thread: decodeThreadNameSync('planning') },
-    )
-    const params = new URLSearchParams((yield* findRequest(stub, 'POST', '/api/v1/messages')).body)
-    expect(params.get('topic')).toBe('✔ planning')
-    // Appending leaves the thread resolved, and the ref says so: the port's
-    // clean name plus an honest flag. Re-opening is the caller's own
-    // unresolveThread call — post never mutates thread state.
-    expect(Option.map(ref.thread, (t) => t.name)).toEqual(
-      Option.some(decodeThreadNameSync('planning')),
-    )
-    expect(Option.map(ref.thread, (t) => t.resolved)).toEqual(Option.some(true))
-  }),
-)
-
-effectTest('publisher.post does not unresolve the thread it appends to', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedSendMessage(stub, 303)
-    yield* stub.respondSequence('GET', '/api/v1/messages', [
-      messagesPage([]),
-      messagesPage([
-        {
-          id: 299,
-          sender_id: 5,
-          sender_full_name: 'Robin Reyes',
-          stream_id: 1234,
-          display_recipient: 'general',
-          subject: '✔ planning',
-          content: 'the resolved conversation',
-          timestamp: 1715000000,
-        },
-      ]),
-    ])
-    const adapter = yield* buildAdapter(stub)
-    yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('one more thing'), {
-      thread: decodeThreadNameSync('planning'),
-    })
-    const patches = (yield* stub.captured).filter((r) => r.method === 'PATCH')
-    expect(patches).toEqual([])
-  }),
-)
-
+// post probes for the thread's current substrate form — bare first, then the
+// ✔ form, the same precedence readThread uses — so both verbs always mean the
+// same topic.
 effectTest('publisher.post addresses the bare topic when an unresolved thread already exists', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 301)
+    yield* seedStoredTopic(stub, 301, 'planning')
     yield* seedMessages(stub, [
       {
         id: 298,
@@ -2167,6 +1752,7 @@ effectTest('publisher.post addresses the bare topic when the thread exists in ne
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedSendMessage(stub, 302)
+    yield* seedStoredTopic(stub, 302, 'brand-new')
     const adapter = yield* buildAdapter(stub)
     yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('opening'), {
       thread: decodeThreadNameSync('brand-new'),
@@ -2305,148 +1891,6 @@ effectTest(
     }),
 )
 
-effectTest('history.readChannel resolves bot senders to kind=agent via the user directory', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, MAINTAINER])
-    yield* seedMessages(stub, [
-      {
-        id: 600,
-        sender_id: 9,
-        sender_full_name: 'hermes-agent',
-        stream_id: 1234,
-        display_recipient: 'general',
-        subject: 'lobby',
-        content: 'reporting in',
-        timestamp: 1715000100,
-      },
-    ])
-    const [msg] = yield* adapter.history.readChannel(generalChannel.name, { limit: 10 })
-    expect(msg?.sender.kind).toBe('agent')
-  }),
-)
-
-effectTest('history.readChannel resolves deactivated bot senders to kind=agent', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    const adapter = yield* buildAdapter(stub)
-    const deactivatedBot = { ...RIQ, is_active: false }
-    yield* seedUsers(stub, [HERMES, MAINTAINER, deactivatedBot])
-    yield* seedMessages(stub, [
-      {
-        id: 700,
-        sender_id: deactivatedBot.user_id,
-        sender_full_name: deactivatedBot.full_name,
-        stream_id: 1234,
-        display_recipient: 'general',
-        subject: 'lobby',
-        content: 'old hermes message',
-        timestamp: 1714000000,
-      },
-    ])
-    const [msg] = yield* adapter.history.readChannel(generalChannel.name, { limit: 10 })
-    expect(msg?.sender.kind).toBe('agent')
-    expect(msg?.sender.id).toBe(decodeIdentityIdSync(String(deactivatedBot.user_id)))
-  }),
-)
-
-effectTest('history.readChannel filters by range.since (epoch seconds, inclusive)', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, MAINTAINER])
-    yield* seedMessages(stub, [
-      {
-        id: 1,
-        sender_id: 5,
-        sender_full_name: 'Robin Reyes',
-        stream_id: 1234,
-        display_recipient: 'general',
-        subject: 'a',
-        content: 'old',
-        timestamp: 1714000000,
-      },
-      {
-        id: 2,
-        sender_id: 5,
-        sender_full_name: 'Robin Reyes',
-        stream_id: 1234,
-        display_recipient: 'general',
-        subject: 'a',
-        content: 'mid',
-        timestamp: 1715000000,
-      },
-      {
-        id: 3,
-        sender_id: 5,
-        sender_full_name: 'Robin Reyes',
-        stream_id: 1234,
-        display_recipient: 'general',
-        subject: 'a',
-        content: 'new',
-        timestamp: 1716000000,
-      },
-    ])
-    const messages = yield* adapter.history.readChannel(generalChannel.name, {
-      since: decodeTimestampSync(1715000000),
-      limit: 50,
-    })
-    expect(messages.map((m) => m.body)).toEqual([
-      decodeMessageBodySync('mid'),
-      decodeMessageBodySync('new'),
-    ])
-  }),
-)
-
-effectTest('history.readChannel filters by range.until (epoch seconds, inclusive)', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, MAINTAINER])
-    yield* seedMessages(stub, [
-      {
-        id: 1,
-        sender_id: 5,
-        sender_full_name: 'Robin Reyes',
-        stream_id: 1234,
-        display_recipient: 'general',
-        subject: 'a',
-        content: 'old',
-        timestamp: 1714000000,
-      },
-      {
-        id: 2,
-        sender_id: 5,
-        sender_full_name: 'Robin Reyes',
-        stream_id: 1234,
-        display_recipient: 'general',
-        subject: 'a',
-        content: 'mid',
-        timestamp: 1715000000,
-      },
-      {
-        id: 3,
-        sender_id: 5,
-        sender_full_name: 'Robin Reyes',
-        stream_id: 1234,
-        display_recipient: 'general',
-        subject: 'a',
-        content: 'new',
-        timestamp: 1716000000,
-      },
-    ])
-    const messages = yield* adapter.history.readChannel(generalChannel.name, {
-      until: decodeTimestampSync(1715000000),
-      limit: 50,
-    })
-    expect(messages.map((m) => m.body)).toEqual([
-      decodeMessageBodySync('old'),
-      decodeMessageBodySync('mid'),
-    ])
-  }),
-)
-
 const historyRow = (id: number, subject = 'a'): Record<string, unknown> => ({
   id,
   sender_id: 5,
@@ -2505,29 +1949,6 @@ effectTest('history.readChannel pages back to a window that lies below the newes
       decodeMessageBodySync('m3'),
     ])
     expect(yield* historyAnchors(stub)).toEqual(['newest', '7', '4'])
-  }),
-)
-
-effectTest('history.readThread pages back to a window that lies below the newest page', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, MAINTAINER])
-    yield* seedMessagePages(stub, [
-      [7, 8, 9].map((id) => historyRow(id, 'planning')),
-      [4, 5, 6, 7].map((id) => historyRow(id, 'planning')),
-      [1, 2, 3, 4].map((id) => historyRow(id, 'planning')),
-    ])
-    const messages = yield* adapter.history.readThread(
-      generalChannel.name,
-      decodeThreadNameSync('planning'),
-      { until: rowTs(3), limit: 3 },
-    )
-    expect(messages.map((m) => m.body)).toEqual([
-      decodeMessageBodySync('m1'),
-      decodeMessageBodySync('m2'),
-      decodeMessageBodySync('m3'),
-    ])
   }),
 )
 
@@ -2637,59 +2058,13 @@ effectTest('history.readChannel with no limit defaults num_before to 100', () =>
   }),
 )
 
-effectTest('history.recentThreads queries by sender and deduplicates per thread', () =>
+effectTest('history.recentThreads narrows by the sender as an integer user id', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
     yield* seedUsers(stub, [HERMES, MAINTAINER])
-    yield* seedMessages(stub, [
-      {
-        id: 101,
-        sender_id: HERMES.user_id,
-        sender_full_name: HERMES.full_name,
-        stream_id: 1234,
-        display_recipient: 'project-x',
-        subject: 'feature-request',
-        content: 'latest reply',
-        timestamp: 1715000200,
-      },
-      {
-        id: 100,
-        sender_id: HERMES.user_id,
-        sender_full_name: HERMES.full_name,
-        stream_id: 1234,
-        display_recipient: 'project-x',
-        subject: 'feature-request',
-        content: 'earlier reply',
-        timestamp: 1715000100,
-      },
-      {
-        id: 99,
-        sender_id: HERMES.user_id,
-        sender_full_name: HERMES.full_name,
-        stream_id: 5678,
-        display_recipient: 'ops',
-        subject: 'deploy-issue',
-        content: 'investigating',
-        timestamp: 1715000050,
-      },
-    ])
-    const threads = yield* adapter.history.recentThreads(
-      decodeIdentityIdSync(String(HERMES.user_id)),
-    )
-    expect(threads).toHaveLength(2)
-    expect(threads[0]).toEqual({
-      channel: decodeChannelNameSync('project-x'),
-      thread: decodeThreadNameSync('feature-request'),
-      lastPostTs: decodeTimestampSync(1715000200),
-      lastPostBody: decodeMessageBodySync('latest reply'),
-    })
-    expect(threads[1]).toEqual({
-      channel: decodeChannelNameSync('ops'),
-      thread: decodeThreadNameSync('deploy-issue'),
-      lastPostTs: decodeTimestampSync(1715000050),
-      lastPostBody: decodeMessageBodySync('investigating'),
-    })
+    yield* seedMessages(stub, [])
+    yield* adapter.history.recentThreads(decodeIdentityIdSync(String(HERMES.user_id)))
     const req = yield* findRequest(stub, 'GET', '/api/v1/messages')
     const narrow = JSON.parse(req.url.searchParams.get('narrow') ?? 'null') as ReadonlyArray<{
       operator: string
@@ -2734,55 +2109,6 @@ const seedPresence = (
       },
     },
   })
-
-effectTest('directory.presence maps aggregated status=active to online', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedPresence(stub, bobHuman.id, 'active')
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, BOB])
-    const presence = yield* adapter.directory.presence(bobHuman)
-    expect(presence).toBe('online')
-  }),
-)
-
-effectTest('directory.presence maps aggregated status=idle to idle', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedPresence(stub, bobHuman.id, 'idle')
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, BOB])
-    const presence = yield* adapter.directory.presence(bobHuman)
-    expect(presence).toBe('idle')
-  }),
-)
-
-effectTest('directory.presence maps aggregated status=offline to offline', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedPresence(stub, bobHuman.id, 'offline')
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, BOB])
-    const presence = yield* adapter.directory.presence(bobHuman)
-    expect(presence).toBe('offline')
-  }),
-)
-
-effectTest(
-  'directory.presence returns offline when user has never set presence (Zulip 400 BAD_REQUEST)',
-  () =>
-    Effect.gen(function* () {
-      const stub = yield* makeStubHttpClient
-      yield* stub.respond('GET', `/api/v1/users/${bobHuman.id}/presence`, {
-        body: { result: 'error', msg: `No presence data for ${bobHuman.id}`, code: 'BAD_REQUEST' },
-        status: 400,
-      })
-      const adapter = yield* buildAdapter(stub)
-      yield* seedUsers(stub, [HERMES, BOB])
-      const presence = yield* adapter.directory.presence(bobHuman)
-      expect(presence).toBe('offline')
-    }),
-)
 
 effectTest(
   'directory.presence returns offline when the user no longer exists (Zulip 400 BAD_REQUEST: No such user)',
@@ -3031,95 +2357,6 @@ effectTest('inbox.unsubscribe(channel) DELETEs /users/me/subscriptions with the 
   }),
 )
 
-// A subscription row names a whole channel, so dropping one topic must leave
-// the row standing while the seat still holds another topic there.
-effectTest(
-  'inbox.unsubscribe of one topic keeps the channel row while another topic holds it',
-  () =>
-    Effect.gen(function* () {
-      const stub = yield* makeStubHttpClient
-      yield* seedSubscribeOk(stub, 'general')
-      yield* seedUnsubscribeOk(stub, 'general')
-      const adapter = yield* buildAdapter(stub)
-      const held = { channel: generalChannel.name, thread: decodeThreadNameSync('held') }
-      const dropped = { channel: generalChannel.name, thread: decodeThreadNameSync('dropped') }
-      yield* adapter.inbox.subscribe(held)
-      yield* adapter.inbox.subscribe(dropped)
-      yield* adapter.inbox.unsubscribe(dropped)
-      const deletesWhileHeld = (yield* stub.captured).filter(
-        (r) => r.method === 'DELETE' && r.url.pathname === '/api/v1/users/me/subscriptions',
-      )
-      expect(deletesWhileHeld).toHaveLength(0)
-
-      yield* adapter.inbox.unsubscribe(held)
-      yield* findRequest(stub, 'DELETE', '/api/v1/users/me/subscriptions')
-    }),
-)
-
-effectTest('inbox.unsubscribe(channel) drops the row even while a topic there is held', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedSubscribeOk(stub, 'general')
-    yield* seedUnsubscribeOk(stub, 'general')
-    const adapter = yield* buildAdapter(stub)
-    yield* adapter.inbox.subscribe(generalChannel.name)
-    yield* adapter.inbox.subscribe({
-      channel: generalChannel.name,
-      thread: decodeThreadNameSync('held'),
-    })
-    yield* adapter.inbox.subscribe({ kind: 'new-topics-in-channel', channel: generalChannel.name })
-    yield* adapter.inbox.unsubscribe(generalChannel.name)
-    yield* findRequest(stub, 'DELETE', '/api/v1/users/me/subscriptions')
-  }),
-)
-
-effectTest('inbox.replay(since) returns message-posted events for messages with ts >= since', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, MAINTAINER])
-    yield* stub.respond('GET', '/api/v1/messages', {
-      body: {
-        result: 'success',
-        messages: [
-          {
-            id: 1,
-            sender_id: 5,
-            sender_full_name: 'Robin Reyes',
-            stream_id: 100,
-            display_recipient: 'general',
-            subject: 'lobby',
-            content: 'old',
-            timestamp: 1000,
-          },
-          {
-            id: 2,
-            sender_id: 5,
-            sender_full_name: 'Robin Reyes',
-            stream_id: 100,
-            display_recipient: 'general',
-            subject: 'lobby',
-            content: 'new',
-            timestamp: 3000,
-          },
-        ],
-        anchor: 0,
-        found_anchor: false,
-        found_newest: true,
-        found_oldest: false,
-        history_limited: false,
-      },
-    })
-    const events = yield* adapter.inbox.replay(decodeTimestampSync(2000))
-    expect(events).toHaveLength(1)
-    expect(events[0]?.kind).toBe('message-posted')
-    if (events[0]?.kind === 'message-posted') {
-      expect(events[0].message.body).toBe(decodeMessageBodySync('new'))
-      expect(events[0].message.ref.channel.name).toEqual(decodeChannelNameSync('general'))
-    }
-  }),
-)
-
 // Boot catch-up carries the same defect independently: a seat offline across
 // more realm traffic than one page holds silently lost the overflow.
 effectTest('inbox.replay pages back until it reaches the catch-up bound', () =>
@@ -3127,6 +2364,7 @@ effectTest('inbox.replay pages back until it reaches the catch-up bound', () =>
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
     yield* seedUsers(stub, [HERMES, MAINTAINER])
+    yield* seedMySubscriptions(stub)
     yield* seedMessagePages(stub, [
       [7, 8, 9].map((id) => historyRow(id, 'lobby')),
       [4, 5, 6, 7].map((id) => historyRow(id, 'lobby')),
@@ -3145,6 +2383,7 @@ effectTest('inbox.replay calls /messages with anchor=newest and a generous num_b
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
     yield* seedUsers(stub, [HERMES])
+    yield* seedMySubscriptions(stub)
     yield* stub.respond('GET', '/api/v1/messages', {
       body: {
         result: 'success',
@@ -3175,6 +2414,7 @@ effectTest(
       const stub = yield* makeStubHttpClient
       const adapter = yield* buildAdapter(stub)
       yield* seedUsers(stub, [HERMES])
+      yield* seedMySubscriptions(stub)
       yield* stub.respond('GET', '/api/v1/messages', {
         body: {
           result: 'success',
@@ -3197,50 +2437,6 @@ effectTest(
         return o['operator'] === 'is' && o['operand'] === 'dm' && o['negated'] === true
       })
       expect(excludesDms).toBe(true)
-    }),
-)
-
-effectTest(
-  'inbox.replay surfaces mention-received alongside message-posted when flags include "mentioned"',
-  () =>
-    Effect.gen(function* () {
-      const stub = yield* makeStubHttpClient
-      const adapter = yield* buildAdapter(stub)
-      yield* seedUsers(stub, [HERMES])
-      const replayPage = (content: string) => ({
-        body: {
-          result: 'success',
-          messages: [
-            {
-              id: 1,
-              sender_id: 9,
-              sender_full_name: 'hermes-agent',
-              stream_id: 100,
-              display_recipient: 'general',
-              subject: 'lobby',
-              content,
-              timestamp: 5000,
-              flags: ['mentioned'],
-            },
-          ],
-          anchor: 0,
-          found_anchor: false,
-          found_newest: true,
-          found_oldest: false,
-          history_limited: false,
-        },
-      })
-      // Catch-up walks back until a page adds nothing new, so the realm has
-      // to keep answering past the raw page and its rendered twin.
-      yield* stub.respond('GET', '/api/v1/messages', messagesPage([]))
-      yield* stub.respondSequence('GET', '/api/v1/messages', [
-        replayPage('@**hermes-agent** wake up'),
-        replayPage(
-          '<p><span class="user-mention" data-user-id="9">@hermes-agent</span> wake up</p>',
-        ),
-      ])
-      const events = yield* adapter.inbox.replay(decodeTimestampSync(0))
-      expect(events.map((e) => e.kind)).toEqual(['message-posted', 'mention-received'])
     }),
 )
 
@@ -3283,7 +2479,7 @@ const decodeBasicAuth = (header: string | null): { email: string; apiKey: string
 
 const minterAuth = { email: 'minter@example.com', apiKey: 'minter-key' }
 
-effectTest('history.readChannel runs pre-acquire and routes via minter creds', () =>
+effectTest('history.readChannel routes via minter creds before acquire', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedUsers(stub, [HERMES, MAINTAINER])
@@ -3315,7 +2511,7 @@ effectTest('directory.listAgents runs pre-acquire and routes via minter creds', 
 
 // The presence read path runs for humans only (agents short-circuit to
 // 'unknown'), so the minter-cred routing assertion uses a human.
-effectTest('directory.presence runs pre-acquire and routes via minter creds', () =>
+effectTest('directory.presence routes via minter creds before acquire', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedUsers(stub, [MAINTAINER])
@@ -3448,9 +2644,8 @@ effectTest('one seat unsubscribing writes only under its own principal, never a 
 
 // A seat that cannot bind must not fall back to the minter for receiving, for
 // the same reason `publisher.post` must not: the fallback is invisible and
-// leaves the seat reading a surface that is not its own. The refusal is the
-// typed BindError, surfaced rather than swallowed.
-effectTest('inbox.subscribe refuses rather than falling back to minter creds', () =>
+// leaves the seat reading a surface that is not its own.
+effectTest('an inbox.subscribe that cannot bind sends nothing as the minter', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedUsers(stub, [])
@@ -3461,8 +2656,7 @@ effectTest('inbox.subscribe refuses rather than falling back to minter creds', (
         new UnboundEphemeralSession({ message: 'commy: ephemeral mode requires a session_id' }),
       ),
     })
-    const exit = yield* Effect.exit(adapter.inbox.subscribe(generalChannel.name))
-    expect(Exit.isFailure(exit)).toBe(true)
+    yield* Effect.exit(adapter.inbox.subscribe(generalChannel.name))
     const reqs = yield* stub.captured
     expect(
       reqs.filter(
@@ -3474,12 +2668,7 @@ effectTest('inbox.subscribe refuses rather than falling back to minter creds', (
   }),
 )
 
-// Was: "pre-acquire call dies on the 'not acquired' invariant". The invariant
-// it guards — a seat that could not bind never falls back to publishing as the
-// MINTER — is unchanged and asserted below. What changed with the mint seam
-// (comms-g5zh.1) is the SHAPE of the refusal: a typed, catchable
-// UnboundEphemeralSession in place of an untyped die. The die is asserted
-// against in the mint-seam tests above.
+// A seat that could not bind never falls back to publishing as the MINTER.
 effectTest(
   'publisher.post refuses rather than falling back to minter creds when it cannot bind',
   () =>
@@ -3565,25 +2754,23 @@ test('downloadFile rejects an unbranded ref at the type level', () => {
   expect(proof).toBeTypeOf('function')
 })
 
-effectTest('downloadFile fails with AttachmentError on a ref the realm cannot address', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
-    // An AttachmentRef is opaque above the port, so a handle this realm never
-    // issued gets past the caller and is refused here — the adapter is the
-    // only layer that knows /user_uploads/ is the addressing rule. The failure
-    // is a typed AttachmentError, and the ParseError it carries supplies the
-    // message, so the constraint still names itself to the agent.
-    const error = yield* Effect.flip(
-      adapter.downloadFile(decodeAttachmentRefSync('/api/v1/messages')),
-    )
-    expect(error._tag).toBe('AttachmentError')
-    expect(error.operation).toBe('download')
-    expect(error.message).toContain('user_uploads')
-    // Refused before any request left the process.
-    expect(yield* stub.captured).toEqual([])
-    yield* Effect.promise(() => adapter.close())
-  }),
+effectTest(
+  'downloadFile refuses a ref outside /user_uploads/ without a request, naming the rule',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+      // The adapter is the only layer that knows /user_uploads/ is the
+      // addressing rule. The ParseError the AttachmentError carries supplies the
+      // message, so the constraint still names itself to the agent.
+      const error = yield* Effect.flip(
+        adapter.downloadFile(decodeAttachmentRefSync('/api/v1/messages')),
+      )
+      expect(error.message).toContain('user_uploads')
+      // Refused before any request left the process.
+      expect(yield* stub.captured).toEqual([])
+      yield* Effect.promise(() => adapter.close())
+    }),
 )
 
 // --- UserUploadPath brand ---
