@@ -209,6 +209,19 @@ export const publisherPostingContract = (env: () => ContractEnv): void => {
         if (error instanceof UnresolvedMention) expect(error.tokens).toEqual([token])
       }),
     ))
+  test('publisher.post refuses a name|id mention whose name differs from the agent only by case', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const alice = yield* env().seedAgent('alice')
+        const token = `${String(alice.name).toUpperCase()}|${alice.id}`
+        const error = yield* Effect.flip(
+          env().comms.publisher.post(channel.name, decodeMessageBodySync(`@**${token}** hi`)),
+        )
+        expect(error).toBeInstanceOf(UnresolvedMention)
+        if (error instanceof UnresolvedMention) expect(error.tokens).toEqual([token])
+      }),
+    ))
   test('publisher.post refusing dead mentions names each dead token once and no live name', () =>
     Effect.runPromise(
       Effect.gen(function* () {

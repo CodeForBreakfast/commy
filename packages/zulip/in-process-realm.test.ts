@@ -83,3 +83,22 @@ effectTest(
     }),
   { layer: TestContext.TestContext },
 )
+
+const rendered = Schema.Struct({ rendered: Schema.String })
+const members = Schema.Struct({
+  members: Schema.Array(Schema.Struct({ user_id: Schema.Int, full_name: Schema.String })),
+})
+
+effectTest('a name|id mention renders only when the name matches the member exactly', () =>
+  Effect.gen(function* () {
+    const { http } = yield* minterHttp
+    const self = (yield* http.get('/users', members)).members.find((m) => m.full_name === 'Minter')
+    if (self === undefined) return yield* Effect.die('the minter is not in the member list')
+    const render = (name: string) =>
+      http
+        .post('/messages/render', rendered, { content: `@**${name}|${self.user_id}** hi` })
+        .pipe(Effect.map((res) => res.rendered))
+    expect(yield* render(self.full_name)).toContain(`data-user-id="${self.user_id}"`)
+    expect(yield* render(self.full_name.toUpperCase())).not.toContain('data-user-id')
+  }),
+)
