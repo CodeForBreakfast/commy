@@ -194,10 +194,6 @@ const userPayload = (u: RealmUser) => ({
   bot_owner_id: Option.getOrNull(u.ownerId),
 })
 
-// ---------------------------------------------------------------------------
-// Rendering
-// ---------------------------------------------------------------------------
-
 const escapeHtml = (text: string): string =>
   text
     .replace(/&/g, '&amp;')
@@ -275,10 +271,6 @@ const render = (state: RealmState, content: string): Rendering => {
   html += renderText(content.slice(at))
   return { html: `<p>${html}</p>`, mentioned }
 }
-
-// ---------------------------------------------------------------------------
-// Events
-// ---------------------------------------------------------------------------
 
 const wants = (queue: EventQueue, type: string): boolean =>
   Option.match(queue.eventTypes, { onNone: () => true, onSome: (types) => types.has(type) })
@@ -377,10 +369,6 @@ const reactionAudience = (state: RealmState, m: RealmMessage): HashSet.HashSet<n
     state,
     HashSet.union(m.receivedBy, HashMap.unsafeGet(state.channels, m.streamId).subscribers),
   )
-
-// ---------------------------------------------------------------------------
-// Requests
-// ---------------------------------------------------------------------------
 
 interface UploadedFile {
   readonly filename: string
