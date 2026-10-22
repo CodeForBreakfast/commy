@@ -5,7 +5,12 @@
  * Test-only — never imported by production code.
  */
 
-import { decodeBotNameSync, decodeChannelIdSync, decodeChannelNameSync } from '@commy/core/ports'
+import {
+  decodeBotNameSync,
+  decodeChannelIdSync,
+  decodeChannelNameSync,
+  type Identity,
+} from '@commy/core/ports'
 import type { AttachmentContractFactory } from '@commy/testing/contract'
 import { HttpClient } from '@effect/platform'
 import { Array as Arr, Effect, Option, Redacted } from 'effect'
@@ -28,6 +33,18 @@ export const inProcessContractFactory: AttachmentContractFactory = async () => {
   const adapter = await Effect.runPromise(buildAdapter())
   await Effect.runPromise(adapter.identity.acquire(SELF_NAME))
 
+  const seedAgent = (name: string): Effect.Effect<Identity> =>
+    realm.addUser(name, 'bot').pipe(
+      Effect.zipRight(adapter.identity.resolve(decodeBotNameSync(name))),
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.die(new Error(`seedAgent: ${name} is not resolvable`)),
+          onSome: Effect.succeed,
+        }),
+      ),
+      Effect.orDie,
+    )
+
   return {
     comms: adapter,
     attachments: adapter,
@@ -40,17 +57,10 @@ export const inProcessContractFactory: AttachmentContractFactory = async () => {
           }),
         ),
       ),
-    seedAgent: (name) =>
-      realm.addUser(name, 'bot').pipe(
-        Effect.zipRight(adapter.identity.resolve(decodeBotNameSync(name))),
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.die(new Error(`seedAgent: ${name} is not resolvable`)),
-            onSome: Effect.succeed,
-          }),
-        ),
-        Effect.orDie,
-      ),
+    seedAgent,
+    // The adapter stops resolving a deactivated name, so seed it active first.
+    seedDeactivatedAgent: (name) =>
+      seedAgent(name).pipe(Effect.tap((peer) => realm.deactivateUser(Number(peer.id)))),
     seedHuman: (name) =>
       realm.addUser(name, 'human').pipe(
         Effect.flatMap((userId) =>

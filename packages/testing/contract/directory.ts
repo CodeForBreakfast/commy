@@ -66,6 +66,16 @@ export const directoryContract = (env: () => ContractEnv): void => {
         expect(humans.map((h) => h.id)).not.toContain(peer.id)
       }),
     ))
+  test('directory.listAgents leaves out a deactivated agent', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const seedDeactivatedAgent = env().seedDeactivatedAgent
+        if (seedDeactivatedAgent === undefined) return
+        const gone = yield* seedDeactivatedAgent('alice')
+        const agents = yield* env().comms.directory.listAgents()
+        expect(agents.map((a) => a.id)).not.toContain(gone.id)
+      }),
+    ))
   test('directory.listHumans lists a seeded human, and listAgents does not', () =>
     Effect.runPromise(
       Effect.gen(function* () {

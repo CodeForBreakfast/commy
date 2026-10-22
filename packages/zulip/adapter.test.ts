@@ -689,23 +689,6 @@ effectTest(
     }),
 )
 
-effectTest('directory.listAgents excludes inactive users', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* stub.respond('GET', '/api/v1/users', {
-      body: {
-        result: 'success',
-        members: [HERMES, { ...RIQ, is_active: false }],
-      },
-    })
-    yield* seedRegenerate(stub, HERMES.user_id)
-    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
-    yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-    const agents = yield* adapter.directory.listAgents()
-    expect(agents.map((a) => a.id)).toEqual([decodeIdentityIdSync('9')])
-  }),
-)
-
 effectTest(
   'directory.listAgents surfaces a /users fetch failure as DirectoryError (cause preserved)',
   () =>
