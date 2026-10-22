@@ -19,14 +19,9 @@ const acquired = async () => {
   return adapter
 }
 
-// The message-id Ref pins concurrency-safety: counter allocation spans `yield*`
-// suspension points, so under `Effect.all` it must still allocate distinct ids.
-// Sequential semantics are already covered by the contract suite; this asserts
-// the interleaved case the Ref makes correct.
-
-// In-memory store, no rate-limited substrate — unbounded concurrency is the
-// point here: it maximises interleaving against the message-id Ref.
-test('concurrent posts allocate distinct, monotonic message ids under Effect.all', async () => {
+// The message-id Ref allocates a gapless run from 1, even with unbounded
+// interleaving across its `yield*` points.
+test('concurrent posts allocate a gapless run of message ids from 1', async () => {
   const adapter = await acquired()
   const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
   const refs = await Effect.runPromise(
@@ -36,8 +31,6 @@ test('concurrent posts allocate distinct, monotonic message ids under Effect.all
     ),
   )
   const ids = refs.map((r) => Number(r.id)).sort((a, b) => a - b)
-  expect(new Set(ids).size).toBe(25)
-  // Gapless run: ids 1..25 with no duplicates or holes.
   expect(ids).toEqual(Arr.makeBy(25, (i) => i + 1))
 })
 

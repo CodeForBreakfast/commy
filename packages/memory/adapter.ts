@@ -38,7 +38,6 @@ import type {
   IdentityOrigin,
   IdentityPort,
   InboundEvent,
-  Mention,
   Message,
   MessageBody as MessageBodyType,
   MessageId,
@@ -70,6 +69,7 @@ import {
   decodeTimestamp,
   type Emoji,
   HistoryError,
+  Mention,
   MessageEditRefused,
   MessagePermalinkSchema,
   mentionsIdentity,
@@ -79,7 +79,6 @@ import {
   UnknownChannel,
   UnknownIdentity,
   UnresolvedMention,
-  userMentions,
 } from '@commy/core/ports'
 import {
   Array as Arr,
@@ -87,6 +86,7 @@ import {
   Data,
   Duration,
   Effect,
+  Equal,
   HashMap,
   HashSet,
   Option,
@@ -255,12 +255,23 @@ const inRange =
   }
 
 // Zulip's personal-mention markup, and the code regions it renders no mention
-// inside. Wildcards and groups are left out: the store has neither.
+// inside. Groups are left out: the store has none.
 const MENTION_MARKUP = /@\*\*([^*]+)\*\*/g
 const CODE_REGIONS = /```[\s\S]*?```|~~~[\s\S]*?~~~|(`+)[\s\S]*?\1/g
 
 const mentionedNames = (body: string): ReadonlyArray<string> =>
   Arr.map([...body.replace(CODE_REGIONS, ' ').matchAll(MENTION_MARKUP)], ([, name]) => name ?? '')
+
+// Zulip's wildcards, matched case-sensitively as `zerver/lib/mention.py` does.
+const CHANNEL_WILDCARDS: ReadonlySet<string> = new Set(['all', 'everyone', 'stream', 'channel'])
+const TOPIC_WILDCARD = 'topic'
+
+const wildcardMention = (token: string): Option.Option<Mention> =>
+  CHANNEL_WILDCARDS.has(token)
+    ? Option.some(Mention.ChannelWildcardMention())
+    : token === TOPIC_WILDCARD
+      ? Option.some(Mention.TopicWildcardMention())
+      : Option.none()
 
 const toMessage = (stored: StoredMessage, reactions: ReadonlyArray<Reaction>): Message => ({
   ref: stored.ref,
@@ -421,22 +432,22 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
         (identity) => !deactivatedIdentities.has(identity.id),
       )
 
-    // Who a body mentions, as Zulip renders it: each known name once, in the
+    const mentionOf = (token: string): Option.Option<Mention> =>
+      Option.orElse(wildcardMention(token), () =>
+        Option.map(activeIdentityNamed(token), (identity) => Mention.UserMention({ identity })),
+      )
+
+    // Who a body mentions, as Zulip renders it: each mention once, in the
     // order written. A name nobody holds mentions nobody.
     const mentionsIn = (body: MessageBodyType): ReadonlyArray<Mention> =>
-      userMentions(
-        Arr.dedupeWith(
-          Arr.filterMap(mentionedNames(body), activeIdentityNamed),
-          (a, b) => a.id === b.id,
-        ),
-      )
+      Arr.dedupeWith(Arr.filterMap(mentionedNames(body), mentionOf), Equal.equals)
 
     const refuseDeadMentions = (
       operation: 'post' | 'edit',
       body: MessageBodyType,
     ): Effect.Effect<void, UnresolvedMention> => {
       const tokens = Arr.dedupe(
-        Arr.filter(mentionedNames(body), (name) => Option.isNone(activeIdentityNamed(name))),
+        Arr.filter(mentionedNames(body), (name) => Option.isNone(mentionOf(name))),
       )
       return Arr.isEmptyReadonlyArray(tokens)
         ? Effect.void

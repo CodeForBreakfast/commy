@@ -5,13 +5,14 @@ import {
   decodeChannelNameSync,
   decodeMessageBodySync,
   decodeThreadNameSync,
+  Mention,
   type MessageRef,
   mentionedIdentities,
   UnboundEphemeralSession,
   UnknownChannel,
   UnresolvedMention,
 } from '@commy/core/ports'
-import { Effect, Option } from 'effect'
+import { Array as Arr, Effect, Option } from 'effect'
 import type { ContractEnv } from '../contract.ts'
 
 const findByBody = (
@@ -131,6 +132,21 @@ export const publisherPostingContract = (env: () => ContractEnv): void => {
         expect(findByBody(messages, body)).toBeUndefined()
       }),
     ))
+  test('publisher.post refusing dead mentions names each dead token once and no live name', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const alice = yield* env().seedAgent('alice')
+        const body = decodeMessageBodySync(
+          `@**Nobody One** and @**${alice.name}** and @**Nobody Two** and @**Nobody One**`,
+        )
+        const error = yield* Effect.flip(env().comms.publisher.post(channel.name, body))
+        expect(error).toBeInstanceOf(UnresolvedMention)
+        if (error instanceof UnresolvedMention) {
+          expect(error.tokens).toEqual(['Nobody One', 'Nobody Two'])
+        }
+      }),
+    ))
   // A mention form inside a code span is literal text, not a failed delivery,
   // so it never triggers UnresolvedMention.
   test('publisher.post delivers a mention form naming nobody verbatim when it sits in a code span', () =>
@@ -199,6 +215,75 @@ export const publisherPostingContract = (env: () => ContractEnv): void => {
         const found = messages.find((m) => m.body === body)
         expect(found).toBeDefined()
         expect(mentionedIdentities(found?.mentions ?? []).map((m) => m.id)).toEqual([alice.id])
+      }),
+    ))
+  test('publisher.post reports a repeated mention once, in the order first written', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const alice = yield* env().seedAgent('alice')
+        const bob = yield* env().seedAgent('bob')
+        const body = decodeMessageBodySync(
+          `@**${bob.name}** then @**${alice.name}** then @**${bob.name}** again`,
+        )
+        yield* env().comms.publisher.post(channel.name, body)
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        const found = messages.find((m) => m.body === body)
+        expect(mentionedIdentities(found?.mentions ?? []).map((m) => m.id)).toEqual([
+          bob.id,
+          alice.id,
+        ])
+      }),
+    ))
+  // A silent mention links the name but notifies nobody.
+  test('publisher.post reports no mention for a silent mention', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const alice = yield* env().seedAgent('alice')
+        const body = decodeMessageBodySync(`as @_**${alice.name}** said`)
+        yield* env().comms.publisher.post(channel.name, body)
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        const found = messages.find((m) => m.body === body)
+        expect(found).toBeDefined()
+        expect(found?.mentions).toEqual([])
+      }),
+    ))
+  test('publisher.post accepts a channel wildcard and reports it as a channel-wide mention', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const body = decodeMessageBodySync('heads up @**all**, deploying')
+        yield* env().comms.publisher.post(channel.name, body)
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        const found = messages.find((m) => m.body === body)
+        expect(found?.mentions).toEqual([Mention.ChannelWildcardMention()])
+      }),
+    ))
+  test('publisher.post accepts a topic wildcard and reports it as a topic-wide mention', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const thread = decodeThreadNameSync('deploy')
+        const body = decodeMessageBodySync('heads up @**topic**, deploying')
+        yield* env().comms.publisher.post(channel.name, body, { thread })
+        const messages = yield* env().comms.history.readThread(channel.name, thread, {})
+        const found = messages.find((m) => m.body === body)
+        expect(found?.mentions).toEqual([Mention.TopicWildcardMention()])
+      }),
+    ))
+  // Bounded, because the contract also runs live against a rate-limited realm.
+  test('publisher.post made concurrently returns a distinct message ref for each post', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const refs = yield* Effect.all(
+          Arr.makeBy(5, (i) =>
+            env().comms.publisher.post(channel.name, decodeMessageBodySync(`concurrent ${i}`)),
+          ),
+          { concurrency: 3 },
+        )
+        expect(new Set(refs.map((r) => r.id)).size).toBe(5)
       }),
     ))
   // A token quoted in code is literal text: the substrate renders it as code
