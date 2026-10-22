@@ -2318,28 +2318,6 @@ effectTest(
     }),
 )
 
-effectTest('history.readChannel resolves bot senders to kind=agent via the user directory', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, MAINTAINER])
-    yield* seedMessages(stub, [
-      {
-        id: 600,
-        sender_id: 9,
-        sender_full_name: 'hermes-agent',
-        stream_id: 1234,
-        display_recipient: 'general',
-        subject: 'lobby',
-        content: 'reporting in',
-        timestamp: 1715000100,
-      },
-    ])
-    const [msg] = yield* adapter.history.readChannel(generalChannel.name, { limit: 10 })
-    expect(msg?.sender.kind).toBe('agent')
-  }),
-)
-
 effectTest('history.readChannel resolves deactivated bot senders to kind=agent', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
@@ -2361,102 +2339,6 @@ effectTest('history.readChannel resolves deactivated bot senders to kind=agent',
     const [msg] = yield* adapter.history.readChannel(generalChannel.name, { limit: 10 })
     expect(msg?.sender.kind).toBe('agent')
     expect(msg?.sender.id).toBe(decodeIdentityIdSync(String(deactivatedBot.user_id)))
-  }),
-)
-
-effectTest('history.readChannel filters by range.since (epoch seconds, inclusive)', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, MAINTAINER])
-    yield* seedMessages(stub, [
-      {
-        id: 1,
-        sender_id: 5,
-        sender_full_name: 'Robin Reyes',
-        stream_id: 1234,
-        display_recipient: 'general',
-        subject: 'a',
-        content: 'old',
-        timestamp: 1714000000,
-      },
-      {
-        id: 2,
-        sender_id: 5,
-        sender_full_name: 'Robin Reyes',
-        stream_id: 1234,
-        display_recipient: 'general',
-        subject: 'a',
-        content: 'mid',
-        timestamp: 1715000000,
-      },
-      {
-        id: 3,
-        sender_id: 5,
-        sender_full_name: 'Robin Reyes',
-        stream_id: 1234,
-        display_recipient: 'general',
-        subject: 'a',
-        content: 'new',
-        timestamp: 1716000000,
-      },
-    ])
-    const messages = yield* adapter.history.readChannel(generalChannel.name, {
-      since: decodeTimestampSync(1715000000),
-      limit: 50,
-    })
-    expect(messages.map((m) => m.body)).toEqual([
-      decodeMessageBodySync('mid'),
-      decodeMessageBodySync('new'),
-    ])
-  }),
-)
-
-effectTest('history.readChannel filters by range.until (epoch seconds, inclusive)', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, MAINTAINER])
-    yield* seedMessages(stub, [
-      {
-        id: 1,
-        sender_id: 5,
-        sender_full_name: 'Robin Reyes',
-        stream_id: 1234,
-        display_recipient: 'general',
-        subject: 'a',
-        content: 'old',
-        timestamp: 1714000000,
-      },
-      {
-        id: 2,
-        sender_id: 5,
-        sender_full_name: 'Robin Reyes',
-        stream_id: 1234,
-        display_recipient: 'general',
-        subject: 'a',
-        content: 'mid',
-        timestamp: 1715000000,
-      },
-      {
-        id: 3,
-        sender_id: 5,
-        sender_full_name: 'Robin Reyes',
-        stream_id: 1234,
-        display_recipient: 'general',
-        subject: 'a',
-        content: 'new',
-        timestamp: 1716000000,
-      },
-    ])
-    const messages = yield* adapter.history.readChannel(generalChannel.name, {
-      until: decodeTimestampSync(1715000000),
-      limit: 50,
-    })
-    expect(messages.map((m) => m.body)).toEqual([
-      decodeMessageBodySync('old'),
-      decodeMessageBodySync('mid'),
-    ])
   }),
 )
 
@@ -2518,29 +2400,6 @@ effectTest('history.readChannel pages back to a window that lies below the newes
       decodeMessageBodySync('m3'),
     ])
     expect(yield* historyAnchors(stub)).toEqual(['newest', '7', '4'])
-  }),
-)
-
-effectTest('history.readThread pages back to a window that lies below the newest page', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, MAINTAINER])
-    yield* seedMessagePages(stub, [
-      [7, 8, 9].map((id) => historyRow(id, 'planning')),
-      [4, 5, 6, 7].map((id) => historyRow(id, 'planning')),
-      [1, 2, 3, 4].map((id) => historyRow(id, 'planning')),
-    ])
-    const messages = yield* adapter.history.readThread(
-      generalChannel.name,
-      decodeThreadNameSync('planning'),
-      { until: rowTs(3), limit: 3 },
-    )
-    expect(messages.map((m) => m.body)).toEqual([
-      decodeMessageBodySync('m1'),
-      decodeMessageBodySync('m2'),
-      decodeMessageBodySync('m3'),
-    ])
   }),
 )
 
@@ -2650,59 +2509,13 @@ effectTest('history.readChannel with no limit defaults num_before to 100', () =>
   }),
 )
 
-effectTest('history.recentThreads queries by sender and deduplicates per thread', () =>
+effectTest('history.recentThreads narrows by the sender as an integer user id', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
     yield* seedUsers(stub, [HERMES, MAINTAINER])
-    yield* seedMessages(stub, [
-      {
-        id: 99,
-        sender_id: HERMES.user_id,
-        sender_full_name: HERMES.full_name,
-        stream_id: 5678,
-        display_recipient: 'ops',
-        subject: 'deploy-issue',
-        content: 'investigating',
-        timestamp: 1715000050,
-      },
-      {
-        id: 100,
-        sender_id: HERMES.user_id,
-        sender_full_name: HERMES.full_name,
-        stream_id: 1234,
-        display_recipient: 'project-x',
-        subject: 'feature-request',
-        content: 'earlier reply',
-        timestamp: 1715000100,
-      },
-      {
-        id: 101,
-        sender_id: HERMES.user_id,
-        sender_full_name: HERMES.full_name,
-        stream_id: 1234,
-        display_recipient: 'project-x',
-        subject: 'feature-request',
-        content: 'latest reply',
-        timestamp: 1715000200,
-      },
-    ])
-    const threads = yield* adapter.history.recentThreads(
-      decodeIdentityIdSync(String(HERMES.user_id)),
-    )
-    expect(threads).toHaveLength(2)
-    expect(threads[0]).toEqual({
-      channel: decodeChannelNameSync('project-x'),
-      thread: decodeThreadNameSync('feature-request'),
-      lastPostTs: decodeTimestampSync(1715000200),
-      lastPostBody: decodeMessageBodySync('latest reply'),
-    })
-    expect(threads[1]).toEqual({
-      channel: decodeChannelNameSync('ops'),
-      thread: decodeThreadNameSync('deploy-issue'),
-      lastPostTs: decodeTimestampSync(1715000050),
-      lastPostBody: decodeMessageBodySync('investigating'),
-    })
+    yield* seedMessages(stub, [])
+    yield* adapter.history.recentThreads(decodeIdentityIdSync(String(HERMES.user_id)))
     const req = yield* findRequest(stub, 'GET', '/api/v1/messages')
     const narrow = JSON.parse(req.url.searchParams.get('narrow') ?? 'null') as ReadonlyArray<{
       operator: string

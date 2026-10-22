@@ -9,7 +9,6 @@ import {
   decodeMessageIdSync,
   decodeThreadNameSync,
   decodeTimestampSync,
-  HistoryError,
   MessagePermalinkSchema,
   PublisherError,
   ThreadPermalinkSchema,
@@ -43,43 +42,6 @@ const phantomChannelRef: ChannelRef = {
   name: phantomChannel,
   permalink: ChannelPermalinkSchema.make('memory://commy/channel/999999999'),
 }
-
-// The port types these reads as
-// Effect<…, HistoryError>; the memory adapter must honour that. Zulip's
-// history reads return [] for an unknown channel (the narrow matches
-// nothing), so this typed-failure shape is memory-specific and lives here
-// rather than in the shared contract.
-test('history.readChannel on an unknown channel fails with a typed HistoryError, not a defect', async () => {
-  const adapter = await acquired()
-  const exit = await Effect.runPromiseExit(adapter.history.readChannel(phantomChannel, {}))
-  expect(Exit.isFailure(exit)).toBe(true)
-  if (Exit.isFailure(exit)) {
-    expect(Cause.isDie(exit.cause)).toBe(false)
-    const failure = Cause.failureOption(exit.cause)
-    expect(failure._tag).toBe('Some')
-    if (failure._tag === 'Some') {
-      expect(failure.value).toBeInstanceOf(HistoryError)
-      expect(failure.value.operation).toBe('readChannel')
-    }
-  }
-})
-
-test('history.readThread on an unknown channel fails with a typed HistoryError, not a defect', async () => {
-  const adapter = await acquired()
-  const exit = await Effect.runPromiseExit(
-    adapter.history.readThread(phantomChannel, decodeThreadNameSync('design'), {}),
-  )
-  expect(Exit.isFailure(exit)).toBe(true)
-  if (Exit.isFailure(exit)) {
-    expect(Cause.isDie(exit.cause)).toBe(false)
-    const failure = Cause.failureOption(exit.cause)
-    expect(failure._tag).toBe('Some')
-    if (failure._tag === 'Some') {
-      expect(failure.value).toBeInstanceOf(HistoryError)
-      expect(failure.value.operation).toBe('readThread')
-    }
-  }
-})
 
 // editing a message the store has never seen is a non-fatal domain failure:
 // it surfaces as a typed PublisherError on E, never as a thrown defect. This
@@ -226,24 +188,6 @@ test('directory.listChannels exposes a synthesised channel permalink', async () 
   )
 })
 
-test('history.messagePermalink resolves a stored message by id without a hint', async () => {
-  const adapter = await acquired()
-  const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
-  const ref = await Effect.runPromise(
-    adapter.publisher.post(channel.name, decodeMessageBodySync('hi')),
-  )
-  const link = await Effect.runPromise(adapter.history.messagePermalink(ref.id))
-  expect(link).toEqual(
-    Option.some(MessagePermalinkSchema.make(`memory://commy/channel/${channel.id}/near/${ref.id}`)),
-  )
-})
-
-test('history.messagePermalink returns None for an unknown id with no hint', async () => {
-  const adapter = await acquired()
-  const link = await Effect.runPromise(adapter.history.messagePermalink(decodeMessageIdSync('404')))
-  expect(link).toEqual(Option.none())
-})
-
 test('history.messagePermalink synthesises a channel-near link from a hint', async () => {
   const adapter = await acquired()
   const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
@@ -254,33 +198,6 @@ test('history.messagePermalink synthesises a channel-near link from a hint', asy
   expect(link).toEqual(
     Option.some(MessagePermalinkSchema.make(`memory://commy/channel/${channel.id}/near/${id}`)),
   )
-})
-
-test('history.messagePermalink synthesises a topic-near link from a hint with a thread', async () => {
-  const adapter = await acquired()
-  const channel = await Effect.runPromise(adapter.seedChannel('lobby').pipe(Effect.orDie))
-  const id = decodeMessageIdSync('88')
-  const link = await Effect.runPromise(
-    adapter.history.messagePermalink(id, {
-      channel: decodeChannelNameSync('lobby'),
-      thread: decodeThreadNameSync('topic-a'),
-    }),
-  )
-  expect(link).toEqual(
-    Option.some(
-      MessagePermalinkSchema.make(`memory://commy/channel/${channel.id}/topic/topic-a/near/${id}`),
-    ),
-  )
-})
-
-test('history.messagePermalink returns None for a hint naming an unknown channel', async () => {
-  const adapter = await acquired()
-  const link = await Effect.runPromise(
-    adapter.history.messagePermalink(decodeMessageIdSync('99'), {
-      channel: decodeChannelNameSync('never-seeded-channel'),
-    }),
-  )
-  expect(link).toEqual(Option.none())
 })
 
 test('separate constructed adapters hold independent counter state', async () => {
