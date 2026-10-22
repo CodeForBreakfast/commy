@@ -18,8 +18,10 @@
 
 import { afterEach, beforeEach, describe } from 'bun:test'
 import type {
+  AcquiredIdentity,
   AgentComms,
   AttachmentStore,
+  BindError,
   ChannelName,
   ChannelRef,
   Identity,
@@ -86,11 +88,16 @@ export interface ContractEnv {
    * (transitional Zulip, future Discord) can omit it and the
    * suite skips the rebind/no-op tests.
    *
+   * Built with `bindOnDemand` as its bind-on-demand strategy when one is
+   * given, and with none otherwise.
+   *
    * Test owns disposal of any extra adapters it spins up; the factory's
    * `dispose` still runs once per test and tears down what the factory
    * itself stood up.
    */
-  readonly newUnacquiredAdapter?: () => Effect.Effect<AgentComms>
+  readonly newUnacquiredAdapter?: (
+    bindOnDemand?: Effect.Effect<AcquiredIdentity, BindError>,
+  ) => Effect.Effect<AgentComms>
   /**
    * Optional. When set together with `newUnacquiredAdapter`, calling
    * `acquire(unacquirableName)` on a freshly-built adapter throws

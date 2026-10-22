@@ -855,7 +855,6 @@ effectTest('publisher.post binds on demand when the seat has never acquired', ()
     })
     yield* binder.wire(adapter)
     yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hello world'))
-    expect(yield* binder.calls).toBe(1)
     // Bound, not minter — the message carries the seat's own principal.
     expect(
       (yield* findRequest(stub, 'POST', '/api/v1/messages')).headers.get('authorization'),
@@ -890,34 +889,6 @@ effectTest('publisher.post asks the binder per write but mints only once', () =>
       ),
     )
     expect(mints).toBe(1)
-  }),
-)
-
-// The old `requireBound` DIED here with a bare untyped Error. A seat whose host
-// supplies no session_id feeder must instead get a typed, catchable refusal
-// naming the fix — so assert the tag, not merely that the call failed.
-effectTest('publisher.post refuses with a typed UnboundEphemeralSession when binding fails', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedSendMessage(stub, 42)
-    const config = yield* makeConfig()
-    const adapter = yield* zulipAdapter(stub, {
-      ...config,
-      bindOnDemand: Effect.fail(
-        new UnboundEphemeralSession({ message: 'commy: ephemeral mode requires a session_id' }),
-      ),
-    })
-    const exit = yield* Effect.exit(
-      adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hello world')),
-    )
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) {
-      // A typed failure, not a defect: the old behaviour squashed into the
-      // die channel and could not be caught by tag.
-      expect(Cause.isDie(exit.cause)).toBe(false)
-      const failure = Cause.failureOption(exit.cause)
-      expect(Option.map(failure, (e) => e._tag)).toEqual(Option.some('UnboundEphemeralSession'))
-    }
   }),
 )
 
@@ -2747,12 +2718,7 @@ effectTest('an inbox.subscribe that cannot bind sends nothing as the minter', ()
   }),
 )
 
-// Was: "pre-acquire call dies on the 'not acquired' invariant". The invariant
-// it guards — a seat that could not bind never falls back to publishing as the
-// MINTER — is unchanged and asserted below. What changed with the mint seam
-// (comms-g5zh.1) is the SHAPE of the refusal: a typed, catchable
-// UnboundEphemeralSession in place of an untyped die. The die is asserted
-// against in the mint-seam tests above.
+// A seat that could not bind never falls back to publishing as the MINTER.
 effectTest(
   'publisher.post refuses rather than falling back to minter creds when it cannot bind',
   () =>
