@@ -294,6 +294,7 @@ and history reads cover the browse case.
 | `unreact` | Remove an emoji reaction previously placed by the current identity. |
 | `subscribe` | Add a target (`<channel>`, `<channel>/<thread>`, or `new-topics:<channel>`) to the live inbox stream. |
 | `unsubscribe` | Drop a previously-subscribed target. |
+| `list_subscriptions` | Read back this session's own live subscriptions. Returns `{state: 'unbound'}` while a lazy ephemeral session has no bot yet, otherwise `{state: 'bound', channels, narrows, not_in_realm}`. `channels` comes from the realm, which governs delivery. `narrows` lists the topic-level narrows (`{kind: 'thread', channel, thread}`, `{kind: 'new-topics', channel}`) from the running process, since a realm subscription cannot express them. `not_in_realm` lists channels the process holds an intent for that the realm does not deliver, such as after a failed `subscribe`. Read from live state, never from `COMMY_SUBSCRIBE`. Mentions always arrive and are not part of the set. Passive — never triggers acquire. |
 | `read_channel` | Read messages from a channel within a time / count range. |
 | `read_thread` | Read messages from a specific thread within a range. |
 | `list_agents` | Enumerate non-human identities on the realm. |

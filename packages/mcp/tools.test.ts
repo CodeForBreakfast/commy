@@ -2236,3 +2236,123 @@ test('upload_file rejects a relative path', () =>
       }),
     ),
   ))
+
+test('list_subscriptions before acquire says there is no seat yet, and does not acquire', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig(() => Effect.void)
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'list_subscriptions', arguments: {} }),
+        )
+        expect(result.isError).toBeFalsy()
+        expect(result.structuredContent).toEqual({ state: 'unbound' })
+        expect(rig.ensureBound.current()).toBeUndefined()
+      }),
+    ),
+  ))
+
+test('list_subscriptions on a bound seat with nothing subscribed returns empty sets', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'list_subscriptions', arguments: {} }),
+        )
+        expect(result.isError).toBeFalsy()
+        expect(result.structuredContent).toEqual({
+          state: 'bound',
+          channels: [],
+          narrows: [],
+          not_in_realm: [],
+        })
+      }),
+    ),
+  ))
+
+test('list_subscriptions reports a channel, a topic and a new-topics narrow from runtime subscribes', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((adapter, ensureBound) =>
+          ensureBound().pipe(
+            Effect.zipRight(adapter.seedChannel('home')),
+            Effect.zipRight(adapter.seedChannel('standup')),
+            Effect.zipRight(adapter.seedChannel('news')),
+            Effect.orDie,
+          ),
+        )
+        for (const target of ['home', 'standup/daily', 'new-topics:news']) {
+          yield* Effect.promise(() =>
+            rig.client.callTool({ name: 'subscribe', arguments: { target } }),
+          )
+        }
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'list_subscriptions', arguments: {} }),
+        )
+        expect(result.isError).toBeFalsy()
+        const sc = result.structuredContent as {
+          state: string
+          channels: string[]
+          narrows: unknown[]
+          not_in_realm: string[]
+        }
+        expect(sc.state).toBe('bound')
+        expect([...sc.channels].sort()).toEqual(['home', 'news', 'standup'])
+        expect(sc.narrows).toHaveLength(2)
+        expect(sc.narrows).toContainEqual({ kind: 'thread', channel: 'standup', thread: 'daily' })
+        expect(sc.narrows).toContainEqual({ kind: 'new-topics', channel: 'news' })
+        expect(sc.not_in_realm).toEqual([])
+      }),
+    ),
+  ))
+
+test('list_subscriptions flags a channel the narrow set holds and the realm does not', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((_adapter, ensureBound) => ensureBound().pipe(Effect.asVoid))
+        // The phantom intent a failed realm subscribe leaves behind: in the
+        // narrow set, with no row in the realm.
+        rig.narrowSet.add({ kind: 'channel', channelName: decodeChannelNameSync('ghost') })
+        rig.narrowSet.add({
+          kind: 'thread',
+          channelName: decodeChannelNameSync('phantom'),
+          threadName: decodeThreadNameSync('t'),
+        })
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'list_subscriptions', arguments: {} }),
+        )
+        const sc = result.structuredContent as { channels: string[]; not_in_realm: string[] }
+        expect(sc.channels).toEqual([])
+        expect([...sc.not_in_realm].sort()).toEqual(['ghost', 'phantom'])
+      }),
+    ),
+  ))
+
+test('list_subscriptions drops a channel after unsubscribe', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const rig = yield* withRig((adapter, ensureBound) =>
+          ensureBound().pipe(Effect.zipRight(adapter.seedChannel('home')), Effect.orDie),
+        )
+        yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'subscribe', arguments: { target: 'home' } }),
+        )
+        yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'unsubscribe', arguments: { target: 'home' } }),
+        )
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'list_subscriptions', arguments: {} }),
+        )
+        expect(result.structuredContent).toEqual({
+          state: 'bound',
+          channels: [],
+          narrows: [],
+          not_in_realm: [],
+        })
+      }),
+    ),
+  ))

@@ -116,6 +116,7 @@ const EXPECTED_TOOL_NAMES = [
   'message_link',
   'subscribe',
   'unsubscribe',
+  'list_subscriptions',
   'post',
   'edit_message',
   'react',

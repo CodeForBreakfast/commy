@@ -35,10 +35,13 @@ import type { PlatformError } from '@effect/platform/Error'
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import {
+  Array as Arr,
   Cause,
   Data,
   Effect,
   Exit,
+  HashSet,
+  Match,
   Option,
   type ParseResult,
   Predicate,
@@ -276,6 +279,22 @@ type CurrentIdentityResult =
     }
   | { readonly state: 'unbound'; readonly identity: null }
 
+/**
+ * Wire shape for `list_subscriptions`. `unbound` is "there is no seat yet",
+ * which is a different answer from an empty set.
+ */
+type ListSubscriptionsResult =
+  | { readonly state: 'unbound' }
+  | {
+      readonly state: 'bound'
+      readonly channels: ReadonlyArray<string>
+      readonly narrows: ReadonlyArray<
+        | { readonly kind: 'thread'; readonly channel: string; readonly thread: string }
+        | { readonly kind: 'new-topics'; readonly channel: string }
+      >
+      readonly not_in_realm: ReadonlyArray<string>
+    }
+
 interface InternalCache extends ToolsMemory {
   readonly identityById: Map<IdentityId, Identity>
   readonly channelByName: Map<ChannelName, ChannelRef>
@@ -509,8 +528,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
   const projectForCwd = deps.projectForCwd ?? (() => Effect.succeedNone)
   /**
    * The tools that accept a host-supplied `session_id` (see
-   * {@link ToolDef.hostSuppliedArgs}). ELEVEN tools carry it. That is the same
-   * eleven Claude Code's PreToolUse matcher stamps today, but the two sets are
+   * {@link ToolDef.hostSuppliedArgs}). TWELVE tools carry it. That is the same
+   * twelve Claude Code's PreToolUse matcher stamps today, but the two sets are
    * separate questions and are allowed to differ: this one also serves the
    * non-CC ephemeral host that supplies the UUID itself, which is a
    * listen-first seat's only route to an identity. A host stamping the arg on
@@ -1008,6 +1027,51 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           }),
         )
         return {}
+      },
+    },
+    {
+      name: 'list_subscriptions',
+      description:
+        'Read back this session\'s own live subscriptions, so "will a post to X reach me?" has an answer. Passive — never triggers acquire. Returns {state: "unbound"} for an ephemeral session with no bot yet (there is no seat, which is not the same as no subscriptions). Once bound, returns {state: "bound", channels, narrows, not_in_realm}. channels is read from the realm: the channels it delivers to this bot, and the authority on delivery. narrows is read from this running process: the topic-level narrows ({kind: "thread", channel, thread} or {kind: "new-topics", channel}) that a realm subscription cannot express. not_in_realm lists channels this process holds an intent for but the realm does not deliver, such as after a failed subscribe — a post there will NOT reach you. Both come from live state, never from COMMY_SUBSCRIBE, so a stale process shows what it actually holds. Mentions of the bot always arrive and are not part of this set.',
+      inputSchema: {
+        type: 'object',
+        properties: { cwd: cwdField },
+        additionalProperties: false,
+      },
+      hostSuppliedArgs: hostSuppliedSessionId,
+      handler: async (args): Promise<ListSubscriptionsResult> => {
+        const run = runFor(args)
+        return run(
+          Effect.gen(function* () {
+            const ctx = yield* currentSessionContext
+            const ensureBound = yield* identityCache.ensureBoundFor(ctx.sessionId, ctx.project)
+            if (ensureBound.current() === undefined) return { state: 'unbound' as const }
+            const realm = HashSet.fromIterable(yield* adapter.inbox.subscriptions())
+            const intents = narrowSet.intents()
+            return {
+              state: 'bound' as const,
+              channels: Arr.fromIterable(realm),
+              narrows: Arr.filterMap(intents, (intent) =>
+                Match.value(intent).pipe(
+                  Match.discriminatorsExhaustive('kind')({
+                    channel: () => Option.none(),
+                    thread: (i) =>
+                      Option.some({
+                        kind: 'thread' as const,
+                        channel: i.channelName,
+                        thread: i.threadName,
+                      }),
+                    'new-topics-in-channel': (i) =>
+                      Option.some({ kind: 'new-topics' as const, channel: i.channelName }),
+                  }),
+                ),
+              ),
+              not_in_realm: Arr.dedupe(
+                intents.map((i) => i.channelName).filter((c) => !HashSet.has(realm, c)),
+              ),
+            }
+          }),
+        )
       },
     },
     {
