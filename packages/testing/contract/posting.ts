@@ -115,9 +115,10 @@ export const publisherPostingContract = (env: () => ContractEnv): void => {
   test('publisher.post refuses a body that mentions a deactivated agent, and posts nothing', () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const seedDeactivatedAgent = env().seedDeactivatedAgent
-        if (seedDeactivatedAgent === undefined) return
-        const gone = yield* seedDeactivatedAgent('alice')
+        const deactivateAgent = env().deactivateAgent
+        if (deactivateAgent === undefined) return
+        const gone = yield* env().seedAgent('alice')
+        yield* deactivateAgent(gone)
         const channel = yield* env().seedChannel('lobby')
         const body = decodeMessageBodySync(`decision for @**${gone.name}** to make`)
         const error = yield* Effect.flip(env().comms.publisher.post(channel.name, body))

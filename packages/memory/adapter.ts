@@ -217,11 +217,8 @@ export type MemoryAdapter = AgentComms & {
    * tests and for modelling humans in MCP plugin tests.
    */
   readonly seedHuman: (name: string) => Effect.Effect<Identity, ParseResult.ParseError>
-  /**
-   * Same as `seedAgent`, but the agent has since been deactivated, so the
-   * directory no longer lists it.
-   */
-  readonly seedDeactivatedAgent: (name: string) => Effect.Effect<Identity, ParseResult.ParseError>
+  /** Deactivate `agent`, so the directory no longer lists it. */
+  readonly deactivateAgent: (agent: Identity) => Effect.Effect<void>
   /** Report `presence` for `human` from `directory.presence` from now on. */
   readonly setPresence: (
     human: Identity,
@@ -1187,8 +1184,10 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
       registerIdentity(name, 'agent').pipe(Effect.map((registered) => registered.identity))
     const seedHuman = (name: string): Effect.Effect<Identity, ParseResult.ParseError> =>
       registerIdentity(name, 'human').pipe(Effect.map((registered) => registered.identity))
-    const seedDeactivatedAgent = (name: string): Effect.Effect<Identity, ParseResult.ParseError> =>
-      seedAgent(name).pipe(Effect.tap((identity) => deactivatedIdentities.add(identity.id)))
+    const deactivateAgent = (agent: Identity): Effect.Effect<void> =>
+      Effect.sync(() => {
+        deactivatedIdentities.add(agent.id)
+      })
     const setPresence = (
       human: Identity,
       presence: Exclude<Presence, 'unknown'>,
@@ -1223,7 +1222,7 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
       seedChannel,
       seedAgent,
       seedHuman,
-      seedDeactivatedAgent,
+      deactivateAgent,
       setPresence,
       peerPost,
       newSeat: (seatConfig = {}) => memorySeat(realm, seatConfig),
