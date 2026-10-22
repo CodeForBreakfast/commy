@@ -59,6 +59,7 @@ runAgentCommsContract('memory adapter (allowlist mode for UnknownIdentity covera
           'hermes-agent-cycle',
           'hermes-agent-returning',
           'hermes-agent-released',
+          'hermes-agent-active',
           'hermes-agent-a',
           'hermes-agent-b',
           'hermes-agent-c',
