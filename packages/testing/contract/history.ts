@@ -1,7 +1,12 @@
 /** The shared contract's tests for HistoryReader. */
 
 import { expect, test } from 'bun:test'
-import { decodeMessageBodySync, decodeTimestampSync } from '@commy/core/ports'
+import {
+  type ChannelName,
+  decodeMessageBodySync,
+  decodeThreadNameSync,
+  decodeTimestampSync,
+} from '@commy/core/ports'
 import { Effect } from 'effect'
 import type { ContractEnv } from '../contract.ts'
 import { postSpaced } from './helpers.ts'
@@ -97,6 +102,56 @@ export const historyContract = (env: () => ContractEnv): void => {
         const future = decodeTimestampSync(last.ts + 3600)
         const filtered = yield* env().comms.history.readChannel(channel.name, { since: future })
         expect(filtered).toEqual([])
+      }),
+    ))
+  const postInThreads = (channel: ChannelName, posts: ReadonlyArray<readonly [string, string]>) =>
+    Effect.forEach(
+      posts,
+      ([thread, body], index) =>
+        (index === 0
+          ? Effect.void
+          : Effect.sleep(env().comms.capabilities.timestampGranularity)
+        ).pipe(
+          Effect.zipRight(
+            env().comms.publisher.post(channel, decodeMessageBodySync(body), {
+              thread: decodeThreadNameSync(thread),
+            }),
+          ),
+        ),
+      { discard: true },
+    )
+  test('history.recentThreads reports one entry per thread, carrying its newest post', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const me = yield* env().comms.identity.currentIdentity()
+        yield* postInThreads(channel.name, [
+          ['deploy-issue', 'investigating'],
+          ['feature-request', 'earlier reply'],
+          ['feature-request', 'latest reply'],
+        ])
+        const threads = yield* env().comms.history.recentThreads(me.id)
+        expect(threads.map((t) => [t.thread, t.lastPostBody])).toEqual([
+          [decodeThreadNameSync('feature-request'), decodeMessageBodySync('latest reply')],
+          [decodeThreadNameSync('deploy-issue'), decodeMessageBodySync('investigating')],
+        ])
+      }),
+    ))
+  test('history.recentThreads limit keeps the most recently posted-in threads', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const me = yield* env().comms.identity.currentIdentity()
+        yield* postInThreads(channel.name, [
+          ['oldest-thread', 'one'],
+          ['middle-thread', 'two'],
+          ['newest-thread', 'three'],
+        ])
+        const threads = yield* env().comms.history.recentThreads(me.id, { limit: 2 })
+        expect(threads.map((t) => t.thread)).toEqual([
+          decodeThreadNameSync('newest-thread'),
+          decodeThreadNameSync('middle-thread'),
+        ])
       }),
     ))
 }

@@ -2644,14 +2644,14 @@ effectTest('history.recentThreads queries by sender and deduplicates per thread'
     yield* seedUsers(stub, [HERMES, MAINTAINER])
     yield* seedMessages(stub, [
       {
-        id: 101,
+        id: 99,
         sender_id: HERMES.user_id,
         sender_full_name: HERMES.full_name,
-        stream_id: 1234,
-        display_recipient: 'project-x',
-        subject: 'feature-request',
-        content: 'latest reply',
-        timestamp: 1715000200,
+        stream_id: 5678,
+        display_recipient: 'ops',
+        subject: 'deploy-issue',
+        content: 'investigating',
+        timestamp: 1715000050,
       },
       {
         id: 100,
@@ -2664,14 +2664,14 @@ effectTest('history.recentThreads queries by sender and deduplicates per thread'
         timestamp: 1715000100,
       },
       {
-        id: 99,
+        id: 101,
         sender_id: HERMES.user_id,
         sender_full_name: HERMES.full_name,
-        stream_id: 5678,
-        display_recipient: 'ops',
-        subject: 'deploy-issue',
-        content: 'investigating',
-        timestamp: 1715000050,
+        stream_id: 1234,
+        display_recipient: 'project-x',
+        subject: 'feature-request',
+        content: 'latest reply',
+        timestamp: 1715000200,
       },
     ])
     const threads = yield* adapter.history.recentThreads(
