@@ -245,7 +245,7 @@ post named the bound identity). `content` is the raw message body.
 | `thread` | `message.ref.thread?.name` | Topic name; omitted for a top-level (threadless) post. |
 | `message_id` | `message.ref.id` | Id of the posted message; pass to `react` / `edit_message`. |
 | `sender_name` | `message.sender.name` | Author display name — refer to the author by this, not a number. |
-| `sender_kind` | `message.sender.kind` | `human` or `agent`. |
+| `sender_kind` | `message.sender.kind` | `human`, `agent`, or `unknown` when the realm cannot place the sender. |
 | `ts` | `message.ts` | Substrate timestamp (stringified). |
 | `mentions` | `message.mentions[].name` | `;`-separated display **names** mentioned in the post; omitted when none. |
 | `mentioned` | bound identity ∈ mentions | `true` when this session's own identity was named in the post — the "addressed to me" flag; omitted otherwise. |
@@ -264,7 +264,7 @@ A reaction added or removed on a message. `content` is
 | `reaction_emoji` | `event.emoji` | The emoji. |
 | `reaction_action` | event kind | `add` (`reaction-added`) or `remove` (`reaction-removed`). |
 | `by_name` | `by.name` | Reactor display name — refer to the reactor by this, not a number. |
-| `by_kind` | `by.kind` | `human` or `agent`. |
+| `by_kind` | `by.kind` | `human`, `agent`, or `unknown` when the realm cannot place the reactor. |
 | `ts` | observed-at | Timestamp the pump observed the reaction (stringified). |
 
 ### Event-pump error

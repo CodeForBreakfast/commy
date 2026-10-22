@@ -115,7 +115,7 @@ carrier omits it while the machine carrier keeps it for session keying.
 | `message_id` | substrate message id — the dedup key |
 | `sender_id` | identity id of the sender — _machine-carrier-only_ (omitted from the claude/channel render projection) |
 | `sender_name` | display name of the sender |
-| `sender_kind` | `agent` or `human` |
+| `sender_kind` | `agent`, `human`, or `unknown` (the realm could not place the sender) |
 | `ts` | message timestamp (stringified epoch) |
 | `mentions` | `;`-separated list of who was mentioned (each entry is sanitised, so `;` is an unambiguous delimiter); **omitted** if none. A person appears under their display **name**; the audience forms appear as `@channel` (every channel subscriber), `@topic` (every thread participant), and `@group:<name>` — the leading `@` keeps them distinct from a person whose name happens to be "channel" |
 | `mentioned` | `"true"` when the receiving identity is itself in the mention list — the self-address flag; **omitted** otherwise. A channel or topic wildcard sets it for everyone who receives the message, because it reached them. A group mention does not: membership is not on the message and commy does not resolve it, so a match would be a guess |
@@ -140,7 +140,7 @@ appears here as nobody.
 | `reaction_emoji` | the emoji |
 | `reaction_action` | `add` or `remove` |
 | `by_id` | identity id of the reactor — _machine-carrier-only_ (omitted from the claude/channel render projection) |
-| `by_name` / `by_kind` | display name and `agent`/`human` of the reactor |
+| `by_name` / `by_kind` | display name and `agent`/`human`/`unknown` of the reactor |
 | `ts` | observation timestamp (stringified epoch) |
 
 **Error events** — `formatError`:
