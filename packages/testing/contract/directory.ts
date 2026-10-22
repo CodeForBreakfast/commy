@@ -116,6 +116,19 @@ export const directoryContract = (env: () => ContractEnv): void => {
         }
       }),
     ))
+  test('directory.presence answers before identity.acquire', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const build = env().newUnacquiredAdapter
+        const seedHuman = env().seedHuman
+        const setPresence = env().setPresence
+        if (build === undefined || seedHuman === undefined || setPresence === undefined) return
+        const human = yield* seedHuman('Alice Example')
+        yield* setPresence(human, 'online')
+        const fresh = yield* build()
+        expect(yield* fresh.directory.presence(human)).toBe('online')
+      }),
+    ))
   test('directory.presence is offline for a human with no presence record', () =>
     Effect.runPromise(
       Effect.gen(function* () {
