@@ -6,6 +6,8 @@
  */
 
 import {
+  type AcquiredIdentity,
+  type BindError,
   decodeBotNameSync,
   decodeChannelIdSync,
   decodeChannelNameSync,
@@ -23,11 +25,14 @@ const SELF_NAME = decodeBotNameSync('contract-self')
 export const inProcessContractFactory: AttachmentContractFactory = async () => {
   const realm = await Effect.runPromise(makeInProcessRealm)
 
-  const buildAdapter = (): Effect.Effect<ZulipAdapter> =>
+  const buildAdapter = (
+    bindOnDemand?: Effect.Effect<AcquiredIdentity, BindError>,
+  ): Effect.Effect<ZulipAdapter> =>
     zulipAdapter({
       realmUrl: realm.url,
       minterEmail: realm.minter.email,
       minterApiKey: Redacted.make(realm.minter.apiKey),
+      ...(bindOnDemand === undefined ? {} : { bindOnDemand }),
     }).pipe(Effect.provideService(HttpClient.HttpClient, realm.client))
 
   const adapter = await Effect.runPromise(buildAdapter())

@@ -21,7 +21,8 @@ runAgentCommsContract('memory adapter', async () => {
     seedHuman: (name) => adapter.seedHuman(name).pipe(Effect.orDie),
     deactivateAgent: adapter.deactivateAgent,
     setPresence: adapter.setPresence,
-    newUnacquiredAdapter: () => adapter.newSeat(),
+    newUnacquiredAdapter: (bindOnDemand) =>
+      adapter.newSeat(bindOnDemand === undefined ? {} : { bindOnDemand }),
     peerPost: (peer, channel, body, opts) =>
       adapter.peerPost(peer, channel, body, opts).pipe(Effect.asVoid, Effect.orDie),
     channelDescriptionLimit: MEMORY_DESCRIPTION_LIMIT,
@@ -46,8 +47,9 @@ runAgentCommsContract('memory adapter (allowlist mode for UnknownIdentity covera
     seedHuman: (name) => adapter.seedHuman(name).pipe(Effect.orDie),
     deactivateAgent: adapter.deactivateAgent,
     setPresence: adapter.setPresence,
-    newUnacquiredAdapter: () =>
+    newUnacquiredAdapter: (bindOnDemand) =>
       adapter.newSeat({
+        ...(bindOnDemand === undefined ? {} : { bindOnDemand }),
         acquirableNames: [
           'hermes-agent-cycle',
           'hermes-agent-a',

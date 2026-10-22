@@ -2,6 +2,10 @@
 
 import { expect, test } from 'bun:test'
 import {
+  type AcquiredIdentity,
+  type AgentComms,
+  type BindError,
+  decodeBotNameSync,
   decodeChannelNameSync,
   decodeMessageBodySync,
   decodeThreadNameSync,
@@ -12,13 +16,43 @@ import {
   UnknownChannel,
   UnresolvedMention,
 } from '@commy/core/ports'
-import { Array as Arr, Effect, Option } from 'effect'
+import { Array as Arr, Effect, Option, Ref } from 'effect'
 import type { ContractEnv } from '../contract.ts'
 
 const findByBody = (
   messages: ReadonlyArray<{ readonly body: string }>,
   body: string,
 ): { readonly body: string } | undefined => messages.find((m) => m.body === body)
+
+/**
+ * A bind-on-demand strategy that counts how often it is asked and binds
+ * through the very adapter it is built into. The adapter does not exist until
+ * its construction returns, so the strategy is wired to it straight after.
+ */
+const makeCountingBinder = (
+  name: string,
+): Effect.Effect<{
+  readonly bind: Effect.Effect<AcquiredIdentity, BindError>
+  readonly calls: Effect.Effect<number>
+  readonly wire: (adapter: AgentComms) => Effect.Effect<void>
+}> =>
+  Effect.gen(function* () {
+    const callsRef = yield* Ref.make(0)
+    const targetRef = yield* Ref.make<Option.Option<AgentComms>>(Option.none())
+    return {
+      bind: Ref.update(callsRef, (n) => n + 1).pipe(
+        Effect.zipRight(Ref.get(targetRef)),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.dieMessage('binder ran before the adapter was wired'),
+            onSome: (adapter: AgentComms) => adapter.identity.acquire(decodeBotNameSync(name)),
+          }),
+        ),
+      ),
+      calls: Ref.get(callsRef),
+      wire: (adapter) => Ref.set(targetRef, Option.some(adapter)),
+    }
+  })
 
 export const publisherPostingContract = (env: () => ContractEnv): void => {
   test('publisher.post returns a MessageRef whose channel matches the destination', () =>
@@ -333,6 +367,60 @@ export const publisherPostingContract = (env: () => ContractEnv): void => {
           fresh.publisher.post(channel.name, decodeMessageBodySync('nobody to send it')),
         )
         expect(error).toBeInstanceOf(UnboundEphemeralSession)
+      }),
+    ))
+  test('publisher.post on an adapter that has never acquired binds through its bind-on-demand strategy', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const newUnacquiredAdapter = env().newUnacquiredAdapter
+        if (newUnacquiredAdapter === undefined) return
+        const channel = yield* env().seedChannel('lobby')
+        const current = yield* env().comms.identity.currentIdentity()
+        const binder = yield* makeCountingBinder(`${current.name}-cycle`)
+        const fresh = yield* newUnacquiredAdapter(binder.bind)
+        yield* binder.wire(fresh)
+        yield* fresh.publisher.post(channel.name, decodeMessageBodySync('bound on demand'))
+        expect(yield* binder.calls).toBe(1)
+        const bound = yield* fresh.identity.currentIdentity()
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        const found = messages.find((m) => m.body === 'bound on demand')
+        expect(found?.sender.id).toEqual(bound.id)
+      }),
+    ))
+  // "Is something bound?" and "may this caller use it?" differ, and only the
+  // strategy can answer the second, so a bound seat does not skip it.
+  test('publisher.post asks the bind-on-demand strategy on every write, bound or not', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const newUnacquiredAdapter = env().newUnacquiredAdapter
+        if (newUnacquiredAdapter === undefined) return
+        const channel = yield* env().seedChannel('lobby')
+        const current = yield* env().comms.identity.currentIdentity()
+        const binder = yield* makeCountingBinder(`${current.name}-cycle`)
+        const fresh = yield* newUnacquiredAdapter(binder.bind)
+        yield* binder.wire(fresh)
+        yield* fresh.publisher.post(channel.name, decodeMessageBodySync('one'))
+        yield* fresh.publisher.post(channel.name, decodeMessageBodySync('two'))
+        expect(yield* binder.calls).toBe(2)
+      }),
+    ))
+  test('publisher.post fails with the strategy refusal and posts nothing, even on a seat that has acquired', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const newUnacquiredAdapter = env().newUnacquiredAdapter
+        if (newUnacquiredAdapter === undefined) return
+        const channel = yield* env().seedChannel('lobby')
+        const current = yield* env().comms.identity.currentIdentity()
+        const fresh = yield* newUnacquiredAdapter(
+          Effect.fail(new UnboundEphemeralSession({ message: 'this caller may not bind' })),
+        )
+        yield* fresh.identity.acquire(decodeBotNameSync(`${current.name}-cycle`))
+        const error = yield* Effect.flip(
+          fresh.publisher.post(channel.name, decodeMessageBodySync('refused')),
+        )
+        expect(error).toBeInstanceOf(UnboundEphemeralSession)
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        expect(findByBody(messages, 'refused')).toBeUndefined()
       }),
     ))
 }
