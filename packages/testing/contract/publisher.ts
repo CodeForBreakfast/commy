@@ -101,6 +101,31 @@ export const publisherContract = (env: () => ContractEnv): void => {
         expect(error).toBeInstanceOf(PublisherError)
       }),
     ))
+  test('publisher.resolveThread fails for a name readThread finds nothing for, even one that looks like a resolved form of a real thread', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        yield* env().comms.publisher.post(channel.name, decodeMessageBodySync('real thread'), {
+          thread: decodeThreadNameSync('planning'),
+        })
+        const lookalike = decodeThreadNameSync('✔ planning')
+        const found = yield* env().comms.history.readThread(channel.name, lookalike, {})
+        expect(found).toEqual([])
+        const error = yield* Effect.flip(
+          env().comms.publisher.resolveThread(channel.name, lookalike),
+        )
+        expect(error).toBeInstanceOf(PublisherError)
+        const messages = yield* env().comms.history.readThread(
+          channel.name,
+          decodeThreadNameSync('planning'),
+          {},
+        )
+        const real = messages.find((m) => m.body === 'real thread')
+        expect(Option.map(real?.ref.thread ?? Option.none(), (t) => t.resolved)).toEqual(
+          Option.some(false),
+        )
+      }),
+    ))
   test('publisher.setChannelDescription round-trips verbatim through directory.channelDescription', () =>
     Effect.runPromise(
       Effect.gen(function* () {

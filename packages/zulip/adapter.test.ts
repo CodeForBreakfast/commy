@@ -2007,20 +2007,6 @@ effectTest(
     }),
 )
 
-const topicsQueried = (stub: StubHttpClient) =>
-  stub.captured.pipe(
-    Effect.map((reqs) =>
-      reqs
-        .filter((r) => r.method === 'GET' && r.url.pathname === '/api/v1/messages')
-        .flatMap((r) => {
-          const narrow: ReadonlyArray<{ operator: string; operand: string }> = JSON.parse(
-            r.url.searchParams.get('narrow') ?? '[]',
-          )
-          return narrow.filter((n) => n.operator === 'topic').map((n) => n.operand)
-        }),
-    ),
-  )
-
 effectTest('publisher.resolveThread leaves a topic that already carries the ✔ prefix alone', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
@@ -2040,21 +2026,6 @@ effectTest('publisher.resolveThread leaves a topic that already carries the ✔ 
     yield* adapter.publisher.resolveThread(generalChannel.name, decodeThreadNameSync('✔ planning'))
     const patches = (yield* stub.captured).filter((r) => r.method === 'PATCH')
     expect(patches).toEqual([])
-  }),
-)
-
-effectTest('publisher.resolveThread looks for the same topics readThread does', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedMessages(stub, [])
-    const adapter = yield* buildAdapter(stub)
-    const name = decodeThreadNameSync('✔ planning')
-    yield* adapter.history.readThread(generalChannel.name, name, {})
-    const readTopics = yield* topicsQueried(stub)
-    const error = yield* Effect.flip(adapter.publisher.resolveThread(generalChannel.name, name))
-    expect(error).toBeInstanceOf(PublisherError)
-    const resolveTopics = (yield* topicsQueried(stub)).slice(readTopics.length)
-    expect(new Set(resolveTopics)).toEqual(new Set(readTopics))
   }),
 )
 
