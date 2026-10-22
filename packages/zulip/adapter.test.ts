@@ -1160,38 +1160,6 @@ effectTest(
     }),
 )
 
-// A `@**Name**` token in an outbound body that resolves to no known identity
-// would be posted verbatim and notify nobody — Zulip accepts it silently.
-// The write-path validator turns that silent non-delivery into a typed failure.
-effectTest('publisher.post fails with a tagged UnresolvedMention on a dead mention form', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedSendMessage(stub, 200)
-    yield* seedRender(stub, '<p>decision for @<strong>Alice Example</strong> to make</p>')
-    const adapter = yield* buildAdapter(stub)
-    // The directory holds HERMES only; @**Graeme Foster** resolves to nobody.
-    const error = yield* Effect.flip(
-      adapter.publisher.post(
-        generalChannel.name,
-        decodeMessageBodySync('decision for @**Graeme Foster** to make'),
-      ),
-    )
-    expect(error).toBeInstanceOf(UnresolvedMention)
-    if (error instanceof UnresolvedMention) {
-      expect(error._tag).toBe('UnresolvedMention')
-      expect(error.operation).toBe('post')
-      expect(error.tokens).toEqual(['Graeme Foster'])
-    }
-    // The dead post never reached the substrate.
-    const posted = yield* stub.captured.pipe(
-      Effect.map((reqs) =>
-        reqs.filter((r) => r.method === 'POST' && r.url.pathname === '/api/v1/messages'),
-      ),
-    )
-    expect(posted).toHaveLength(0)
-  }),
-)
-
 // Zulip still resolves a deactivated account's name, but renders the mention
 // silent, so it notifies nobody. The directory lists deactivated members too,
 // which must not count as resolving the mention — in either markup form.
@@ -1355,37 +1323,6 @@ effectTest('publisher.post skips the directory fetch when the body has no mentio
       decodeMessageBodySync('no mentions here'),
     )
     expect(ref.id).toEqual(decodeMessageIdSync('202'))
-  }),
-)
-
-// The same directory validation guards the edit body — a stale mention in an
-// edit is as silent as one in a fresh post.
-effectTest('publisher.edit fails with a tagged UnresolvedMention on a dead mention form', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* stub.respond('PATCH', '/api/v1/messages/42', { body: { result: 'success' } })
-    yield* seedRender(stub, '<p>now pinging @<strong>Alice Example</strong></p>')
-    const adapter = yield* buildAdapter(stub)
-    const target: MessageRef = {
-      id: decodeMessageIdSync('42'),
-      channel: generalChannel,
-      thread: Option.none(),
-      permalink: MessagePermalinkSchema.make(
-        'https://zulip.example.com/#narrow/channel/1234-general/near/42',
-      ),
-    }
-    const error = yield* Effect.flip(
-      adapter.publisher.edit(target, decodeMessageBodySync('now pinging @**Graeme Foster**')),
-    )
-    expect(error).toBeInstanceOf(UnresolvedMention)
-    if (error instanceof UnresolvedMention) {
-      expect(error.operation).toBe('edit')
-      expect(error.tokens).toEqual(['Graeme Foster'])
-    }
-    const patched = yield* stub.captured.pipe(
-      Effect.map((reqs) => reqs.filter((r) => r.method === 'PATCH')),
-    )
-    expect(patched).toHaveLength(0)
   }),
 )
 

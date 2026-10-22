@@ -78,6 +78,7 @@ import {
   UnboundEphemeralSession,
   UnknownChannel,
   UnknownIdentity,
+  UnresolvedMention,
   userMentions,
 } from '@commy/core/ports'
 import {
@@ -340,6 +341,18 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
           (a, b) => a.id === b.id,
         ),
       )
+
+    const refuseDeadMentions = (
+      operation: 'post' | 'edit',
+      body: MessageBodyType,
+    ): Effect.Effect<void, UnresolvedMention> => {
+      const tokens = Arr.dedupe(
+        Arr.filter(mentionedNames(body), (name) => !identitiesByName.has(name)),
+      )
+      return Arr.isEmptyReadonlyArray(tokens)
+        ? Effect.void
+        : Effect.fail(new UnresolvedMention({ operation, tokens, substrate: 'memory' }))
+    }
 
     // With no strategy wired, an explicit `acquire` is the only way to bind:
     // use whatever is already bound, and refuse otherwise.
@@ -667,6 +680,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         Effect.gen(function* () {
           const self = yield* requireBound()
           const channelRef = yield* resolveChannel(channel)
+          yield* refuseDeadMentions('post', body)
           const thread =
             opts?.thread === undefined
               ? undefined
@@ -693,6 +707,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
               cause: new Error(`memoryAdapter: message ${message.id} was sent by someone else`),
             })
           }
+          yield* refuseDeadMentions('edit', body)
           const updated: StoredMessage = { ...stored, body, mentions: mentionsIn(body) }
           messagesById.set(message.id, updated)
           const bucket = messagesByChannel.get(stored.ref.channel.id)

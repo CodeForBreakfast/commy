@@ -15,6 +15,7 @@ import {
   mentionedIdentities,
   PublisherError,
   UnknownChannel,
+  UnresolvedMention,
 } from '@commy/core/ports'
 import { Duration, Effect, Option, Queue } from 'effect'
 import type { ContractEnv } from '../contract.ts'
@@ -292,6 +293,36 @@ export const publisherContract = (env: () => ContractEnv): void => {
         const messages = yield* env().comms.history.readChannel(channel.name, {})
         const found = messages.find((m) => String(m.ref.id) === String(ref.id))
         expect(mentionedIdentities(found?.mentions ?? []).map((m) => m.id)).toEqual([bob.id])
+      }),
+    ))
+  test('publisher.edit refuses a body that mentions nobody in the realm, and leaves the message as it was', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const ref = yield* env().comms.publisher.post(channel.name, decodeMessageBodySync('draft'))
+        const error = yield* Effect.flip(
+          env().comms.publisher.edit(ref, decodeMessageBodySync('now pinging @**Nobody Example**')),
+        )
+        expect(error).toBeInstanceOf(UnresolvedMention)
+        if (error instanceof UnresolvedMention) {
+          expect(error.operation).toBe('edit')
+          expect(error.tokens).toEqual(['Nobody Example'])
+        }
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        const found = messages.find((m) => String(m.ref.id) === String(ref.id))
+        expect(found?.body).toBe(decodeMessageBodySync('draft'))
+      }),
+    ))
+  test('publisher.edit accepts a mention form naming nobody when it sits in a code span', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const ref = yield* env().comms.publisher.post(channel.name, decodeMessageBodySync('draft'))
+        const body = decodeMessageBodySync('the dead form `@**Nobody Example**` names nobody')
+        yield* env().comms.publisher.edit(ref, body)
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        const found = messages.find((m) => String(m.ref.id) === String(ref.id))
+        expect(found?.body).toBe(body)
       }),
     ))
   test('publisher.edit on a thread message keeps the thread association', () =>
