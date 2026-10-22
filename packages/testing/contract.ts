@@ -18,14 +18,19 @@
 
 import { afterEach, beforeEach, describe } from 'bun:test'
 import type {
+  AcquiredIdentity,
   AgentComms,
+  AttachmentStore,
+  BindError,
   ChannelName,
   ChannelRef,
   Identity,
   MessageBody,
   PostOpts,
+  Presence,
 } from '@commy/core/ports'
 import { Effect } from 'effect'
+import { attachmentsContract } from './contract/attachments.ts'
 import { directoryContract } from './contract/directory.ts'
 import { historyContract } from './contract/history.ts'
 import { identityContract } from './contract/identity.ts'
@@ -53,6 +58,27 @@ export interface ContractEnv {
    */
   readonly seedAgent: (name: string) => Effect.Effect<Identity>
   /**
+   * Optional. Make a human member available — populated in
+   * `directory.listHumans`. Substrates that cannot stand up a human member
+   * omit it and the suite skips the tests that need one.
+   */
+  readonly seedHuman?: (name: string) => Effect.Effect<Identity>
+  /**
+   * Optional. Deactivate an agent obtained from `seedAgent`, as the substrate
+   * does when a member leaves. Substrates that cannot deactivate a member omit
+   * it and the suite skips the tests that need one.
+   */
+  readonly deactivateAgent?: (agent: Identity) => Effect.Effect<void>
+  /**
+   * Optional. Have the substrate report `presence` for a human obtained from
+   * `seedHuman`. Substrates that cannot set a member's presence omit it and
+   * the suite skips the tests that need it.
+   */
+  readonly setPresence?: (
+    human: Identity,
+    presence: Exclude<Presence, 'unknown'>,
+  ) => Effect.Effect<void>
+  /**
    * Optional. Construct a fresh, unauthenticated adapter on the same
    * substrate for lifecycle tests that exercise acquire/release state
    * transitions from a clean start. Substrates whose `acquire` can
@@ -62,11 +88,16 @@ export interface ContractEnv {
    * (transitional Zulip, future Discord) can omit it and the
    * suite skips the rebind/no-op tests.
    *
+   * Built with `bindOnDemand` as its bind-on-demand strategy when one is
+   * given, and with none otherwise.
+   *
    * Test owns disposal of any extra adapters it spins up; the factory's
    * `dispose` still runs once per test and tears down what the factory
    * itself stood up.
    */
-  readonly newUnacquiredAdapter?: () => Effect.Effect<AgentComms>
+  readonly newUnacquiredAdapter?: (
+    bindOnDemand?: Effect.Effect<AcquiredIdentity, BindError>,
+  ) => Effect.Effect<AgentComms>
   /**
    * Optional. When set together with `newUnacquiredAdapter`, calling
    * `acquire(unacquirableName)` on a freshly-built adapter throws
@@ -112,28 +143,59 @@ export interface ContractEnv {
    * limit.
    */
   readonly messageLengthLimit: number
+  /**
+   * Longest thread name this substrate keeps, in characters. A substrate that
+   * cuts a longer name short must return the name it kept from `post`; the
+   * thread-name test builds its over-length input from this limit.
+   */
+  readonly threadNameLimit: number
   /** Tear down whatever the factory stood up. Called once per test. */
   readonly dispose: () => Effect.Effect<void>
 }
 
 export type ContractFactory = () => Promise<ContractEnv>
 
+/**
+ * A contract environment whose adapter also implements `AttachmentStore`.
+ * Only an adapter that does runs the attachment contract.
+ */
+export interface AttachmentContractEnv extends ContractEnv {
+  /** The adapter under test's `AttachmentStore`, bound as `comms` is. */
+  readonly attachments: AttachmentStore
+}
+
+export type AttachmentContractFactory = () => Promise<AttachmentContractEnv>
+
+/** Build a fresh environment before each test and dispose of it after. */
+const envPerTest = <E extends ContractEnv>(factory: () => Promise<E>): (() => E) => {
+  let env: E
+
+  beforeEach(async () => {
+    env = await factory()
+  }, REALM_HOOK_TIMEOUT_MS)
+
+  afterEach(() => Effect.runPromise(env.dispose()), REALM_HOOK_TIMEOUT_MS)
+
+  return () => env
+}
+
 export const runAgentCommsContract = (label: string, factory: ContractFactory): void => {
   describe(`AgentComms contract — ${label}`, () => {
-    let env: ContractEnv
-
-    beforeEach(async () => {
-      env = await factory()
-    }, REALM_HOOK_TIMEOUT_MS)
-
-    afterEach(() => Effect.runPromise(env.dispose()), REALM_HOOK_TIMEOUT_MS)
-
-    const currentEnv = (): ContractEnv => env
+    const currentEnv = envPerTest(factory)
     publisherPostingContract(currentEnv)
     publisherContract(currentEnv)
     directoryContract(currentEnv)
     historyContract(currentEnv)
     identityContract(currentEnv)
     inboxContract(currentEnv)
+  })
+}
+
+export const runAttachmentStoreContract = (
+  label: string,
+  factory: AttachmentContractFactory,
+): void => {
+  describe(`AttachmentStore contract — ${label}`, () => {
+    attachmentsContract(envPerTest(factory))
   })
 }

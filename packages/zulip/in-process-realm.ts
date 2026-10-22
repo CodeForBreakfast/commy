@@ -46,6 +46,12 @@ export const CHANNEL_DESCRIPTION_LIMIT = 1024
 
 /** Zulip's default `max_message_length`, which `/register` reports as realm state. */
 export const MESSAGE_LENGTH_LIMIT = 10_000
+/** Zulip's `MAX_TOPIC_NAME_LENGTH`. A longer topic is stored cut short with an ellipsis. */
+export const TOPIC_LIMIT = 60
+const ELLIPSIS = '...'
+
+const truncateTopic = (topic: string): string =>
+  topic.length > TOPIC_LIMIT ? `${topic.slice(0, TOPIC_LIMIT - ELLIPSIS.length)}${ELLIPSIS}` : topic
 
 export type PresenceStatus = 'active' | 'idle' | 'offline'
 
@@ -61,6 +67,8 @@ export interface InProcessRealm {
   ) => Effect.Effect<{ readonly streamId: number; readonly name: string }>
   /** An active member of the realm, returning its user id. */
   readonly addUser: (fullName: string, kind: 'human' | 'bot') => Effect.Effect<number>
+  /** Deactivate the member with this user id, as an administrator would. */
+  readonly deactivateUser: (userId: number) => Effect.Effect<void>
   readonly setPresence: (userId: number, status: PresenceStatus) => Effect.Effect<void>
 }
 
@@ -219,13 +227,20 @@ const mentionedUser = (state: RealmState, token: string): Option.Option<RealmUse
   const disambiguated = DISAMBIGUATED.exec(token)
   if (disambiguated !== null) {
     return HashMap.get(state.users, Number(disambiguated[2])).pipe(
-      Option.filter((u) => sameName(u.fullName, disambiguated[1] ?? '')),
+      Option.filter((u) => disambiguated[1] === '' || u.fullName === disambiguated[1]),
     )
   }
+  // Zulip keys its lookup on the lowercased name from an unordered query, so
+  // the last row wins; the highest id stands in for it here.
   const named = Arr.filter(Arr.fromIterable(HashMap.values(state.users)), (u) =>
     sameName(u.fullName, token),
   )
-  return named.length === 1 ? Arr.head(named) : Option.none()
+  return Arr.last(
+    Arr.sort(
+      named,
+      Order.mapInput(Order.number, (u: RealmUser) => u.userId),
+    ),
+  )
 }
 
 /**
@@ -610,6 +625,12 @@ export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(func
     users: HashMap.set(state.users, user.userId, user),
   })
 
+  const deactivate = (state: RealmState, user: RealmUser): RealmState => ({
+    ...putUser(state, { ...user, isActive: false }),
+    // Deactivation drops the user's event queues.
+    queues: HashMap.filter(state.queues, (q) => q.ownerId !== user.userId),
+  })
+
   const createUser = (
     fullName: string,
     kind: UserKind,
@@ -913,11 +934,7 @@ export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(func
       handle: (call) =>
         update((state) =>
           accessBot(state, call.caller, pathId(call)).pipe(
-            Effect.map((bot) => ({
-              ...putUser(state, { ...bot, isActive: false }),
-              // Deactivation drops the user's event queues.
-              queues: HashMap.filter(state.queues, (q) => q.ownerId !== bot.userId),
-            })),
+            Effect.map((bot) => deactivate(state, bot)),
           ),
         ),
     },
@@ -1105,7 +1122,7 @@ export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(func
             return yield* refuse('in-process realm models channel messages only')
           }
           const to = yield* requiredParam(call, 'to')
-          const topic = Option.getOrElse(param(call, 'topic'), () => '')
+          const topic = truncateTopic(Option.getOrElse(param(call, 'topic'), () => ''))
           const content = yield* requiredParam(call, 'content')
           if (topic.trim() === '') return yield* refuse('Topics are required in this organization.')
           if (content.trim() === '') return yield* refuse('Message must not be empty')
@@ -1139,6 +1156,18 @@ export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(func
       handle: (call) =>
         Effect.all([requiredParam(call, 'content'), SubscriptionRef.get(stateRef)]).pipe(
           Effect.map(([content, state]) => ok({ rendered: render(state, content).html })),
+        ),
+    },
+    {
+      method: 'GET',
+      path: /^\/api\/v1\/messages\/(\d+)$/,
+      handle: (call) =>
+        SubscriptionRef.get(stateRef).pipe(
+          Effect.flatMap((state) =>
+            requireMessage(state, pathId(call)).pipe(
+              Effect.map((message) => ok({ message: messagePayload(state, message, false) })),
+            ),
+          ),
         ),
     },
     { method: 'PATCH', path: /^\/api\/v1\/messages\/(\d+)$/, handle: editMessage },
@@ -1333,6 +1362,12 @@ export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(func
             }
           : { email: `${shortNameOf(fullName)}@${REALM_HOST}`, isAdmin: false },
       ).pipe(Effect.map((u) => u.userId)),
+    deactivateUser: (userId) =>
+      SubscriptionRef.update(stateRef, (s) =>
+        HashMap.get(s.users, userId).pipe(
+          Option.match({ onNone: () => s, onSome: (user) => deactivate(s, user) }),
+        ),
+      ),
     setPresence: (userId, status) =>
       SubscriptionRef.update(stateRef, (s) => ({
         ...s,

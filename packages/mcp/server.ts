@@ -1,4 +1,4 @@
-import { basename, join } from 'node:path'
+import { basename, isAbsolute, join, relative, sep } from 'node:path'
 import { stderrLoggerLayer } from '@commy/core/logging'
 import type {
   AcquiredIdentity,
@@ -7,7 +7,13 @@ import type {
   InboxError,
   MessageInbox,
 } from '@commy/core/ports'
-import { decodeChannelName, decodeThreadName, IdentityError, isBindError } from '@commy/core/ports'
+import {
+  AttachmentError,
+  decodeChannelName,
+  decodeThreadName,
+  IdentityError,
+  isBindError,
+} from '@commy/core/ports'
 import { CommandExecutor, FetchHttpClient, FileSystem, type HttpClient } from '@effect/platform'
 import { NodeContext, NodeRuntime } from '@effect/platform-node'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
@@ -518,13 +524,19 @@ export const makeProgram = (
       // dir in a directory the caller can Read (its scratchpad) instead of
       // $TMPDIR. A set-but-missing/non-directory base is operator misconfig —
       // validate once here at boot and fail loudly rather than per-call.
-      if (parsed.downloadDir !== undefined) {
-        const base = parsed.downloadDir
-        const baseStat = yield* fs.stat(base).pipe(Effect.option)
-        if (Option.isNone(baseStat) || baseStat.value.type !== 'Directory') {
-          return yield* envConfigError([
-            `COMMY_DOWNLOAD_DIR is set to ${base} but is not an existing directory`,
-          ])
+      // COMMY_UPLOAD_DIR is the root upload_file may read under, validated the
+      // same way.
+      for (const [name, base] of [
+        ['COMMY_DOWNLOAD_DIR', parsed.downloadDir],
+        ['COMMY_UPLOAD_DIR', parsed.uploadDir],
+      ] as const) {
+        if (base !== undefined) {
+          const baseStat = yield* fs.stat(base).pipe(Effect.option)
+          if (Option.isNone(baseStat) || baseStat.value.type !== 'Directory') {
+            return yield* envConfigError([
+              `${name} is set to ${base} but is not an existing directory`,
+            ])
+          }
         }
       }
       // Diagnostics route to STDERR via the logger layer provided at the
@@ -919,7 +931,22 @@ export const makeProgram = (
           }),
         upload: (path) =>
           Effect.gen(function* () {
-            const data = yield* fs.readFile(path)
+            // Resolve symlinks and `..` on both sides before comparing, so a
+            // link planted inside the root cannot lead out of it.
+            const refuse = (why: string) =>
+              new AttachmentError({ operation: 'upload', cause: new Error(`upload_file: ${why}`) })
+            if (parsed.uploadDir === undefined) {
+              return yield* refuse(
+                'uploads are disabled — the operator has not set COMMY_UPLOAD_DIR',
+              )
+            }
+            const root = yield* fs.realPath(parsed.uploadDir)
+            const real = yield* fs.realPath(path)
+            const fromRoot = relative(root, real)
+            if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
+              return yield* refuse(`${path} is outside the operator's COMMY_UPLOAD_DIR`)
+            }
+            const data = yield* fs.readFile(real)
             const result = yield* adapter.uploadFile(basename(path), data)
             return {
               reference: result.reference,

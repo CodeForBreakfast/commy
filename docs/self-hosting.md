@@ -32,6 +32,7 @@ no-op-ish values when unset):
 | `COMMY_CATCHUP_WINDOW_SECONDS` | no | How far back to fetch recent messages across the boot-time subscribe set on a persistent restart. Default `14400` (4 hours); `0` disables. |
 | `COMMY_QUEUE_IDLE_TIMEOUT_SECS` | no | How many seconds an ephemeral session's events queue survives without a poll before Zulip garbage-collects it, sent as `idle_queue_timeout` on `/register`. Default `86400` (24 hours); clamped to Zulip's 7-day `MAX_QUEUE_TIMEOUT_SECS` ceiling (`604800`). A non-positive or non-integer value fails boot with a config error. |
 | `COMMY_DOWNLOAD_DIR` | no | Base directory for `download_file` attachments. When set, each download's fresh temp subdirectory is created under it so files land somewhere an allowlisted agent can `Read`; when unset, downloads go to `$TMPDIR`. Must be an existing directory — a non-directory value fails boot with a config error. |
+| `COMMY_UPLOAD_DIR` | no | Root directory `upload_file` may read under. A path that resolves outside it, after symlinks and `..` are followed, is refused. When unset, `upload_file` refuses every path, so an operator must set it to allow uploads. Must be an existing directory — a non-directory value fails boot with a config error. |
 | `COMMY_NPM_MIN_RELEASE_AGE` | no | Operator override for npm's `min-release-age` supply-chain soak, scoped to commy's own `npx` launch. Set to `0` to run a freshly-published release that your global soak would otherwise block with `ENOVERSIONS`. Leave **unset** to fully respect your own npm setting. See [Running outside Claude Code](#running-outside-claude-code). |
 
 The live-test suite additionally needs a channel to exercise against:
@@ -244,7 +245,8 @@ Two supported ways to avoid it, both already documented above:
 - Pass a UUID `session_id` in the tool-call arguments, which is the binding an
   ephemeral non-CC host has (`docs/claude-channel-inbound-contract.md`). The
   tools accepting it are `post`, `edit_message`, `react`, `unreact`,
-  `current_identity`, `subscribe`, `unsubscribe` and `upload_file`. It is
+  `current_identity`, `subscribe`, `unsubscribe`, `list_subscriptions` and
+  `upload_file`. It is
   **not** advertised on their `inputSchema` — a session id is the host's to
   supply, not something a model could fill, so it is documented here rather
   than shown to the agent.

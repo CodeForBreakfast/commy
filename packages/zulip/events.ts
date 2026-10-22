@@ -414,7 +414,7 @@ const decodeSenderIdentity = (
   return Effect.gen(function* () {
     const id = yield* decodeIdentityId(String(message.sender_id))
     const name = yield* decodeDisplayName(message.sender_full_name)
-    return { id, name, kind: 'human' } satisfies Identity
+    return { id, name, kind: 'unknown' } satisfies Identity
   })
 }
 
@@ -516,7 +516,7 @@ const decodeReactionIdentity = (
   return Effect.gen(function* () {
     const id = yield* decodeIdentityId(String(reaction.user_id))
     const name = yield* decodeDisplayName(`user-${reaction.user_id}`)
-    return { id, name, kind: 'human' } satisfies Identity
+    return { id, name, kind: 'unknown' } satisfies Identity
   })
 }
 

@@ -187,9 +187,11 @@ export const createFileSubscriptionStore = (deps: FileSubscriptionStoreDeps): Su
 
   const write: SubscriptionStore['write'] = (intents) =>
     Effect.flatMap(owner, (key) =>
-      fs
-        .makeDirectory(dir, { recursive: true })
-        .pipe(Effect.zipRight(fs.writeFileString(pathFor(key), JSON.stringify(intents)))),
+      Schema.encode(SubscriptionsFileSchema)(intents).pipe(
+        Effect.orDie,
+        Effect.tap(() => fs.makeDirectory(dir, { recursive: true })),
+        Effect.flatMap((raw) => fs.writeFileString(pathFor(key), raw)),
+      ),
     )
 
   return { read, write }
