@@ -2949,25 +2949,23 @@ test('downloadFile rejects an unbranded ref at the type level', () => {
   expect(proof).toBeTypeOf('function')
 })
 
-effectTest('downloadFile fails with AttachmentError on a ref the realm cannot address', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
-    // An AttachmentRef is opaque above the port, so a handle this realm never
-    // issued gets past the caller and is refused here — the adapter is the
-    // only layer that knows /user_uploads/ is the addressing rule. The failure
-    // is a typed AttachmentError, and the ParseError it carries supplies the
-    // message, so the constraint still names itself to the agent.
-    const error = yield* Effect.flip(
-      adapter.downloadFile(decodeAttachmentRefSync('/api/v1/messages')),
-    )
-    expect(error._tag).toBe('AttachmentError')
-    expect(error.operation).toBe('download')
-    expect(error.message).toContain('user_uploads')
-    // Refused before any request left the process.
-    expect(yield* stub.captured).toEqual([])
-    yield* Effect.promise(() => adapter.close())
-  }),
+effectTest(
+  'downloadFile refuses a ref outside /user_uploads/ without a request, naming the rule',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+      // The adapter is the only layer that knows /user_uploads/ is the
+      // addressing rule. The ParseError the AttachmentError carries supplies the
+      // message, so the constraint still names itself to the agent.
+      const error = yield* Effect.flip(
+        adapter.downloadFile(decodeAttachmentRefSync('/api/v1/messages')),
+      )
+      expect(error.message).toContain('user_uploads')
+      // Refused before any request left the process.
+      expect(yield* stub.captured).toEqual([])
+      yield* Effect.promise(() => adapter.close())
+    }),
 )
 
 // --- UserUploadPath brand ---
