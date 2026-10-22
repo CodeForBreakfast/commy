@@ -1960,30 +1960,6 @@ effectTest(
     }),
 )
 
-effectTest('history.readChannel resolves deactivated bot senders to kind=agent', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    const adapter = yield* buildAdapter(stub)
-    const deactivatedBot = { ...RIQ, is_active: false }
-    yield* seedUsers(stub, [HERMES, MAINTAINER, deactivatedBot])
-    yield* seedMessages(stub, [
-      {
-        id: 700,
-        sender_id: deactivatedBot.user_id,
-        sender_full_name: deactivatedBot.full_name,
-        stream_id: 1234,
-        display_recipient: 'general',
-        subject: 'lobby',
-        content: 'old hermes message',
-        timestamp: 1714000000,
-      },
-    ])
-    const [msg] = yield* adapter.history.readChannel(generalChannel.name, { limit: 10 })
-    expect(msg?.sender.kind).toBe('agent')
-    expect(msg?.sender.id).toBe(decodeIdentityIdSync(String(deactivatedBot.user_id)))
-  }),
-)
-
 const historyRow = (id: number, subject = 'a'): Record<string, unknown> => ({
   id,
   sender_id: 5,

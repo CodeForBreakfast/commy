@@ -58,9 +58,7 @@ export const inProcessContractFactory: AttachmentContractFactory = async () => {
         ),
       ),
     seedAgent,
-    // The adapter stops resolving a deactivated name, so seed it active first.
-    seedDeactivatedAgent: (name) =>
-      seedAgent(name).pipe(Effect.tap((peer) => realm.deactivateUser(Number(peer.id)))),
+    deactivateAgent: (agent) => realm.deactivateUser(Number(agent.id)),
     seedHuman: (name) =>
       realm.addUser(name, 'human').pipe(
         Effect.flatMap((userId) =>

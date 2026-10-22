@@ -69,9 +69,10 @@ export const directoryContract = (env: () => ContractEnv): void => {
   test('directory.listAgents leaves out a deactivated agent', () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const seedDeactivatedAgent = env().seedDeactivatedAgent
-        if (seedDeactivatedAgent === undefined) return
-        const gone = yield* seedDeactivatedAgent('alice')
+        const deactivateAgent = env().deactivateAgent
+        if (deactivateAgent === undefined) return
+        const gone = yield* env().seedAgent('alice')
+        yield* deactivateAgent(gone)
         const agents = yield* env().comms.directory.listAgents()
         expect(agents.map((a) => a.id)).not.toContain(gone.id)
       }),

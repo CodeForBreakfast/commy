@@ -62,11 +62,11 @@ export interface ContractEnv {
    */
   readonly seedHuman?: (name: string) => Effect.Effect<Identity>
   /**
-   * Optional. Make an agent that was a member of the substrate and has since
-   * been deactivated. Substrates that cannot stand one up omit it and the
-   * suite skips the tests that need one.
+   * Optional. Deactivate an agent obtained from `seedAgent`, as the substrate
+   * does when a member leaves. Substrates that cannot deactivate a member omit
+   * it and the suite skips the tests that need one.
    */
-  readonly seedDeactivatedAgent?: (name: string) => Effect.Effect<Identity>
+  readonly deactivateAgent?: (agent: Identity) => Effect.Effect<void>
   /**
    * Optional. Have the substrate report `presence` for a human obtained from
    * `seedHuman`. Substrates that cannot set a member's presence omit it and

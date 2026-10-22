@@ -206,6 +206,23 @@ export const historyContract = (env: () => ContractEnv): void => {
         )
       }),
     ))
+  test('history.readChannel names the sender of a message as an agent after that agent is deactivated', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const peerPost = env().peerPost
+        const deactivateAgent = env().deactivateAgent
+        if (peerPost === undefined || deactivateAgent === undefined) return
+        const channel = yield* env().seedChannel('lobby')
+        const peer = yield* env().seedAgent('alice')
+        yield* peerPost(peer, channel.name, decodeMessageBodySync('before leaving'))
+        yield* deactivateAgent(peer)
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        const found = messages.find((m) => m.body === 'before leaving')
+        if (found === undefined) throw new Error('expected the peer post in channel history')
+        expect(found.sender.kind).toBe('agent')
+        expect(found.sender.id).toEqual(peer.id)
+      }),
+    ))
   test('history.readChannel reaches a window that lies below the newest messages', () =>
     Effect.runPromise(
       Effect.gen(function* () {
