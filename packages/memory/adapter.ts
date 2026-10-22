@@ -201,6 +201,11 @@ export type MemoryAdapter = AgentComms & {
    * tests and for modelling humans in MCP plugin tests.
    */
   readonly seedHuman: (name: string) => Effect.Effect<Identity, ParseResult.ParseError>
+  /**
+   * Same as `seedAgent`, but the agent has since been deactivated, so the
+   * directory no longer lists it.
+   */
+  readonly seedDeactivatedAgent: (name: string) => Effect.Effect<Identity, ParseResult.ParseError>
   /** Report `presence` for `human` from `directory.presence` from now on. */
   readonly setPresence: (
     human: Identity,
@@ -254,6 +259,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     const channelsByName = new Map<string, ChannelRef>()
     const identitiesById = new Map<string, Identity>()
     const identitiesByName = new Map<string, Identity>()
+    const deactivatedIdentities = new Set<string>()
     const messagesByChannel = new Map<string, StoredMessage[]>()
     const messagesById = new Map<string, StoredMessage>()
     const reactionsByMessage = new Map<string, Map<Emoji, Set<string>>>()
@@ -1062,11 +1068,14 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         }),
     }
 
+    const activeMembersOfKind = (kind: IdentityKind): ReadonlyArray<Identity> =>
+      [...identitiesById.values()].filter(
+        (i) => i.kind === kind && !deactivatedIdentities.has(i.id),
+      )
+
     const directory: Directory = {
-      listAgents: () =>
-        Effect.succeed([...identitiesById.values()].filter((i) => i.kind === 'agent')),
-      listHumans: () =>
-        Effect.succeed([...identitiesById.values()].filter((i) => i.kind === 'human')),
+      listAgents: () => Effect.succeed(activeMembersOfKind('agent')),
+      listHumans: () => Effect.succeed(activeMembersOfKind('human')),
       listChannels: () => Effect.succeed([...channelsById.values()]),
       channelDescription: (channel) =>
         resolveChannel(channel).pipe(
@@ -1086,6 +1095,8 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       registerIdentity(name, 'agent').pipe(Effect.map((registered) => registered.identity))
     const seedHuman = (name: string): Effect.Effect<Identity, ParseResult.ParseError> =>
       registerIdentity(name, 'human').pipe(Effect.map((registered) => registered.identity))
+    const seedDeactivatedAgent = (name: string): Effect.Effect<Identity, ParseResult.ParseError> =>
+      seedAgent(name).pipe(Effect.tap((identity) => deactivatedIdentities.add(identity.id)))
     const setPresence = (
       human: Identity,
       presence: Exclude<Presence, 'unknown'>,
@@ -1120,6 +1131,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       seedChannel,
       seedAgent,
       seedHuman,
+      seedDeactivatedAgent,
       setPresence,
       peerPost,
     }

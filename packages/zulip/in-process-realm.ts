@@ -65,6 +65,8 @@ export interface InProcessRealm {
   ) => Effect.Effect<{ readonly streamId: number; readonly name: string }>
   /** An active member of the realm, returning its user id. */
   readonly addUser: (fullName: string, kind: 'human' | 'bot') => Effect.Effect<number>
+  /** Deactivate the member with this user id, as an administrator would. */
+  readonly deactivateUser: (userId: number) => Effect.Effect<void>
   readonly setPresence: (userId: number, status: PresenceStatus) => Effect.Effect<void>
 }
 
@@ -614,6 +616,12 @@ export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(func
     users: HashMap.set(state.users, user.userId, user),
   })
 
+  const deactivate = (state: RealmState, user: RealmUser): RealmState => ({
+    ...putUser(state, { ...user, isActive: false }),
+    // Deactivation drops the user's event queues.
+    queues: HashMap.filter(state.queues, (q) => q.ownerId !== user.userId),
+  })
+
   const createUser = (
     fullName: string,
     kind: UserKind,
@@ -917,11 +925,7 @@ export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(func
       handle: (call) =>
         update((state) =>
           accessBot(state, call.caller, pathId(call)).pipe(
-            Effect.map((bot) => ({
-              ...putUser(state, { ...bot, isActive: false }),
-              // Deactivation drops the user's event queues.
-              queues: HashMap.filter(state.queues, (q) => q.ownerId !== bot.userId),
-            })),
+            Effect.map((bot) => deactivate(state, bot)),
           ),
         ),
     },
@@ -1347,6 +1351,12 @@ export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(func
             }
           : { email: `${shortNameOf(fullName)}@${REALM_HOST}`, isAdmin: false },
       ).pipe(Effect.map((u) => u.userId)),
+    deactivateUser: (userId) =>
+      SubscriptionRef.update(stateRef, (s) =>
+        HashMap.get(s.users, userId).pipe(
+          Option.match({ onNone: () => s, onSome: (user) => deactivate(s, user) }),
+        ),
+      ),
     setPresence: (userId, status) =>
       SubscriptionRef.update(stateRef, (s) => ({
         ...s,
