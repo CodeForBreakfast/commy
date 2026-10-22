@@ -29,6 +29,20 @@ export const historyContract = (env: () => ContractEnv): void => {
         expect(found?.sender.id).toEqual(me.id)
       }),
     ))
+  // History reads carry no BindError: they answer before the seat has bound
+  // an identity.
+  test('history.readChannel answers before identity.acquire', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const build = env().newUnacquiredAdapter
+        if (build === undefined) return
+        const channel = yield* env().seedChannel('lobby')
+        yield* env().comms.publisher.post(channel.name, decodeMessageBodySync('before acquire'))
+        const fresh = yield* build()
+        const messages = yield* fresh.history.readChannel(channel.name, {})
+        expect(messages.map((m) => m.body)).toContain(decodeMessageBodySync('before acquire'))
+      }),
+    ))
   test('history.readChannel reports reactions=[] for a message with no reactions', () =>
     Effect.runPromise(
       Effect.gen(function* () {
