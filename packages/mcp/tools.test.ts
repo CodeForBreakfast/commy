@@ -348,6 +348,30 @@ test('current_identity returns the bound identity after ensureBound resolves', (
     ),
   ))
 
+test('current_identity reports credential_rejected once the realm has refused the bound key', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const base = yield* rigAdapter()
+        const adapter: MemoryAdapterRig = {
+          ...base,
+          identity: { ...base.identity, credentialRejected: () => Effect.succeed(true) },
+        }
+        const deps = yield* buildDeps(adapter)
+        yield* deps.ensureBound()
+        const rig = yield* mountAndConnect(adapter, deps)
+        const expected = yield* adapter.identity.currentIdentity()
+        const result = yield* Effect.promise(() =>
+          rig.client.callTool({ name: 'current_identity', arguments: {} }),
+        )
+        expect(result.structuredContent).toMatchObject({
+          state: 'credential_rejected',
+          identity: { id: expected.id, name: expected.name, kind: expected.kind },
+        })
+      }),
+    ),
+  ))
+
 test('current_identity before acquire returns the unbound sentinel (passive, never triggers acquire)', () =>
   Effect.runPromise(
     Effect.scoped(

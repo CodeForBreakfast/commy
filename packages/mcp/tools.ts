@@ -278,6 +278,11 @@ type CurrentIdentityResult =
         readonly last_post_body: string
       }>
     }
+  | {
+      readonly state: 'credential_rejected'
+      readonly identity: SerializedIdentity
+      readonly message: string
+    }
   | { readonly state: 'unbound'; readonly identity: null }
 
 /**
@@ -641,7 +646,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     {
       name: 'current_identity',
       description:
-        'Return the identity this session is bound to. Passive — never triggers acquire. Returns {state: "unbound", identity: null} for ephemeral sessions that have not yet performed an attribution-producing action; {state: "bound", identity: {id, name, kind}, recent_threads?} once acquire has resolved. recent_threads is a best-effort orientation list of {channel, thread, last_post_ts, last_post_body} for the threads this identity most recently posted in; it is omitted when the enrichment lookup fails — the binding self-check itself never fails on it.',
+        'Return the identity this session is bound to. Passive — never triggers acquire. Returns {state: "unbound", identity: null} for ephemeral sessions that have not yet performed an attribution-producing action; {state: "bound", identity: {id, name, kind}, recent_threads?} once acquire has resolved; {state: "credential_rejected", identity, message} when the realm has refused the bound credential as invalid, so writes fail and inbound events stop until the seat restarts. recent_threads is a best-effort orientation list of {channel, thread, last_post_ts, last_post_body} for the threads this identity most recently posted in; it is omitted when the enrichment lookup fails — the binding self-check itself never fails on it.',
       inputSchema: {
         type: 'object',
         properties: { cwd: cwdField },
@@ -663,6 +668,14 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           return { state: 'unbound', identity: null }
         }
         cache.rememberIdentity(current.identity)
+        if (await run(adapter.identity.credentialRejected())) {
+          return {
+            state: 'credential_rejected',
+            identity: identityShape(current.identity),
+            message:
+              "The realm has refused this seat's credential as invalid. Writes will keep failing and inbound events are not being delivered. Restart the seat to bind a fresh credential.",
+          }
+        }
         const bound = { state: 'bound' as const, identity: identityShape(current.identity) }
         try {
           const threads = await run(adapter.history.recentThreads(current.identity.id))

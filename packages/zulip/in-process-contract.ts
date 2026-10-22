@@ -91,6 +91,10 @@ export const inProcessContractFactory: AttachmentContractFactory = async () => {
         Effect.asVoid,
         Effect.orDie,
       ),
+    revokeBoundCredential: () =>
+      adapter.identity
+        .currentIdentity()
+        .pipe(Effect.flatMap((me) => realm.revokeApiKey(Number(me.id)))),
     channelDescriptionLimit: CHANNEL_DESCRIPTION_LIMIT,
     threadNameLimit: TOPIC_LIMIT,
     // The realm and its adapters hold nothing outside the heap, so there is

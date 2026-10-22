@@ -209,6 +209,7 @@ const buildFakeAdapter = (
   }
   const identityPort: IdentityPort = {
     currentIdentity: () => Effect.succeed(identity),
+    credentialRejected: () => Effect.succeed(false),
     acquire: (name) =>
       Effect.suspend(() => {
         events.push(`acquire(${name})`)
