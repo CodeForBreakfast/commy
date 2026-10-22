@@ -1607,7 +1607,10 @@ export const zulipAdapter = (
         )
 
     // Resolution renames the topic (✔ prefix) via change_all, so we PATCH any
-    // message in it. `thread` is the plain name; find the source-state topic
+    // message in it. `thread` is the plain name, looked up exactly as
+    // `readThread` looks it up, so a name read cannot find is one resolve
+    // cannot act on (and a topic already in the target state is left alone, so
+    // the realm posts no second notice). Find the source-state topic
     // and flip it to the target state, treating an absent source whose target
     // already exists as an idempotent no-op, and both absent as a thread that
     // isn't there to (un)resolve. Reads route through the minter; the
@@ -1639,7 +1642,7 @@ export const zulipAdapter = (
       resolved: boolean,
     ): Effect.Effect<void, BindError | PublisherError> => {
       const operation = resolved ? 'resolveThread' : 'unresolveThread'
-      const sourceTopic = applyResolvedPrefix(thread, !resolved)
+      const sourceTopic = resolved ? thread : applyResolvedPrefix(thread, true)
       const targetTopic = applyResolvedPrefix(thread, resolved)
       return boundHttp().pipe(
         Effect.flatMap((http) =>
@@ -1647,12 +1650,14 @@ export const zulipAdapter = (
             Effect.flatMap(
               Option.match({
                 onSome: (id) =>
-                  http
-                    .patch(`/messages/${encodeURIComponent(id)}`, successSchema, {
-                      topic: targetTopic,
-                      propagate_mode: 'change_all',
-                    })
-                    .pipe(Effect.asVoid),
+                  sourceTopic === targetTopic
+                    ? Effect.void
+                    : http
+                        .patch(`/messages/${encodeURIComponent(id)}`, successSchema, {
+                          topic: targetTopic,
+                          propagate_mode: 'change_all',
+                        })
+                        .pipe(Effect.asVoid),
                 onNone: () =>
                   findNewestInTopic(channel, targetTopic).pipe(
                     Effect.flatMap(

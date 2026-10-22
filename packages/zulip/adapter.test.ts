@@ -1637,6 +1637,28 @@ effectTest(
     }),
 )
 
+effectTest('publisher.resolveThread leaves a topic that already carries the ✔ prefix alone', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedMessages(stub, [
+      {
+        id: 702,
+        sender_id: 5,
+        sender_full_name: 'Robin Reyes',
+        stream_id: 1234,
+        display_recipient: 'general',
+        subject: '✔ planning',
+        content: 'already resolved',
+        timestamp: 1715000000,
+      },
+    ])
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.publisher.resolveThread(generalChannel.name, decodeThreadNameSync('✔ planning'))
+    const patches = (yield* stub.captured).filter((r) => r.method === 'PATCH')
+    expect(patches).toEqual([])
+  }),
+)
+
 effectTest('publisher.unresolveThread renames the ✔-prefixed topic back to the bare name', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
