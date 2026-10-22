@@ -434,6 +434,9 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
       !identitiesByName.has(name) &&
       Arr.some([...identitiesByName.keys()], (held) => held.toLowerCase() === name.toLowerCase())
 
+    // Zulip will not mint a bot whose full name an active member already holds.
+    const isNameOfHuman = (name: string): boolean => identitiesByName.get(name)?.kind === 'human'
+
     // As on Zulip, a deactivated member no longer answers to its name.
     const activeIdentityNamed = (name: string): Option.Option<Identity> =>
       Option.filter(
@@ -593,12 +596,12 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
               onNone: (): Effect.Effect<AcquiredIdentity, UnknownIdentity | IdentityError> =>
                 allowlist !== undefined && !allowlist.has(name)
                   ? Effect.fail(new UnknownIdentity({ name, substrate: 'memory' }))
-                  : isCaseVariantOfExisting(name)
+                  : isCaseVariantOfExisting(name) || isNameOfHuman(name)
                     ? Effect.fail(
                         new IdentityError({
                           operation: 'acquire',
                           cause: new Error(
-                            `'${name}' differs only by case from an existing member`,
+                            `'${name}' is already held by, or differs only by case from, an existing member`,
                           ),
                           transient: false,
                         }),
