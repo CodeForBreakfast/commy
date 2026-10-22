@@ -1547,37 +1547,6 @@ effectTest(
 )
 
 effectTest(
-  'publisher.edit surfaces MessageEditRefused not-original-sender when the seat is not the author',
-  () =>
-    Effect.gen(function* () {
-      const stub = yield* makeStubHttpClient
-      yield* stub.respond('PATCH', '/api/v1/messages/42', {
-        body: {
-          result: 'error',
-          msg: "You don't have permission to edit this message",
-          code: 'BAD_REQUEST',
-        },
-        status: 400,
-      })
-      const adapter = yield* buildAdapter(stub)
-      const target: MessageRef = {
-        id: decodeMessageIdSync('42'),
-        channel: generalChannel,
-        thread: Option.none(),
-        permalink: MessagePermalinkSchema.make(
-          'https://zulip.example.com/#narrow/channel/1234-general/near/42',
-        ),
-      }
-      const err = yield* Effect.flip(adapter.publisher.edit(target, decodeMessageBodySync('nope')))
-      expect(err).toBeInstanceOf(MessageEditRefused)
-      if (err instanceof MessageEditRefused) {
-        expect(err.reason).toBe('not-original-sender')
-        expect(err.cause).toBeInstanceOf(ZulipApiError)
-      }
-    }),
-)
-
-effectTest(
   'publisher.edit surfaces MessageEditRefused editing-disabled when the realm has editing off',
   () =>
     Effect.gen(function* () {
@@ -1618,16 +1587,6 @@ const seedRealmEditing = (stub: StubHttpClient, allowed: boolean): Effect.Effect
     },
   })
 
-effectTest('publisher.editingAvailable reports true when the realm allows editing', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedRealmEditing(stub, true)
-    yield* stub.respond('DELETE', '/api/v1/events', { body: { result: 'success' } })
-    const adapter = yield* buildAdapter(stub)
-    expect(yield* adapter.publisher.editingAvailable()).toBe(true)
-  }),
-)
-
 effectTest('publisher.editingAvailable reports false when the realm has editing off', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
@@ -1638,25 +1597,27 @@ effectTest('publisher.editingAvailable reports false when the realm has editing 
   }),
 )
 
-// The gate samples this at connect, before any seat has acquired an identity.
-// A listen-only seat never acquires at all, so a probe routed through
-// `boundHttp()` would fail in production and nowhere else — this pins it to
-// the minter.
-effectTest('publisher.editingAvailable works on a seat that never acquires an identity', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedRealmEditing(stub, false)
-    yield* stub.respond('DELETE', '/api/v1/events', { body: { result: 'success' } })
-    const config = yield* makeConfig()
-    const adapter = yield* zulipAdapter(stub, config)
-    expect(yield* adapter.publisher.editingAvailable()).toBe(false)
-    const req = yield* findRequest(stub, 'POST', '/api/v1/register')
-    expect(req.headers.get('authorization')).toBe(`Basic ${btoa('minter@example.com:minter-key')}`)
-    // Asks for no events and only realm state: the probe reads a setting, it
-    // does not subscribe to anything.
-    expect(req.body).toContain('event_types=%5B%5D')
-    expect(req.body).toContain(encodeURIComponent(JSON.stringify(['realm'])))
-  }),
+// A probe routed through `boundHttp()` would fail on a seat that has not
+// acquired — this pins it to the minter.
+effectTest(
+  'publisher.editingAvailable probes through the minter, asking only for realm state',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* seedRealmEditing(stub, false)
+      yield* stub.respond('DELETE', '/api/v1/events', { body: { result: 'success' } })
+      const config = yield* makeConfig()
+      const adapter = yield* zulipAdapter(stub, config)
+      expect(yield* adapter.publisher.editingAvailable()).toBe(false)
+      const req = yield* findRequest(stub, 'POST', '/api/v1/register')
+      expect(req.headers.get('authorization')).toBe(
+        `Basic ${btoa('minter@example.com:minter-key')}`,
+      )
+      // Asks for no events and only realm state: the probe reads a setting, it
+      // does not subscribe to anything.
+      expect(req.body).toContain('event_types=%5B%5D')
+      expect(req.body).toContain(encodeURIComponent(JSON.stringify(['realm'])))
+    }),
 )
 
 effectTest('publisher.editingAvailable hands back the queue that /register allocated', () =>

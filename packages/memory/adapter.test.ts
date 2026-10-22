@@ -1,19 +1,16 @@
 import { expect, test } from 'bun:test'
-import type { ChannelRef } from '@commy/core/ports'
 import {
   ChannelPermalinkSchema,
   decodeBotNameSync,
-  decodeChannelIdSync,
   decodeChannelNameSync,
   decodeMessageBodySync,
   decodeMessageIdSync,
   decodeThreadNameSync,
   decodeTimestampSync,
   MessagePermalinkSchema,
-  PublisherError,
   ThreadPermalinkSchema,
 } from '@commy/core/ports'
-import { Array as Arr, Cause, Duration, Effect, Exit, Option, TestClock, TestContext } from 'effect'
+import { Array as Arr, Duration, Effect, Exit, Option, TestClock, TestContext } from 'effect'
 import { memoryAdapter } from './adapter.ts'
 
 const acquired = async () => {
@@ -21,48 +18,6 @@ const acquired = async () => {
   await Effect.runPromise(adapter.identity.acquire(decodeBotNameSync('hermes-agent')))
   return adapter
 }
-
-const phantomChannel = decodeChannelNameSync('phantom-channel-never-seeded')
-// An observation ChannelRef for the never-seeded channel — only needed to fill
-// the vestigial `channel` facet of an edit *address* target (edit resolves by
-// message id and never reads it).
-const phantomChannelRef: ChannelRef = {
-  id: decodeChannelIdSync('999999999'),
-  name: phantomChannel,
-  permalink: ChannelPermalinkSchema.make('memory://commy/channel/999999999'),
-}
-
-// editing a message the store has never seen is a non-fatal domain failure:
-// it surfaces as a typed PublisherError on E, never as a thrown defect. This
-// mirrors the Zulip adapter, where a PATCH on an unknown id 400s into a
-// PublisherError; the assertion is duplicated in the shared contract, but
-// kept here too to pin that memory surfaces it on E (not the Cause channel).
-test('publisher.edit on an unknown message fails with a typed PublisherError, not a defect', async () => {
-  const adapter = await acquired()
-  const exit = await Effect.runPromiseExit(
-    adapter.publisher.edit(
-      {
-        id: decodeMessageIdSync('999999999'),
-        channel: phantomChannelRef,
-        thread: Option.none(),
-        permalink: MessagePermalinkSchema.make('999999999'),
-      },
-      decodeMessageBodySync('nope'),
-    ),
-  )
-  expect(Exit.isFailure(exit)).toBe(true)
-  if (Exit.isFailure(exit)) {
-    expect(Cause.isDie(exit.cause)).toBe(false)
-    const failure = Cause.failureOption(exit.cause)
-    expect(failure._tag).toBe('Some')
-    if (failure._tag === 'Some') {
-      expect(failure.value).toBeInstanceOf(PublisherError)
-      if (failure.value instanceof PublisherError) {
-        expect(failure.value.operation).toBe('edit')
-      }
-    }
-  }
-})
 
 // The mutable-state Refs pin concurrency-safety: counter allocation and the
 // acquire check-then-set both span `yield*` suspension points, so under
