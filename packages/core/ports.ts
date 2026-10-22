@@ -1096,9 +1096,9 @@ export class InboxError extends Data.TaggedError('InboxError')<{
 }
 
 /**
- * Failure surface for the Effect-returning `HistoryReader` reads. The
- * Zulip adapter mints this when the backing substrate call fails; the
- * in-memory adapter never produces it.
+ * Failure surface for the Effect-returning `HistoryReader` reads. An adapter
+ * mints this when the backing substrate call fails, and when a read names a
+ * channel the substrate does not have.
  */
 export class HistoryError extends Data.TaggedError('HistoryError')<{
   readonly operation: 'readChannel' | 'readThread' | 'recentThreads' | 'messagePermalink'

@@ -924,7 +924,8 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     const applyLimit = (
       messages: ReadonlyArray<StoredMessage>,
       limit: number | undefined,
-    ): ReadonlyArray<StoredMessage> => (limit === undefined ? messages : messages.slice(0, limit))
+    ): ReadonlyArray<StoredMessage> =>
+      limit === undefined ? messages : Arr.takeRight(messages, limit)
 
     const projectStored = (stored: StoredMessage): Message =>
       toMessage(withThreadResolution(stored), collectReactions(stored.ref.id))
