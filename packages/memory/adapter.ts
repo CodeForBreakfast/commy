@@ -69,6 +69,7 @@ import {
   decodeTimestamp,
   type Emoji,
   HistoryError,
+  IdentityError,
   Mention,
   MessageEditRefused,
   MessagePermalinkSchema,
@@ -427,6 +428,12 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
         return { identity, origin: 'minted' as const }
       })
 
+    // Zulip derives a bot's address from the lowercased name, so a name that
+    // differs from a member's only by case asks for the same address.
+    const isCaseVariantOfExisting = (name: string): boolean =>
+      !identitiesByName.has(name) &&
+      Arr.some([...identitiesByName.keys()], (held) => held.toLowerCase() === name.toLowerCase())
+
     // As on Zulip, a deactivated member no longer answers to its name.
     const activeIdentityNamed = (name: string): Option.Option<Identity> =>
       Option.filter(
@@ -573,60 +580,69 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
                         `memoryAdapter: already bound to ${b.acquiredName} — release() before acquiring ${name}`,
                       ),
                     ),
-              onNone: () =>
+              onNone: (): Effect.Effect<AcquiredIdentity, UnknownIdentity | IdentityError> =>
                 allowlist !== undefined && !allowlist.has(name)
                   ? Effect.fail(new UnknownIdentity({ name, substrate: 'memory' }))
-                  : // `name` is a validated non-empty BotName, so DisplayName
-                    // decode inside registerIdentity cannot fail — orDie the
-                    // (impossible) ParseError to keep acquire's typed channel
-                    // UnknownIdentity-only.
-                    registerIdentity(name, selfKind).pipe(
-                      Effect.orDie,
-                      Effect.flatMap(({ identity: ident, origin }) =>
-                        allocId(nextCredentialsId).pipe(
-                          Effect.flatMap((credId) => {
-                            const credentials: Credentials = {
-                              substrate: 'memory',
-                              identityId: ident.id,
-                              token: `memory-credential-${credId}`,
-                            }
-                            const acquired: Binding = {
-                              acquiredName: name,
-                              identity: ident,
-                              credentials,
-                              origin,
-                            }
-                            // Atomic check-then-set: claim the slot only if
-                            // still free, otherwise honour the winner. Loses
-                            // a counter id under contention, never the bind.
-                            return Ref.modify(
-                              bound,
-                              (current): [AcquiredIdentity, Option.Option<Binding>] =>
-                                Option.match(current, {
-                                  onNone: () => [acquired, Option.some(acquired)],
-                                  onSome: (winner) => [winner, current],
-                                }),
-                            ).pipe(
-                              Effect.tap((winner) =>
-                                winner === acquired
-                                  ? Effect.all(
-                                      [
-                                        Ref.update(
-                                          subscriptions,
-                                          HashSet.add<SubKey>(MENTIONS_KEY),
-                                        ),
-                                        // As on Zulip, acquiring a deactivated agent's name reactivates it.
-                                        Effect.sync(() => deactivatedIdentities.delete(ident.id)),
-                                      ],
-                                      { discard: true },
-                                    )
-                                  : Effect.void,
-                              ),
-                            )
-                          }),
+                  : isCaseVariantOfExisting(name)
+                    ? Effect.fail(
+                        new IdentityError({
+                          operation: 'acquire',
+                          cause: new Error(
+                            `'${name}' differs only by case from an existing member`,
+                          ),
+                          transient: false,
+                        }),
+                      )
+                    : // `name` is a validated non-empty BotName, so DisplayName
+                      // decode inside registerIdentity cannot fail — orDie the
+                      // (impossible) ParseError out of acquire's typed channel.
+                      registerIdentity(name, selfKind).pipe(
+                        Effect.orDie,
+                        Effect.flatMap(({ identity: ident, origin }) =>
+                          allocId(nextCredentialsId).pipe(
+                            Effect.flatMap((credId) => {
+                              const credentials: Credentials = {
+                                substrate: 'memory',
+                                identityId: ident.id,
+                                token: `memory-credential-${credId}`,
+                              }
+                              const acquired: Binding = {
+                                acquiredName: name,
+                                identity: ident,
+                                credentials,
+                                origin,
+                              }
+                              // Atomic check-then-set: claim the slot only if
+                              // still free, otherwise honour the winner. Loses
+                              // a counter id under contention, never the bind.
+                              return Ref.modify(
+                                bound,
+                                (current): [AcquiredIdentity, Option.Option<Binding>] =>
+                                  Option.match(current, {
+                                    onNone: () => [acquired, Option.some(acquired)],
+                                    onSome: (winner) => [winner, current],
+                                  }),
+                              ).pipe(
+                                Effect.tap((winner) =>
+                                  winner === acquired
+                                    ? Effect.all(
+                                        [
+                                          Ref.update(
+                                            subscriptions,
+                                            HashSet.add<SubKey>(MENTIONS_KEY),
+                                          ),
+                                          // As on Zulip, acquiring a deactivated agent's name reactivates it.
+                                          Effect.sync(() => deactivatedIdentities.delete(ident.id)),
+                                        ],
+                                        { discard: true },
+                                      )
+                                    : Effect.void,
+                                ),
+                              )
+                            }),
+                          ),
                         ),
                       ),
-                    ),
             }),
           ),
         ),
