@@ -95,6 +95,22 @@ export const identityContract = (env: () => ContractEnv): void => {
         expect(agents.map((a) => a.id)).toContain(first.identity.id)
       }),
     ))
+  test('identity.acquire of a name differing only by case from an existing agent is refused', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const build = env().newUnacquiredAdapter
+        if (build === undefined) return
+        const existing = yield* env().seedAgent('alice-probe')
+        const exit = yield* Effect.exit(
+          (yield* build()).identity.acquire(decodeBotNameSync('ALICE-PROBE')),
+        )
+        expect(Exit.isFailure(exit) && Option.isSome(Cause.failureOption(exit.cause))).toBe(true)
+        const agents = yield* env().comms.directory.listAgents()
+        expect(
+          agents.filter((a) => a.name.toLowerCase() === existing.name.toLowerCase()),
+        ).toHaveLength(1)
+      }),
+    ))
   for (const { release, expected, label } of [
     { release: undefined, expected: false, label: 'an ephemeral release takes' },
     { release: { persistent: true }, expected: true, label: 'a persistent release leaves' },
