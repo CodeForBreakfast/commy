@@ -260,6 +260,22 @@ export const publisherPostingContract = (env: () => ContractEnv): void => {
         expect(mentionedIdentities(found?.mentions ?? []).map((m) => m.id)).toEqual([human.id])
       }),
     ))
+  test('publisher.post accepts a plain mention of a name two active humans share ignoring case and reports exactly one of them', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const seedHuman = env().seedHuman
+        if (seedHuman === undefined) return
+        const channel = yield* env().seedChannel('lobby')
+        const first = yield* seedHuman('Alice Example')
+        const second = yield* seedHuman('ALICE EXAMPLE')
+        const body = decodeMessageBodySync('@**alice example** please decide')
+        yield* env().comms.publisher.post(channel.name, body)
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        const found = messages.find((m) => m.body === body)
+        const reported = mentionedIdentities(found?.mentions ?? []).map((m) => m.id)
+        expect([[first.id], [second.id]]).toContainEqual(reported)
+      }),
+    ))
   test('publisher.post refusing dead mentions names each dead token once and no live name', () =>
     Effect.runPromise(
       Effect.gen(function* () {

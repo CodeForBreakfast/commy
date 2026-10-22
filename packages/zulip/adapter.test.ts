@@ -785,6 +785,27 @@ effectTest(
     }),
 )
 
+effectTest(
+  'publisher.post accepts a plain mention when a deactivated namesake is listed after the active member',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* seedSendMessage(stub, 42)
+      yield* seedStoredTopic(stub, 42, '(no topic)')
+      const adapter = yield* buildAdapter(stub)
+      yield* seedUsers(stub, [
+        HERMES,
+        MAINTAINER,
+        { ...MAINTAINER, user_id: 6, email: 'other@example.com', is_active: false },
+      ])
+      yield* adapter.publisher.post(
+        generalChannel.name,
+        decodeMessageBodySync('@**robin reyes** hello'),
+      )
+      expect(yield* findRequest(stub, 'POST', '/api/v1/messages')).toBeDefined()
+    }),
+)
+
 effectTest('publisher.post returns a MessageRef built from the response id', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
