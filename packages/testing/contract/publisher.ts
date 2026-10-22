@@ -9,13 +9,20 @@ import {
   decodeMessageBodySync,
   decodeMessageIdSync,
   decodeThreadNameSync,
+  MessageEditRefused,
   MessagePermalinkSchema,
   type MessageRef,
+  mentionedIdentities,
   PublisherError,
   UnknownChannel,
+  UnresolvedMention,
 } from '@commy/core/ports'
-import { Effect, Option } from 'effect'
+import { Duration, Effect, Option, Queue } from 'effect'
 import type { ContractEnv } from '../contract.ts'
+import { awaitEvent, eventQueue } from './helpers.ts'
+
+/** How long a write must stay silent on `events()` to count as emitting nothing. */
+const SILENCE_WINDOW = Duration.millis(100)
 
 export const publisherContract = (env: () => ContractEnv): void => {
   // Resolution is a status distinct from the thread name: the name a consumer
@@ -56,6 +63,44 @@ export const publisherContract = (env: () => ContractEnv): void => {
         if (found === undefined) throw new Error('expected the thread readable after unresolve')
         expect(Option.map(found.ref.thread, (t) => t.resolved)).toEqual(Option.some(false))
       }),
+    ))
+  // The substrate announces each flip with a notice in the thread, sent by the
+  // substrate rather than the caller, and a subscriber receives it like any post.
+  test('a subscriber receives a notice in the thread when it is resolved and unresolved', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const channel = yield* env().seedChannel('lobby')
+          const thread = decodeThreadNameSync('design')
+          const me = yield* env().comms.identity.currentIdentity()
+          yield* env().comms.inbox.subscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* env().comms.publisher.post(channel.name, decodeMessageBodySync('settle this'), {
+            thread,
+          })
+          const awaitNotice = (resolved: boolean) =>
+            awaitEvent(
+              queue,
+              `the notice that the thread was ${resolved ? 'resolved' : 'unresolved'}`,
+              (e) =>
+                e.kind === 'message-posted' &&
+                e.message.sender.id !== me.id &&
+                Option.exists(
+                  e.message.ref.thread,
+                  (t) => t.name === thread && t.resolved === resolved,
+                ),
+            )
+          yield* env().comms.publisher.resolveThread(channel.name, thread)
+          const resolvedNotice = yield* awaitNotice(true)
+          yield* env().comms.publisher.unresolveThread(channel.name, thread)
+          const unresolvedNotice = yield* awaitNotice(false)
+          for (const notice of [resolvedNotice, unresolvedNotice]) {
+            if (notice.kind !== 'message-posted') throw new Error('unexpected event kind')
+            expect(notice.message.body).toContain(me.name)
+            expect(notice.message.ref.channel.id).toEqual(channel.id)
+          }
+        }),
+      ),
     ))
   test('publisher.resolveThread is idempotent when the thread is already resolved', () =>
     Effect.runPromise(
@@ -259,6 +304,52 @@ export const publisherContract = (env: () => ContractEnv): void => {
         expect(original).toBeUndefined()
       }),
     ))
+  test('publisher.edit reports who the new body @-mentions, not the old', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const alice = yield* env().seedAgent('alice')
+        const bob = yield* env().seedAgent('bob')
+        const ref = yield* env().comms.publisher.post(
+          channel.name,
+          decodeMessageBodySync(`@**${alice.name}** first cut`),
+        )
+        yield* env().comms.publisher.edit(ref, decodeMessageBodySync(`@**${bob.name}** second cut`))
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        const found = messages.find((m) => String(m.ref.id) === String(ref.id))
+        expect(mentionedIdentities(found?.mentions ?? []).map((m) => m.id)).toEqual([bob.id])
+      }),
+    ))
+  test('publisher.edit refuses a body that mentions nobody in the realm, and leaves the message as it was', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const ref = yield* env().comms.publisher.post(channel.name, decodeMessageBodySync('draft'))
+        const error = yield* Effect.flip(
+          env().comms.publisher.edit(ref, decodeMessageBodySync('now pinging @**Nobody Example**')),
+        )
+        expect(error).toBeInstanceOf(UnresolvedMention)
+        if (error instanceof UnresolvedMention) {
+          expect(error.operation).toBe('edit')
+          expect(error.tokens).toEqual(['Nobody Example'])
+        }
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        const found = messages.find((m) => String(m.ref.id) === String(ref.id))
+        expect(found?.body).toBe(decodeMessageBodySync('draft'))
+      }),
+    ))
+  test('publisher.edit accepts a mention form naming nobody when it sits in a code span', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const ref = yield* env().comms.publisher.post(channel.name, decodeMessageBodySync('draft'))
+        const body = decodeMessageBodySync('the dead form `@**Nobody Example**` names nobody')
+        yield* env().comms.publisher.edit(ref, body)
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        const found = messages.find((m) => String(m.ref.id) === String(ref.id))
+        expect(found?.body).toBe(body)
+      }),
+    ))
   test('publisher.edit on a thread message keeps the thread association', () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -348,5 +439,81 @@ export const publisherContract = (env: () => ContractEnv): void => {
           throw new Error('expected reaction-removal target in channel history')
         expect(found.reactions.find((r) => r.emoji === 'thumbs_up')).toBeUndefined()
       }),
+    ))
+  test("publisher.edit on a peer's message fails with MessageEditRefused not-original-sender", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const peerPost = env().peerPost
+        if (peerPost === undefined) return
+        const channel = yield* env().seedChannel('lobby')
+        const peer = yield* env().seedAgent('alice')
+        yield* peerPost(peer, channel.name, decodeMessageBodySync('written by alice'))
+        const before = yield* env().comms.history.readChannel(channel.name, {})
+        const target = before.find((m) => m.body === 'written by alice')
+        if (target === undefined) throw new Error("expected the peer's message in channel history")
+        const error = yield* Effect.flip(
+          env().comms.publisher.edit(target.ref, decodeMessageBodySync('rewritten by self')),
+        )
+        expect(error).toBeInstanceOf(MessageEditRefused)
+        expect((error as MessageEditRefused).reason).toBe('not-original-sender')
+        const after = yield* env().comms.history.readChannel(channel.name, {})
+        const unchanged = after.find((m) => String(m.ref.id) === String(target.ref.id))
+        expect(unchanged?.body).toBe(target.body)
+      }),
+    ))
+  test('publisher.editingAvailable answers true where nothing has turned editing off', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        expect(yield* env().comms.publisher.editingAvailable()).toBe(true)
+      }),
+    ))
+  // A driving adapter samples this at connect, before any identity is bound,
+  // and a listen-only seat never binds one.
+  test('publisher.editingAvailable answers on an adapter that has not acquired an identity', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const newUnacquiredAdapter = env().newUnacquiredAdapter
+        if (newUnacquiredAdapter === undefined) return
+        const fresh = yield* newUnacquiredAdapter()
+        expect(yield* fresh.publisher.editingAvailable()).toBe(true)
+      }),
+    ))
+  test('publisher.edit emits no inbound event', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const channel = yield* env().seedChannel('lobby')
+          yield* env().comms.inbox.subscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          const ref = yield* env().comms.publisher.post(
+            channel.name,
+            decodeMessageBodySync('draft'),
+          )
+          yield* awaitEvent(
+            queue,
+            'message-posted for the edit target',
+            (e) => e.kind === 'message-posted',
+          )
+          yield* env().comms.publisher.edit(ref, decodeMessageBodySync('final'))
+          const result = yield* Queue.take(queue).pipe(Effect.timeoutOption(SILENCE_WINDOW))
+          expect(result).toEqual(Option.none())
+        }),
+      ),
+    ))
+  test('publisher.setChannelDescription emits no inbound event', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const channel = yield* env().seedChannel('lobby')
+          yield* env().comms.inbox.subscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* env().comms.publisher.setChannelDescription(
+            channel.name,
+            Option.some(decodeChannelDescriptionSync('a quiet charter')),
+          )
+          const result = yield* Queue.take(queue).pipe(Effect.timeoutOption(SILENCE_WINDOW))
+          expect(result).toEqual(Option.none())
+        }),
+      ),
     ))
 }

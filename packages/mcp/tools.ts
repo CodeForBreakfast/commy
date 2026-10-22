@@ -35,10 +35,13 @@ import type { PlatformError } from '@effect/platform/Error'
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import {
+  Array as Arr,
   Cause,
   Data,
   Effect,
   Exit,
+  HashSet,
+  Match,
   Option,
   type ParseResult,
   Predicate,
@@ -276,6 +279,22 @@ type CurrentIdentityResult =
     }
   | { readonly state: 'unbound'; readonly identity: null }
 
+/**
+ * Wire shape for `list_subscriptions`. `unbound` is "there is no seat yet",
+ * which is a different answer from an empty set.
+ */
+type ListSubscriptionsResult =
+  | { readonly state: 'unbound' }
+  | {
+      readonly state: 'bound'
+      readonly channels: ReadonlyArray<string>
+      readonly narrows: ReadonlyArray<
+        | { readonly kind: 'thread'; readonly channel: string; readonly thread: string }
+        | { readonly kind: 'new-topics'; readonly channel: string }
+      >
+      readonly not_in_realm: ReadonlyArray<string>
+    }
+
 interface InternalCache extends ToolsMemory {
   readonly identityById: Map<IdentityId, Identity>
   readonly channelByName: Map<ChannelName, ChannelRef>
@@ -340,20 +359,6 @@ const reconstructMessageRef = (
     const channel = yield* addressChannel(cache, yield* decodeChannelName(channelNameArg))
     return { id, channel, thread: Option.none(), permalink: yield* decodeMessagePermalink(id) }
   })
-
-const resolveMentions = (
-  cache: InternalCache,
-  mentionIds: ReadonlyArray<string>,
-): Effect.Effect<ReadonlyArray<Identity>, UnknownIdentityError | ParseResult.ParseError> =>
-  Effect.forEach(mentionIds, (raw) =>
-    Effect.gen(function* () {
-      const identity = cache.identityById.get(yield* decodeIdentityId(raw))
-      if (identity === undefined) {
-        return yield* new UnknownIdentityError({ id: raw })
-      }
-      return identity
-    }),
-  )
 
 const encodeThreadFacet = Schema.encode(Schema.OptionFromNullOr(ObservedThreadSchema))
 const encodeChannel = Schema.encode(ChannelRefSchema)
@@ -462,7 +467,6 @@ const PostArgs = Schema.Struct({
   channel_name: Schema.String,
   body: Schema.String,
   thread: Schema.optional(Schema.String),
-  mentions: Schema.optional(Schema.Array(Schema.String)),
   reply_to: Schema.optional(Schema.String),
 })
 const EditMessageArgs = Schema.Struct({
@@ -509,8 +513,8 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
   const projectForCwd = deps.projectForCwd ?? (() => Effect.succeedNone)
   /**
    * The tools that accept a host-supplied `session_id` (see
-   * {@link ToolDef.hostSuppliedArgs}). ELEVEN tools carry it. That is the same
-   * eleven Claude Code's PreToolUse matcher stamps today, but the two sets are
+   * {@link ToolDef.hostSuppliedArgs}). TWELVE tools carry it. That is the same
+   * twelve Claude Code's PreToolUse matcher stamps today, but the two sets are
    * separate questions and are allowed to differ: this one also serves the
    * non-CC ephemeral host that supplies the UUID itself, which is a
    * listen-first seat's only route to an identity. A host stamping the arg on
@@ -727,7 +731,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     {
       name: 'post',
       description:
-        'Post a message to a channel by name. Optional thread (topic), mentions (identity ids the bot has seen), and reply_to (message id). To ping someone on Zulip, write the @**Name** markup inline in body where you want it rendered — the mentions array is notification metadata only and does not modify body. Returns {message_id, channel_id, channel_name, thread, permalink}. When you show a human this message afterwards, link it by the returned permalink — never a bare name or message id.',
+        'Post a message to a channel by name. Optional thread (topic) and reply_to (message id). To ping someone, write the @**Name** markup inline in body where you want it rendered. Returns {message_id, channel_id, channel_name, thread, permalink}. When you show a human this message afterwards, link it by the returned permalink — never a bare name or message id.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -735,15 +739,9 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           body: {
             type: 'string',
             description:
-              'Message body, written verbatim. Include @**Name** markup inline to trigger Zulip @-mention pings; the mentions[] field is metadata-only and will not add markup for you.',
+              'Message body, written verbatim. Include @**Name** markup inline to trigger Zulip @-mention pings.',
           },
           thread: { type: 'string', description: 'Thread / topic name (optional)' },
-          mentions: {
-            type: 'array',
-            items: { type: 'string' },
-            description:
-              'Identity ids to notify (metadata-only — does not modify body). Useful for substrates with a separate notification primitive. Ids must be cached via resolve/list_*/inbound events first.',
-          },
           reply_to: {
             type: 'string',
             description: 'Message id of a prior message to reply to',
@@ -758,16 +756,13 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         const run = runFor(args)
         const ref = await run(
           Effect.gen(function* () {
-            const { channel_name, body, thread, mentions, reply_to } =
+            const { channel_name, body, thread, reply_to } =
               yield* Schema.decodeUnknown(PostArgs)(args)
             const channel = yield* decodeChannelName(channel_name)
             const messageBody = yield* decodeMessageBody(body)
             const opts: { -readonly [K in keyof PostOpts]: PostOpts[K] } = {}
             if (thread !== undefined) {
               opts.thread = yield* decodeThreadName(thread)
-            }
-            if (mentions !== undefined) {
-              opts.mentions = yield* resolveMentions(cache, mentions)
             }
             if (reply_to !== undefined) {
               opts.replyTo = yield* reconstructMessageRef(cache, reply_to, channel_name)
@@ -1008,6 +1003,51 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           }),
         )
         return {}
+      },
+    },
+    {
+      name: 'list_subscriptions',
+      description:
+        'Read back this session\'s own live subscriptions, so "will a post to X reach me?" has an answer. Passive — never triggers acquire. Returns {state: "unbound"} for an ephemeral session with no bot yet (there is no seat, which is not the same as no subscriptions). Once bound, returns {state: "bound", channels, narrows, not_in_realm}. channels is read from the realm: the channels it delivers to this bot, and the authority on delivery. narrows is read from this running process: the topic-level narrows ({kind: "thread", channel, thread} or {kind: "new-topics", channel}) that a realm subscription cannot express. not_in_realm lists channels this process holds an intent for but the realm does not deliver, such as after a failed subscribe — a post there will NOT reach you. Both come from live state, never from COMMY_SUBSCRIBE, so a stale process shows what it actually holds. Mentions of the bot always arrive and are not part of this set.',
+      inputSchema: {
+        type: 'object',
+        properties: { cwd: cwdField },
+        additionalProperties: false,
+      },
+      hostSuppliedArgs: hostSuppliedSessionId,
+      handler: async (args): Promise<ListSubscriptionsResult> => {
+        const run = runFor(args)
+        return run(
+          Effect.gen(function* () {
+            const ctx = yield* currentSessionContext
+            const ensureBound = yield* identityCache.ensureBoundFor(ctx.sessionId, ctx.project)
+            if (ensureBound.current() === undefined) return { state: 'unbound' as const }
+            const realm = HashSet.fromIterable(yield* adapter.inbox.subscriptions())
+            const intents = narrowSet.intents()
+            return {
+              state: 'bound' as const,
+              channels: Arr.fromIterable(realm),
+              narrows: Arr.filterMap(intents, (intent) =>
+                Match.value(intent).pipe(
+                  Match.discriminatorsExhaustive('kind')({
+                    channel: () => Option.none(),
+                    thread: (i) =>
+                      Option.some({
+                        kind: 'thread' as const,
+                        channel: i.channelName,
+                        thread: i.threadName,
+                      }),
+                    'new-topics-in-channel': (i) =>
+                      Option.some({ kind: 'new-topics' as const, channel: i.channelName }),
+                  }),
+                ),
+              ),
+              not_in_realm: Arr.dedupe(
+                intents.map((i) => i.channelName).filter((c) => !HashSet.has(realm, c)),
+              ),
+            }
+          }),
+        )
       },
     },
     {
@@ -1308,7 +1348,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     optionalTools.push({
       name: 'upload_file',
       description:
-        'Upload a local file to the realm so it can be referenced in a message. Takes an absolute path, returns {reference, filename, size}. The `reference` is a ready-to-embed string — drop it into a post body wherever you want the attachment to render (same as writing @**Name** markup yourself).',
+        'Upload a local file to the realm so it can be referenced in a message. Takes an absolute path that must sit under the operator-set COMMY_UPLOAD_DIR (every path is refused when the operator has not set it), returns {reference, filename, size}. The `reference` is a ready-to-embed string — drop it into a post body wherever you want the attachment to render (same as writing @**Name** markup yourself).',
       inputSchema: {
         type: 'object',
         properties: {

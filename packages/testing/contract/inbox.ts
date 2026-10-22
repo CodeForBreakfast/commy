@@ -2,86 +2,37 @@
 
 import { expect, test } from 'bun:test'
 import {
-  type AgentComms,
+  decodeBotNameSync,
   decodeEmojiSync,
   decodeMessageBodySync,
   decodeThreadNameSync,
   decodeTimestampSync,
   type InboundEvent,
+  isBindError,
+  Mention,
   mentionedIdentities,
 } from '@commy/core/ports'
-import { Duration, Effect, Option, Queue, type Scope, Stream } from 'effect'
+import { Chunk, Duration, Effect, Option, Queue, Stream } from 'effect'
 import type { ContractEnv } from '../contract.ts'
-import { postSpaced } from './helpers.ts'
+import { awaitEvent, eventQueue, postSpaced } from './helpers.ts'
 
 /**
- * Generous deadline for "this event must eventually arrive" assertions. On an
- * in-process substrate the event is already enqueued so the wait resolves
- * immediately; on the live Zulip realm the events queue can take several
- * seconds to surface a post/mention. Sits well under the live suite's 45s
- * per-test budget so a genuine no-show still fails with the test's own clear
- * message rather than a bun:test timeout.
+ * Every event up to the next message-posted, then whatever follows it within a
+ * short silence window, so a test can assert on an event that must not arrive
+ * on either side of the post.
  */
-const EVENT_DELIVERY_DEADLINE = Duration.seconds(30)
-
-/**
- * Pull events off the queue in order until one satisfies `predicate`,
- * returning it. Recurses on each non-match — the caller wraps this in
- * `Effect.timeoutOption` so an event that never arrives bounds the wait
- * instead of blocking forever. Lets the mention-floor tests assert on the
- * `mention-received` event without coupling to whether a `message-posted`
- * precedes it (it does on Memory, may not live when the only thing
- * matching is the unconditional mention rule).
- */
-const takeUntil = (
+const eventsThroughPost = (
   queue: Queue.Queue<InboundEvent>,
-  predicate: (event: InboundEvent) => boolean,
-): Effect.Effect<InboundEvent> =>
-  Queue.take(queue).pipe(Effect.filterOrElse(predicate, () => takeUntil(queue, predicate)))
-
-/**
- * Await the first event matching `predicate`, failing the test (with
- * `description`) if none arrives within `EVENT_DELIVERY_DEADLINE`. Intervening
- * events are drained and discarded — so a positive event-delivery assertion
- * does not depend on the *position* of its event in the stream. On the live
- * realm an events queue under 429 backoff can redeliver or gap-replay a
- * `message-posted`, which a positional `Queue.take` + `.kind`
- * assertion would mistake for the wrong event; draining-until-match is immune.
- * Memory delivers exactly once so the match is immediate there.
- */
-const awaitEvent = (
-  queue: Queue.Queue<InboundEvent>,
-  description: string,
-  predicate: (event: InboundEvent) => boolean,
-): Effect.Effect<InboundEvent> =>
-  takeUntil(queue, predicate).pipe(
-    Effect.timeoutOption(EVENT_DELIVERY_DEADLINE),
-    Effect.flatMap(
-      Option.match({
-        onNone: () =>
-          Effect.die(new Error(`events() did not observe ${description} within the deadline`)),
-        onSome: Effect.succeed,
-      }),
-    ),
-  )
-
-/**
- * Start a subscriber on `events()` that mirrors every inbound event into an
- * unbounded queue. Tests pull from the queue in order, mimicking
- * AsyncIterator.next() semantics, and use `Effect.timeoutOption` on
- * `Queue.take` for "no event within Nms" assertions. Requires `Scope` — the
- * caller's `Effect.scoped` block owns the consumer fiber's lifetime, so the
- * fork is interrupted when the test body exits.
- */
-const eventQueue = (
-  comms: AgentComms,
-): Effect.Effect<Queue.Queue<InboundEvent>, never, Scope.Scope> =>
+): Effect.Effect<ReadonlyArray<InboundEvent>> =>
   Effect.gen(function* () {
-    const queue = yield* Queue.unbounded<InboundEvent>()
-    yield* Effect.forkScoped(
-      comms.inbox.events().pipe(Stream.runForEach((event) => Queue.offer(queue, event))),
-    )
-    return queue
+    const before: Array<InboundEvent> = []
+    yield* awaitEvent(queue, 'the peer post', (event) => {
+      before.push(event)
+      return event.kind === 'message-posted'
+    })
+    yield* Effect.sleep(Duration.millis(100))
+    const after = yield* Queue.takeAll(queue)
+    return [...before, ...Chunk.toReadonlyArray(after)]
   })
 
 export const inboxContract = (env: () => ContractEnv): void => {
@@ -93,7 +44,10 @@ export const inboxContract = (env: () => ContractEnv): void => {
           const me = yield* env().comms.identity.currentIdentity()
           yield* env().comms.inbox.subscribe(channel.name)
           const queue = yield* eventQueue(env().comms)
-          yield* env().comms.publisher.post(channel.name, decodeMessageBodySync('event-target'))
+          const ref = yield* env().comms.publisher.post(
+            channel.name,
+            decodeMessageBodySync('event-target'),
+          )
           const event = yield* awaitEvent(
             queue,
             'message-posted for the post',
@@ -101,10 +55,132 @@ export const inboxContract = (env: () => ContractEnv): void => {
           )
           if (event.kind !== 'message-posted') throw new Error('unexpected event kind')
           expect(event.message.sender.id).toEqual(me.id)
+          expect(event.message.ref.id).toEqual(ref.id)
           expect(event.message.ref.channel.id).toEqual(channel.id)
         }),
       ),
     ))
+  test('a message-posted event carries the permalinks that post returned', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const channel = yield* env().seedChannel('lobby')
+          yield* env().comms.inbox.subscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          const ref = yield* env().comms.publisher.post(
+            channel.name,
+            decodeMessageBodySync('linked'),
+            { thread: decodeThreadNameSync('design') },
+          )
+          const event = yield* awaitEvent(
+            queue,
+            'message-posted for the threaded post',
+            (e) => e.kind === 'message-posted' && e.message.body.includes('linked'),
+          )
+          if (event.kind !== 'message-posted') throw new Error('unexpected event kind')
+          expect(event.message.ref.permalink).toEqual(ref.permalink)
+          expect(event.message.ref.channel.permalink).toEqual(ref.channel.permalink)
+          expect(Option.map(event.message.ref.thread, (t) => t.permalink)).toEqual(
+            Option.map(ref.thread, (t) => t.permalink),
+          )
+        }),
+      ),
+    ))
+  test('a peer post names its sender by the identity the directory gives it', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const peerPost = env().peerPost
+          if (peerPost === undefined) return
+          const channel = yield* env().seedChannel('lobby')
+          const peer = yield* env().seedAgent('alice')
+          yield* env().comms.inbox.subscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* peerPost(peer, channel.name, decodeMessageBodySync('from a peer'))
+          const event = yield* awaitEvent(
+            queue,
+            'message-posted for the peer post',
+            (e) => e.kind === 'message-posted' && e.message.body.includes('from a peer'),
+          )
+          if (event.kind !== 'message-posted') throw new Error('unexpected event kind')
+          expect(event.message.sender).toEqual(peer)
+        }),
+      ),
+    ))
+  test('events() delivers posts in the order they were posted', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const channel = yield* env().seedChannel('lobby')
+          const bodies = ['e0', 'e1', 'e2', 'e3', 'e4'].map((body) => decodeMessageBodySync(body))
+          yield* env().comms.inbox.subscribe(channel.name)
+          yield* Effect.forEach(bodies, (body) => env().comms.publisher.post(channel.name, body))
+          const queue = yield* eventQueue(env().comms)
+          const delivered = yield* Effect.forEach(bodies, (body) =>
+            awaitEvent(
+              queue,
+              `message-posted for ${body}`,
+              (e) => e.kind === 'message-posted' && bodies.includes(e.message.body),
+            ).pipe(Effect.map((e) => (e.kind === 'message-posted' ? e.message.body : undefined))),
+          )
+          expect(delivered).toEqual(bodies)
+        }),
+      ),
+    ))
+  test('events() started before subscribe observes a post made after subscribe', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const channel = yield* env().seedChannel('lobby')
+          const queue = yield* eventQueue(env().comms)
+          yield* env().comms.inbox.subscribe(channel.name)
+          yield* env().comms.publisher.post(channel.name, decodeMessageBodySync('mid-stream'))
+          yield* awaitEvent(
+            queue,
+            'the post made after a mid-stream subscribe',
+            (e) => e.kind === 'message-posted' && e.message.body.includes('mid-stream'),
+          )
+        }),
+      ),
+    ))
+  test('inbox.subscribe on an adapter that has not acquired an identity fails with a BindError', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const build = env().newUnacquiredAdapter
+        if (build === undefined) return
+        const channel = yield* env().seedChannel('lobby')
+        const fresh = yield* build()
+        const error = yield* Effect.flip(fresh.inbox.subscribe(channel.name))
+        expect(isBindError(error)).toBe(true)
+      }),
+    ))
+  // Zulip's producer re-checks an unbound seat on an interval, so the post can
+  // take that long to surface.
+  test(
+    'events() started before acquire observes a post made after a later acquire and subscribe',
+    () =>
+      Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const build = env().newUnacquiredAdapter
+            if (build === undefined) return
+            const channel = yield* env().seedChannel('lobby')
+            const me = yield* env().comms.identity.currentIdentity()
+            const fresh = yield* build()
+            const queue = yield* eventQueue(fresh)
+            yield* fresh.identity.acquire(decodeBotNameSync(`${me.name}-a`))
+            yield* fresh.inbox.subscribe(channel.name)
+            yield* fresh.publisher.post(channel.name, decodeMessageBodySync('after binding'))
+            yield* awaitEvent(
+              queue,
+              'a post made after the seat bound',
+              (e) => e.kind === 'message-posted' && e.message.body.includes('after binding'),
+            )
+          }),
+        ),
+      ),
+    15_000,
+  )
   test('inbox.subscribe → post → events() observes the post (subscribe implies readiness)', () =>
     // The natural consumer shape: subscribe, post, then iterate. The
     // queue must see events that landed between subscribe's resolution
@@ -146,12 +222,60 @@ export const inboxContract = (env: () => ContractEnv): void => {
           const peer = yield* env().seedAgent('alice')
           yield* env().comms.inbox.subscribe(channel.name)
           const queue = yield* eventQueue(env().comms)
-          yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** wake up`), {
-            mentions: [me],
-          })
+          yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** wake up`))
           const event = yield* awaitEvent(
             queue,
             'a peer mention of self',
+            (e) => e.kind === 'mention-received',
+          )
+          if (event.kind !== 'mention-received')
+            throw new Error(`expected mention-received, got ${event.kind}`)
+          expect(mentionedIdentities(event.mentions).map((m) => m.id)).toContain(me.id)
+        }),
+      ),
+    ))
+  test('a peer mention of self by a case variant of its name surfaces as mention-received', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const peerPost = env().peerPost
+          if (peerPost === undefined) return
+          const channel = yield* env().seedChannel('lobby')
+          const me = yield* env().comms.identity.currentIdentity()
+          const peer = yield* env().seedAgent('alice')
+          yield* env().comms.inbox.subscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* peerPost(
+            peer,
+            channel.name,
+            decodeMessageBodySync(`@**${String(me.name).toUpperCase()}** wake up`),
+          )
+          const event = yield* awaitEvent(
+            queue,
+            'a peer case-variant mention of self',
+            (e) => e.kind === 'mention-received',
+          )
+          if (event.kind !== 'mention-received')
+            throw new Error(`expected mention-received, got ${event.kind}`)
+          expect(mentionedIdentities(event.mentions).map((m) => m.id)).toContain(me.id)
+        }),
+      ),
+    ))
+  test('a peer id-only mention of self surfaces as mention-received', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const peerPost = env().peerPost
+          if (peerPost === undefined) return
+          const channel = yield* env().seedChannel('lobby')
+          const me = yield* env().comms.identity.currentIdentity()
+          const peer = yield* env().seedAgent('alice')
+          yield* env().comms.inbox.subscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**|${me.id}** wake up`))
+          const event = yield* awaitEvent(
+            queue,
+            'a peer id-only mention of self',
             (e) => e.kind === 'mention-received',
           )
           if (event.kind !== 'mention-received')
@@ -175,9 +299,7 @@ export const inboxContract = (env: () => ContractEnv): void => {
           const me = yield* env().comms.identity.currentIdentity()
           const peer = yield* env().seedAgent('alice')
           const queue = yield* eventQueue(env().comms)
-          yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** wake up`), {
-            mentions: [me],
-          })
+          yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** wake up`))
           const event = yield* awaitEvent(
             queue,
             'a peer mention of self with nothing subscribed',
@@ -199,11 +321,123 @@ export const inboxContract = (env: () => ContractEnv): void => {
           const channel = yield* env().seedChannel('lobby')
           const alice = yield* env().seedAgent('alice')
           const queue = yield* eventQueue(env().comms)
-          yield* env().comms.publisher.post(channel.name, decodeMessageBodySync('hello alice'), {
-            mentions: [alice],
-          })
+          yield* env().comms.publisher.post(
+            channel.name,
+            decodeMessageBodySync(`@**${alice.name}** hello`),
+          )
           const result = yield* Queue.take(queue).pipe(Effect.timeoutOption(Duration.millis(100)))
           expect(Option.isNone(result)).toBe(true)
+        }),
+      ),
+    ))
+  test('a delivered peer post mentioning someone else raises no mention-received', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const peerPost = env().peerPost
+          if (peerPost === undefined) return
+          const channel = yield* env().seedChannel('lobby')
+          const alice = yield* env().seedAgent('alice')
+          const bob = yield* env().seedAgent('bob')
+          yield* env().comms.inbox.subscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* peerPost(
+            alice,
+            channel.name,
+            decodeMessageBodySync(`@**${bob.name}** over to you`),
+          )
+          const events = yield* eventsThroughPost(queue)
+          expect(events.map((e) => e.kind)).not.toContain('mention-received')
+        }),
+      ),
+    ))
+  // Talking about a seat's mention token is not mentioning the seat.
+  test('a peer post naming self only inside a code span raises no mention-received', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const peerPost = env().peerPost
+          if (peerPost === undefined) return
+          const channel = yield* env().seedChannel('lobby')
+          const me = yield* env().comms.identity.currentIdentity()
+          const peer = yield* env().seedAgent('alice')
+          yield* env().comms.inbox.subscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* peerPost(
+            peer,
+            channel.name,
+            decodeMessageBodySync(`never write \`@**${me.name}**\` in a code span`),
+          )
+          const events = yield* eventsThroughPost(queue)
+          expect(events.map((e) => e.kind)).not.toContain('mention-received')
+          const posted = events.find((e) => e.kind === 'message-posted')
+          if (posted?.kind !== 'message-posted') throw new Error('expected message-posted')
+          expect(posted.message.mentions).toEqual([])
+        }),
+      ),
+    ))
+  test('a peer post mentioning self silently raises no mention-received', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const peerPost = env().peerPost
+          if (peerPost === undefined) return
+          const channel = yield* env().seedChannel('lobby')
+          const me = yield* env().comms.identity.currentIdentity()
+          const peer = yield* env().seedAgent('alice')
+          yield* env().comms.inbox.subscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* peerPost(peer, channel.name, decodeMessageBodySync(`as @_**${me.name}** said`))
+          const events = yield* eventsThroughPost(queue)
+          expect(events.map((e) => e.kind)).not.toContain('mention-received')
+        }),
+      ),
+    ))
+  test('a peer channel wildcard surfaces as mention-received for self', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const peerPost = env().peerPost
+          if (peerPost === undefined) return
+          const channel = yield* env().seedChannel('lobby')
+          const peer = yield* env().seedAgent('alice')
+          yield* env().comms.inbox.subscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* peerPost(peer, channel.name, decodeMessageBodySync('heads up @**all**'))
+          const event = yield* awaitEvent(
+            queue,
+            'a peer channel wildcard',
+            (e) => e.kind === 'mention-received',
+          )
+          if (event.kind !== 'mention-received')
+            throw new Error(`expected mention-received, got ${event.kind}`)
+          expect(event.mentions).toEqual([Mention.ChannelWildcardMention()])
+        }),
+      ),
+    ))
+  // A channel wildcard notifies the channel's subscribers, so it never reaches
+  // a seat outside the channel. The personal mention that follows is the
+  // sentinel: the first mention-received to arrive must be it.
+  test('a peer channel wildcard in a channel self is not subscribed to raises no mention-received', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const peerPost = env().peerPost
+          if (peerPost === undefined) return
+          const channel = yield* env().seedChannel('lobby')
+          const me = yield* env().comms.identity.currentIdentity()
+          const peer = yield* env().seedAgent('alice')
+          const queue = yield* eventQueue(env().comms)
+          yield* peerPost(peer, channel.name, decodeMessageBodySync('heads up @**all**'))
+          yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** sentinel`))
+          const event = yield* awaitEvent(
+            queue,
+            'a peer mention of self after the wildcard',
+            (e) => e.kind === 'mention-received',
+          )
+          if (event.kind !== 'mention-received')
+            throw new Error(`expected mention-received, got ${event.kind}`)
+          expect(event.message.body).toContain('sentinel')
         }),
       ),
     ))
@@ -326,6 +560,29 @@ export const inboxContract = (env: () => ContractEnv): void => {
         }),
       ),
     ))
+  test('one seat unsubscribing leaves another seat on the same channel still hearing it', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const build = env().newUnacquiredAdapter
+          if (build === undefined) return
+          const channel = yield* env().seedChannel('lobby')
+          const me = yield* env().comms.identity.currentIdentity()
+          const leaver = yield* build()
+          yield* leaver.identity.acquire(decodeBotNameSync(`${me.name}-a`))
+          yield* env().comms.inbox.subscribe(channel.name)
+          yield* leaver.inbox.subscribe(channel.name)
+          yield* leaver.inbox.unsubscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* leaver.publisher.post(channel.name, decodeMessageBodySync('still-heard'))
+          yield* awaitEvent(
+            queue,
+            'a post to the channel the other seat left',
+            (e) => e.kind === 'message-posted' && e.message.body.includes('still-heard'),
+          )
+        }),
+      ),
+    ))
   test('inbox.unsubscribe of a channel also silences a topic held in it', () =>
     Effect.runPromise(
       Effect.scoped(
@@ -343,6 +600,77 @@ export const inboxContract = (env: () => ContractEnv): void => {
           )
           const result = yield* Queue.take(queue).pipe(Effect.timeoutOption(Duration.millis(100)))
           expect(Option.isNone(result)).toBe(true)
+        }),
+      ),
+    ))
+  test('inbox.unsubscribe of a channel also silences a new-topics narrow held in it', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const channel = yield* env().seedChannel('lobby')
+          yield* env().comms.inbox.subscribe(channel.name)
+          yield* env().comms.inbox.subscribe({
+            kind: 'new-topics-in-channel',
+            channel: channel.name,
+          })
+          yield* env().comms.inbox.unsubscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* env().comms.publisher.post(
+            channel.name,
+            decodeMessageBodySync('should-not-arrive'),
+            { thread: decodeThreadNameSync('fresh') },
+          )
+          const result = yield* Queue.take(queue).pipe(Effect.timeoutOption(Duration.millis(100)))
+          expect(Option.isNone(result)).toBe(true)
+        }),
+      ),
+    ))
+  test('a peer mention still arrives from a channel the seat unsubscribed from', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const peerPost = env().peerPost
+          if (peerPost === undefined) return
+          const channel = yield* env().seedChannel('lobby')
+          const me = yield* env().comms.identity.currentIdentity()
+          const peer = yield* env().seedAgent('alice')
+          yield* env().comms.inbox.subscribe(channel.name)
+          yield* env().comms.inbox.unsubscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** still here`))
+          const event = yield* awaitEvent(
+            queue,
+            'a peer mention of self in an unsubscribed channel',
+            (e) => e.kind === 'mention-received',
+          )
+          if (event.kind !== 'mention-received')
+            throw new Error(`expected mention-received, got ${event.kind}`)
+          expect(mentionedIdentities(event.mentions).map((m) => m.id)).toContain(me.id)
+        }),
+      ),
+    ))
+  test('a peer mention in a channel the seat never subscribed names that channel', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const peerPost = env().peerPost
+          if (peerPost === undefined) return
+          const home = yield* env().seedChannel('lobby')
+          const elsewhere = yield* env().seedChannel('elsewhere')
+          const me = yield* env().comms.identity.currentIdentity()
+          const peer = yield* env().seedAgent('alice')
+          yield* env().comms.inbox.subscribe(home.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* peerPost(peer, elsewhere.name, decodeMessageBodySync(`@**${me.name}** thoughts?`))
+          const event = yield* awaitEvent(
+            queue,
+            'a peer mention of self in a channel the seat never subscribed',
+            (e) => e.kind === 'mention-received',
+          )
+          if (event.kind !== 'mention-received')
+            throw new Error(`expected mention-received, got ${event.kind}`)
+          expect(mentionedIdentities(event.mentions).map((m) => m.id)).toContain(me.id)
+          expect(event.message.ref.channel.name).toEqual(elsewhere.name)
         }),
       ),
     ))
@@ -395,6 +723,11 @@ export const inboxContract = (env: () => ContractEnv): void => {
           )
           yield* awaitEvent(
             queue,
+            'the opener of the topic still held',
+            (e) => e.kind === 'message-posted' && e.message.body.includes('opens held'),
+          )
+          yield* awaitEvent(
+            queue,
             'the reply in the topic still held',
             (e) => e.kind === 'message-posted' && e.message.body.includes('replies in held'),
           )
@@ -433,6 +766,43 @@ export const inboxContract = (env: () => ContractEnv): void => {
         }),
       ),
     ))
+  test('inbox.subscriptions() reports a channel subscribed twice once', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const lobby = yield* env().seedChannel('lobby')
+        yield* env().comms.inbox.subscribe(lobby.name)
+        yield* env().comms.inbox.subscribe(lobby.name)
+        expect(yield* env().comms.inbox.subscriptions()).toEqual([lobby.name])
+      }),
+    ))
+  test('inbox.subscriptions() keeps a channel while the seat still holds a topic in it', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const lobby = yield* env().seedChannel('lobby')
+        const held = { channel: lobby.name, thread: decodeThreadNameSync('held') }
+        const dropped = { channel: lobby.name, thread: decodeThreadNameSync('dropped') }
+        yield* env().comms.inbox.subscribe(held)
+        yield* env().comms.inbox.subscribe(dropped)
+        yield* env().comms.inbox.unsubscribe(dropped)
+        expect(yield* env().comms.inbox.subscriptions()).toEqual([lobby.name])
+        yield* env().comms.inbox.unsubscribe(held)
+        expect(yield* env().comms.inbox.subscriptions()).toEqual([])
+      }),
+    ))
+  test('inbox.subscriptions() drops an unsubscribed channel even while narrows in it are held', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const lobby = yield* env().seedChannel('lobby')
+        yield* env().comms.inbox.subscribe(lobby.name)
+        yield* env().comms.inbox.subscribe({
+          channel: lobby.name,
+          thread: decodeThreadNameSync('held'),
+        })
+        yield* env().comms.inbox.subscribe({ kind: 'new-topics-in-channel', channel: lobby.name })
+        yield* env().comms.inbox.unsubscribe(lobby.name)
+        expect(yield* env().comms.inbox.subscriptions()).toEqual([])
+      }),
+    ))
   test('inbox.replay(since) returns past message-posted events with ts >= since', () =>
     Effect.runPromise(
       Effect.gen(function* () {
@@ -455,6 +825,51 @@ export const inboxContract = (env: () => ContractEnv): void => {
         expect(postedBodies).toContain(decodeMessageBodySync('pivot'))
         expect(postedBodies).toContain(decodeMessageBodySync('after-pivot'))
         expect(postedBodies).not.toContain(decodeMessageBodySync('before-pivot'))
+        expect(
+          events.every(
+            (e) => e.kind !== 'message-posted' || e.message.ref.channel.name === channel.name,
+          ),
+        ).toBe(true)
+      }),
+    ))
+  test('inbox.replay surfaces a peer mention of self as mention-received beside its message-posted', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const peerPost = env().peerPost
+        if (peerPost === undefined) return
+        const channel = yield* env().seedChannel('lobby')
+        const me = yield* env().comms.identity.currentIdentity()
+        const peer = yield* env().seedAgent('alice')
+        yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** catch up`))
+        const [posted] = yield* env().comms.history.readChannel(channel.name, {})
+        if (posted === undefined) throw new Error('expected the peer post in channel history')
+        const events = yield* env().comms.inbox.replay(posted.ts)
+        expect(events.map((e) => e.kind)).toEqual(['message-posted', 'mention-received'])
+        const mention = events[1]
+        if (mention?.kind !== 'mention-received') throw new Error('expected mention-received')
+        expect(mentionedIdentities(mention.mentions).map((m) => m.id)).toContain(me.id)
+      }),
+    ))
+  // Replay agrees with live delivery: a channel wildcard notifies only the
+  // channel's subscribers. The personal mention after it is the sentinel that
+  // shows replay still raises mentions in that channel.
+  test('inbox.replay raises no mention-received for a peer channel wildcard in a channel self never joined', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const peerPost = env().peerPost
+        if (peerPost === undefined) return
+        const channel = yield* env().seedChannel('lobby')
+        const me = yield* env().comms.identity.currentIdentity()
+        const peer = yield* env().seedAgent('alice')
+        yield* peerPost(peer, channel.name, decodeMessageBodySync('heads up @**all**'))
+        yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** sentinel`))
+        const [wildcard] = yield* env().comms.history.readChannel(channel.name, {})
+        if (wildcard === undefined) throw new Error('expected the wildcard post in channel history')
+        const events = yield* env().comms.inbox.replay(wildcard.ts)
+        const mentioned = events
+          .filter((e) => e.kind === 'mention-received')
+          .map((e) => e.message.body)
+        expect(mentioned).toEqual([decodeMessageBodySync(`@**${me.name}** sentinel`)])
       }),
     ))
   test('inbox.subscribe(new-topics-in-channel) yields the first message of a fresh topic', () =>
@@ -587,6 +1002,15 @@ export const inboxContract = (env: () => ContractEnv): void => {
         const future = decodeTimestampSync(last.ts + 3600)
         const events = yield* env().comms.inbox.replay(future)
         expect(events).toEqual([])
+      }),
+    ))
+  test('inbox.settingsChanges() emits no initial value', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const first = yield* env()
+          .comms.inbox.settingsChanges()
+          .pipe(Stream.runHead, Effect.timeoutOption(Duration.millis(100)))
+        expect(Option.flatten(first)).toEqual(Option.none())
       }),
     ))
 }
