@@ -791,7 +791,7 @@ export interface HistoryReader {
 /**
  * Failure surface for the Effect-returning `Directory` reads. The Zulip
  * adapter mints this when the backing substrate call fails, carrying the
- * underlying error as `cause`; the in-memory adapter never produces it.
+ * underlying error as `cause`; the in-memory adapter produces it only for an `acquire` that Zulip would refuse.
  * `operation` names the port method that failed.
  */
 export class DirectoryError extends Data.TaggedError('DirectoryError')<{
