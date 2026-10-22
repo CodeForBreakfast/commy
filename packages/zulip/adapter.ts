@@ -766,7 +766,9 @@ export const zulipAdapter = (
         for (const u of members) {
           const ident = yield* toIdentity(u)
           byId.set(ZulipUserRef(u.user_id), ident)
-          byName.set(u.full_name.toLowerCase(), ident)
+          const name = u.full_name.toLowerCase()
+          const held = byName.get(name)
+          if (held === undefined || u.is_active || !active.has(held.id)) byName.set(name, ident)
           byIdentityId.set(ident.id, ZulipUserRef(u.user_id))
           if (u.is_active) active.add(ident.id)
         }
