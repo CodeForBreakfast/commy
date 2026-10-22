@@ -1724,10 +1724,7 @@ export const zulipAdapter = (
                 // the server-canonical "(no topic)" placeholder when the caller
                 // omits a thread — same string Zulip's UI uses for empty
                 // topics; an unnamed thread has no resolution state to probe
-                // for. `opts.mentions` is metadata-only per PostOpts: we
-                // don't fold it into `content`. Zulip pings are driven by
-                // `@**Name**` markup inside the body, so callers that want a
-                // ping write the markup themselves where they want it rendered.
+                // for.
                 (thread === undefined
                   ? Effect.succeed({ topic: '(no topic)', resolved: false })
                   : addressThread(effective.name, thread)
