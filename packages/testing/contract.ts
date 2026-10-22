@@ -104,6 +104,14 @@ export interface ContractEnv {
    * substrate reports its own (Zulip 1024, memory its configured limit).
    */
   readonly channelDescriptionLimit: number
+  /**
+   * Longest message body this substrate stores whole, in characters. The
+   * over-length tests build their input from it, so the contract asserts that
+   * a substrate refuses what it cannot hold and never what the cap happens to
+   * be. Zulip reports its realm's `max_message_length`, memory its configured
+   * limit.
+   */
+  readonly messageLengthLimit: number
   /** Tear down whatever the factory stood up. Called once per test. */
   readonly dispose: () => Effect.Effect<void>
 }

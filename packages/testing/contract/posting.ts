@@ -6,6 +6,7 @@ import {
   decodeMessageBodySync,
   decodeThreadNameSync,
   type MessageRef,
+  MessageRejected,
   mentionedIdentities,
   UnknownChannel,
 } from '@commy/core/ports'
@@ -18,6 +19,30 @@ const findByBody = (
 ): { readonly body: string } | undefined => messages.find((m) => m.body === body)
 
 export const publisherPostingContract = (env: () => ContractEnv): void => {
+  // A substrate that clips an over-long body and reports success leaves the
+  // sender believing the whole message landed. The publisher refuses instead.
+  test('publisher.post refuses a body longer than the substrate stores', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const tooLong = decodeMessageBodySync('x'.repeat(env().messageLengthLimit + 1))
+        const error = yield* Effect.flip(env().comms.publisher.post(channel.name, tooLong))
+        expect(error).toBeInstanceOf(MessageRejected)
+        // Refused outright — nothing clipped was left behind.
+        const messages = yield* env().comms.history.readChannel(channel.name, { limit: 10 })
+        expect(messages).toEqual([])
+      }),
+    ))
+  test('publisher.post stores a body exactly at the substrate limit whole', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const atLimit = decodeMessageBodySync('x'.repeat(env().messageLengthLimit))
+        yield* env().comms.publisher.post(channel.name, atLimit)
+        const messages = yield* env().comms.history.readChannel(channel.name, { limit: 10 })
+        expect(messages.map((m) => m.body)).toEqual([atLimit])
+      }),
+    ))
   test('publisher.post returns a MessageRef whose channel matches the destination', () =>
     Effect.runPromise(
       Effect.gen(function* () {

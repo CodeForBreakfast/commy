@@ -69,6 +69,7 @@ import {
   type Emoji,
   HistoryError,
   MessagePermalinkSchema,
+  MessageRejected,
   mentionsIdentity,
   PublisherError,
   ThreadPermalinkSchema,
@@ -169,9 +170,17 @@ export interface MemoryAdapterConfig {
    * assuming a number is the thing worth proving.
    */
   readonly channelDescriptionLimit?: number
+  /**
+   * Longest message body this substrate will store, in characters. A longer
+   * body is refused with `MessageRejected` on post and edit rather than stored
+   * clipped. Like the description limit, the default is memory's own number
+   * and not Zulip's.
+   */
+  readonly messageLengthLimit?: number
 }
 
 const DEFAULT_CHANNEL_DESCRIPTION_LIMIT = 512
+const DEFAULT_MESSAGE_LENGTH_LIMIT = 4096
 
 export type MemoryAdapter = AgentComms & {
   /**
@@ -242,6 +251,20 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     // no blank-string entry to tell apart from a missing one.
     const descriptionsByChannel = new Map<string, ChannelDescription>()
     const descriptionLimit = config.channelDescriptionLimit ?? DEFAULT_CHANNEL_DESCRIPTION_LIMIT
+    const messageLimit = config.messageLengthLimit ?? DEFAULT_MESSAGE_LENGTH_LIMIT
+    const refuseOverlongBody = (
+      operation: 'post' | 'edit',
+      body: MessageBodyType,
+    ): Effect.Effect<void, MessageRejected> =>
+      body.length > messageLimit
+        ? Effect.fail(
+            new MessageRejected({
+              operation,
+              substrate: 'memory',
+              detail: `message is too long (limit: ${messageLimit} characters, got ${body.length})`,
+            }),
+          )
+        : Effect.void
     const isThreadResolved = (channelId: string, threadName: string): boolean =>
       resolvedThreadsByChannel.get(channelId)?.has(threadName) ?? false
     const withThreadResolution = (stored: StoredMessage): StoredMessage =>
@@ -603,6 +626,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         Effect.gen(function* () {
           const self = yield* requireBound()
           const channelRef = yield* resolveChannel(channel)
+          yield* refuseOverlongBody('post', body)
           const bucket = yield* bucketOf(channelRef)
           const id = String(yield* allocId(nextMessageId))
           const ref = yield* buildRef(id, channelRef, opts?.thread)
@@ -627,6 +651,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       // mirroring the Zulip adapter's PATCH-on-unknown-id → PublisherError.
       edit: (message, body) =>
         requireBound().pipe(
+          Effect.zipRight(refuseOverlongBody('edit', body)),
           Effect.flatMap(() => {
             const stored = messagesById.get(message.id)
             if (stored === undefined) {

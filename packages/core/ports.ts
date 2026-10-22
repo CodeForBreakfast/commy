@@ -543,8 +543,9 @@ export interface MessagePublisher {
    * `UnresolvedMention` when the body carries a mention token no identity
    * resolves (pre-flighted for the same reason — the substrate would post it
    * and notify nobody), and a `PublisherError` wrapping any other substrate
-   * failure. Calling before `identity.acquire` is a defect, not a typed
-   * failure.
+   * failure. A body the substrate cannot store whole fails with a typed
+   * `MessageRejected` rather than landing clipped. Calling before
+   * `identity.acquire` is a defect, not a typed failure.
    *
    * `opts.thread` names a thread by its clean name — resolution is never
    * encoded in the name (see `ObservedThreadSchema`). A post into a **resolved**
@@ -567,7 +568,10 @@ export interface MessagePublisher {
     channel: ChannelName,
     body: MessageBody,
     opts?: PostOpts,
-  ): Effect.Effect<MessageRef, BindError | UnknownChannel | UnresolvedMention | PublisherError>
+  ): Effect.Effect<
+    MessageRef,
+    BindError | UnknownChannel | UnresolvedMention | MessageRejected | PublisherError
+  >
   /**
    * Replace the body of an existing message attributed to the bound
    * identity. Adapters target the substrate's in-place edit primitive
@@ -584,7 +588,10 @@ export interface MessagePublisher {
   edit(
     message: MessageRef,
     body: MessageBody,
-  ): Effect.Effect<void, BindError | UnresolvedMention | MessageEditRefused | PublisherError>
+  ): Effect.Effect<
+    void,
+    BindError | UnresolvedMention | MessageRejected | MessageEditRefused | PublisherError
+  >
   /**
    * Whether the substrate permits `edit` at all *right now*, for anyone —
    * the realm-wide switch behind `MessageEditRefused`'s `editing-disabled`
@@ -916,6 +923,24 @@ export class ChannelDescriptionRejected extends Data.TaggedError('ChannelDescrip
 }> {
   override get message(): string {
     return `setChannelDescription(${this.channel}) failed — ${this.substrate} rejected the description: ${this.detail}`
+  }
+}
+
+/**
+ * Refusal of `MessagePublisher.post` or `edit` when the substrate cannot store
+ * the body whole. A substrate that clips an over-long body and reports success
+ * leaves the sender believing the whole message landed, so adapters refuse
+ * instead. `detail` carries the adapter's own explanation, including the actual
+ * limit, for a caller to show a human. Tagged so the MCP edge can report a
+ * fixable input apart from a substrate outage, which stays `PublisherError`.
+ */
+export class MessageRejected extends Data.TaggedError('MessageRejected')<{
+  readonly operation: 'post' | 'edit'
+  readonly substrate: string
+  readonly detail: string
+}> {
+  override get message(): string {
+    return `${this.operation} failed — ${this.substrate} rejected the message: ${this.detail}`
   }
 }
 

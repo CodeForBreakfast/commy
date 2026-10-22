@@ -44,6 +44,9 @@ import { RESOLVED_TOPIC_PREFIX } from './resolved-topic.ts'
 /** Zulip's `Stream.MAX_DESCRIPTION_LENGTH`. */
 export const CHANNEL_DESCRIPTION_LIMIT = 1024
 
+/** Zulip's default `max_message_length`, which `/register` reports as realm state. */
+export const MESSAGE_LENGTH_LIMIT = 10_000
+
 export type PresenceStatus = 'active' | 'idle' | 'offline'
 
 export interface InProcessRealm {
@@ -1177,7 +1180,9 @@ export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(func
           return ok({
             queue_id: queueId,
             last_event_id: queue.lastIssued,
-            ...(realmState ? { realm_allow_message_editing: true } : {}),
+            ...(realmState
+              ? { realm_allow_message_editing: true, max_message_length: MESSAGE_LENGTH_LIMIT }
+              : {}),
           })
         }),
     },

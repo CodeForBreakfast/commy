@@ -7,6 +7,7 @@ import { memoryAdapter } from './adapter.ts'
 // is given the substrate's number the way any other substrate gives it —
 // nothing in the contract assumes a particular one.
 const MEMORY_DESCRIPTION_LIMIT = 512
+const MEMORY_MESSAGE_LIMIT = 4096
 
 runAgentCommsContract('memory adapter', async () => {
   const adapter = await Effect.runPromise(memoryAdapter())
@@ -19,6 +20,7 @@ runAgentCommsContract('memory adapter', async () => {
     peerPost: (peer, channel, body, opts) =>
       adapter.peerPost(peer, channel, body, opts).pipe(Effect.asVoid, Effect.orDie),
     channelDescriptionLimit: MEMORY_DESCRIPTION_LIMIT,
+    messageLengthLimit: MEMORY_MESSAGE_LIMIT,
     dispose: () => Effect.void,
   }
 })
@@ -40,6 +42,7 @@ runAgentCommsContract('memory adapter (allowlist mode for UnknownIdentity covera
     peerPost: (peer, channel, body, opts) =>
       adapter.peerPost(peer, channel, body, opts).pipe(Effect.asVoid, Effect.orDie),
     channelDescriptionLimit: MEMORY_DESCRIPTION_LIMIT,
+    messageLengthLimit: MEMORY_MESSAGE_LIMIT,
     dispose: () => Effect.void,
   }
 })

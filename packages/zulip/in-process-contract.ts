@@ -10,7 +10,11 @@ import type { ContractFactory } from '@commy/testing/contract'
 import { HttpClient } from '@effect/platform'
 import { Effect, Option, Redacted } from 'effect'
 import { type ZulipAdapter, zulipAdapter } from './adapter.ts'
-import { CHANNEL_DESCRIPTION_LIMIT, makeInProcessRealm } from './in-process-realm.ts'
+import {
+  CHANNEL_DESCRIPTION_LIMIT,
+  MESSAGE_LENGTH_LIMIT,
+  makeInProcessRealm,
+} from './in-process-realm.ts'
 import { permalinkBase, withChannelPermalink } from './permalink.ts'
 
 const SELF_NAME = decodeBotNameSync('contract-self')
@@ -61,6 +65,7 @@ export const inProcessContractFactory: ContractFactory = async () => {
         Effect.orDie,
       ),
     channelDescriptionLimit: CHANNEL_DESCRIPTION_LIMIT,
+    messageLengthLimit: MESSAGE_LENGTH_LIMIT,
     // The realm and its adapters hold nothing outside the heap, so there is
     // nothing to tear down.
     dispose: () => Effect.void,

@@ -20,6 +20,7 @@ import type {
   IdentityPort,
   InboundEvent,
   Message,
+  MessageBody,
   MessageId,
   MessageInbox,
   MessagePublisher,
@@ -55,6 +56,7 @@ import {
   InboxError,
   isBindError,
   MessageEditRefused,
+  MessageRejected,
   mentionsIdentity,
   PublisherError,
   UnboundEphemeralSession,
@@ -117,6 +119,7 @@ import {
   mentionTokens,
   unresolvedMentions,
 } from './mentions.ts'
+import { messageLimitStateSchema, overlongBodyRejection } from './message-length.ts'
 import { buildMessageRef, permalinkBase, withChannelPermalink } from './permalink.ts'
 import { type RenderedContentLookup, renderedContentForBatch } from './rendered-content.ts'
 import { mentionedUserIds, mentionsOfMessage } from './rendered-mentions.ts'
@@ -839,6 +842,49 @@ export const zulipAdapter = (
     // mention-free body — the common case — never pays for a directory fetch
     // onto the rate-limited realm. Only user tokens can be dead, so a body
     // whose only mentions are wildcards or groups skips the fetch too.
+    // The realm's body cap, read once on first use and kept: it is a server
+    // setting that changes with a restart, and a failed read is not kept so
+    // the next write tries again. Read through the minter for the same reason
+    // as `editingAvailable`: the cap is realm-scoped, not viewer-scoped.
+    const messageLimitRef = yield* Ref.make<Option.Option<number>>(Option.none())
+    const messageLimit = Ref.get(messageLimitRef).pipe(
+      Effect.flatMap(
+        Option.match({
+          onSome: Effect.succeed,
+          onNone: () =>
+            minterHttp
+              .post('/register', messageLimitStateSchema, {
+                event_types: JSON.stringify([]),
+                fetch_event_types: JSON.stringify(['realm']),
+              })
+              .pipe(
+                Effect.tap((res) =>
+                  minterHttp
+                    .delete('/events', successSchema, { queue_id: res.queue_id })
+                    .pipe(Effect.ignore),
+                ),
+                Effect.map((res) => res.max_message_length),
+                Effect.tap((limit) => Ref.set(messageLimitRef, Option.some(limit))),
+              ),
+        }),
+      ),
+    )
+
+    // Zulip clips a body past the cap and reports success, so an over-long
+    // body is refused here, before anything is sent.
+    const refuseOverlongBody = (
+      operation: 'post' | 'edit',
+      body: MessageBody,
+    ): Effect.Effect<void, MessageRejected | ZulipApiError | ParseResult.ParseError> =>
+      messageLimit.pipe(
+        Effect.flatMap((limit) =>
+          Option.match(overlongBodyRejection(operation, body, limit), {
+            onNone: () => Effect.void,
+            onSome: Effect.fail,
+          }),
+        ),
+      )
+
     const validateOutboundMentions = (
       operation: 'post' | 'edit',
       body: string,
@@ -1711,7 +1757,8 @@ export const zulipAdapter = (
         // failure as a PublisherError carrying the cause.
         return boundHttp().pipe(
           Effect.flatMap((http) =>
-            validateOutboundMentions('post', body).pipe(
+            refuseOverlongBody('post', body).pipe(
+              Effect.zipRight(validateOutboundMentions('post', body)),
               Effect.zipRight(resolvePublishChannel(channel)),
               Effect.flatMap((effective) =>
                 // Zulip rejects stream messages without a topic on realms with
@@ -1763,7 +1810,9 @@ export const zulipAdapter = (
               // flows out untouched rather than being flattened into a
               // PublisherError the caller cannot act on.
               Effect.mapError((cause) =>
-                cause instanceof UnknownChannel || cause instanceof UnresolvedMention
+                cause instanceof UnknownChannel ||
+                cause instanceof UnresolvedMention ||
+                cause instanceof MessageRejected
                   ? cause
                   : new PublisherError({ operation: 'post', cause }),
               ),
@@ -1774,7 +1823,8 @@ export const zulipAdapter = (
       edit: (message, body) =>
         boundHttp().pipe(
           Effect.flatMap((http) =>
-            validateOutboundMentions('edit', body).pipe(
+            refuseOverlongBody('edit', body).pipe(
+              Effect.zipRight(validateOutboundMentions('edit', body)),
               Effect.zipRight(
                 http.patch(`/messages/${encodeURIComponent(message.id)}`, successSchema, {
                   content: body,
@@ -1782,7 +1832,9 @@ export const zulipAdapter = (
               ),
               Effect.asVoid,
               Effect.mapError((cause) =>
-                cause instanceof UnresolvedMention ? cause : classifyEditFailure(cause),
+                cause instanceof UnresolvedMention || cause instanceof MessageRejected
+                  ? cause
+                  : classifyEditFailure(cause),
               ),
             ),
           ),
