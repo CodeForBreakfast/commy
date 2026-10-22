@@ -228,10 +228,17 @@ const mentionedUser = (state: RealmState, token: string): Option.Option<RealmUse
       Option.filter((u) => disambiguated[1] === '' || u.fullName === disambiguated[1]),
     )
   }
+  // Zulip keys its lookup on the lowercased name from an unordered query, so
+  // the last row wins; the highest id stands in for it here.
   const named = Arr.filter(Arr.fromIterable(HashMap.values(state.users)), (u) =>
     sameName(u.fullName, token),
   )
-  return named.length === 1 ? Arr.head(named) : Option.none()
+  return Arr.last(
+    Arr.sort(
+      named,
+      Order.mapInput(Order.number, (u: RealmUser) => u.userId),
+    ),
+  )
 }
 
 /**
