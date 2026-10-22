@@ -41,9 +41,17 @@ running commy *inside Claude Code* specifically.
 The ports are the seam, so tests sit on one side of them or the other:
 
 - **Port contract tests** (`@commy/testing`) pin the behaviour every adapter
-  must honour. They run against *both* the real Zulip adapter and the in-memory
-  adapter, which is how `@commy/memory` earns the right to stand in for Zulip
-  elsewhere — it is a *proven* contract-equivalent, not a hopeful mock.
+  must honour, with one module per port under `packages/testing/contract/`.
+  `bun run check` runs the whole contract against both the in-memory adapter
+  and the Zulip adapter, which it runs on an in-process realm. That is how
+  `@commy/memory` earns the right to stand in for Zulip elsewhere: it is a
+  *proven* contract-equivalent, not a hopeful mock.
+
+  So a test of how a port behaves goes in the contract module for that port,
+  never in an adapter's own suite. A behaviour pinned in one adapter's suite
+  holds only for that adapter, and the in-memory double can drift from Zulip
+  with nothing failing. An adapter's own suite keeps only that adapter's
+  mechanics, such as Zulip's HTTP paging or event decoding.
 
 - **Above-the-port unit tests** (in `@commy/mcp` — `server.test.ts`,
   `server.integration.test.ts`, tools tests) exercise the driving adapter:

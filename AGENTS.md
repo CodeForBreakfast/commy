@@ -71,6 +71,11 @@ run check` to use the lean CI shell). A bare `bun run check` outside the shell
 fails the hermes task with `uv: command not found` whenever its turbo cache is
 cold. CI runs the gate this way too (`.github/workflows/ci.yml`).
 
+**A test of port behaviour goes in the shared contract** under
+`packages/testing/contract/`, never in an adapter's own suite. The contract
+runs against every adapter, which is what lets the in-memory adapter stand in
+for Zulip in tests. See [Test architecture](docs/architecture.md#test-architecture).
+
 **Live tests** (`*.live.test.ts`) hit a real Zulip realm and can rate-limit
 other clients sharing it. They are excluded from default discovery via
 `bunfig.toml` `[test] pathIgnorePatterns`. The `test:live` script clears that
