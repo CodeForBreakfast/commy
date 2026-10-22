@@ -95,6 +95,21 @@ export const identityContract = (env: () => ContractEnv): void => {
         expect(agents.map((a) => a.id)).toContain(first.identity.id)
       }),
     ))
+  test("identity.acquire of an active agent's name binds to that agent's id", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const build = env().newUnacquiredAdapter
+        if (build === undefined) return
+        const current = yield* env().comms.identity.currentIdentity()
+        const existing = yield* env().seedAgent(`${current.name}-active`)
+        const fresh = yield* build()
+        const acquired = yield* fresh.identity.acquire(decodeBotNameSync(existing.name))
+        expect(acquired.identity.id).toEqual(existing.id)
+        expect(yield* fresh.identity.currentIdentity()).toEqual(acquired.identity)
+        const agents = yield* env().comms.directory.listAgents()
+        expect(agents.filter((a) => a.id === existing.id)).toHaveLength(1)
+      }),
+    ))
   test('identity.acquire of a name differing only by case from an existing agent is refused', () =>
     Effect.runPromise(
       Effect.gen(function* () {

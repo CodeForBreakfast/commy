@@ -196,11 +196,6 @@ effectTest('identity.acquire on an existing bot regenerates its API key and bind
     const config = yield* makeConfig()
     const adapter = yield* zulipAdapter(stub, config)
     const result = yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-    expect(result.identity).toEqual({
-      id: decodeIdentityIdSync('9'),
-      name: decodeDisplayNameSync('hermes-agent'),
-      kind: 'agent',
-    })
     expect(result.credentials).toEqual({
       substrate: 'zulip',
       realmUrl: config.realmUrl,
