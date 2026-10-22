@@ -44,6 +44,13 @@ import { RESOLVED_TOPIC_PREFIX } from './resolved-topic.ts'
 /** Zulip's `Stream.MAX_DESCRIPTION_LENGTH`. */
 export const CHANNEL_DESCRIPTION_LIMIT = 1024
 
+/** Zulip's `MAX_TOPIC_NAME_LENGTH`. A longer topic is stored cut short with an ellipsis. */
+export const TOPIC_LIMIT = 60
+const ELLIPSIS = '...'
+
+const truncateTopic = (topic: string): string =>
+  topic.length > TOPIC_LIMIT ? `${topic.slice(0, TOPIC_LIMIT - ELLIPSIS.length)}${ELLIPSIS}` : topic
+
 export type PresenceStatus = 'active' | 'idle' | 'offline'
 
 export interface InProcessRealm {
@@ -1102,7 +1109,7 @@ export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(func
             return yield* refuse('in-process realm models channel messages only')
           }
           const to = yield* requiredParam(call, 'to')
-          const topic = Option.getOrElse(param(call, 'topic'), () => '')
+          const topic = truncateTopic(Option.getOrElse(param(call, 'topic'), () => ''))
           const content = yield* requiredParam(call, 'content')
           if (topic.trim() === '') return yield* refuse('Topics are required in this organization.')
           if (content.trim() === '') return yield* refuse('Message must not be empty')
@@ -1136,6 +1143,18 @@ export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(func
       handle: (call) =>
         Effect.all([requiredParam(call, 'content'), SubscriptionRef.get(stateRef)]).pipe(
           Effect.map(([content, state]) => ok({ rendered: render(state, content).html })),
+        ),
+    },
+    {
+      method: 'GET',
+      path: /^\/api\/v1\/messages\/(\d+)$/,
+      handle: (call) =>
+        SubscriptionRef.get(stateRef).pipe(
+          Effect.flatMap((state) =>
+            requireMessage(state, pathId(call)).pipe(
+              Effect.map((message) => ok({ message: messagePayload(state, message, false) })),
+            ),
+          ),
         ),
     },
     { method: 'PATCH', path: /^\/api\/v1\/messages\/(\d+)$/, handle: editMessage },

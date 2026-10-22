@@ -9,7 +9,7 @@ import {
   mentionedIdentities,
   UnknownChannel,
 } from '@commy/core/ports'
-import { Effect } from 'effect'
+import { Effect, Option } from 'effect'
 import type { ContractEnv } from '../contract.ts'
 
 const findByBody = (
@@ -58,6 +58,22 @@ export const publisherPostingContract = (env: () => ContractEnv): void => {
         const messages = yield* env().comms.history.readThread(channel.name, thread, {})
         const found = findByBody(messages, 'in thread')
         expect(found).toBeDefined()
+      }),
+    ))
+  // A substrate may cut an over-long thread name short. The ref `post` returns
+  // must carry the name that was kept, or the caller cannot address the thread.
+  test('publisher.post returns the thread name the substrate kept, which addresses the thread', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const ref = yield* env().comms.publisher.post(channel.name, decodeMessageBodySync('long'), {
+          thread: decodeThreadNameSync('x'.repeat(env().threadNameLimit + 10)),
+        })
+        const kept = yield* Effect.fromNullable(Option.getOrUndefined(ref.thread)).pipe(
+          Effect.orDie,
+        )
+        const messages = yield* env().comms.history.readThread(channel.name, kept.name, {})
+        expect(findByBody(messages, 'long')).toBeDefined()
       }),
     ))
   test('publisher.post with thread is also visible via history.readChannel (channel reads include all topics)', () =>

@@ -895,24 +895,6 @@ effectTest('publisher.post returns a MessageRef built from the response id', () 
   }),
 )
 
-// The realm truncates a topic over its length limit and the send response does
-// not report the topic it kept, so the ref must carry the stored name read back
-// from the realm for a caller to address the topic afterwards.
-effectTest('publisher.post returns the topic name the realm stored, not the one sent', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedSendMessage(stub, 77)
-    const sent = 'x'.repeat(70)
-    const stored = `${'x'.repeat(57)}...`
-    yield* seedStoredTopic(stub, 77, stored)
-    const adapter = yield* buildAdapter(stub)
-    const ref = yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hi'), {
-      thread: decodeThreadNameSync(sent),
-    })
-    expect(Option.map(ref.thread, (t) => t.name)).toEqual(Option.some(decodeThreadNameSync(stored)))
-  }),
-)
-
 /**
  * A `bindOnDemand` that counts its invocations and binds through the very
  * adapter it is configured on. The adapter cannot be referenced inside its own
