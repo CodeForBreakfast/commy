@@ -922,9 +922,8 @@ export class ChannelDescriptionRejected extends Data.TaggedError('ChannelDescrip
  * tokens the substrate would actually render as mentions count — a dead form
  * inside a code span is literal text, not a failed delivery, and does not
  * trigger it. `tokens` lists the unresolved forms so the caller can fix the
- * name. Adapters with a directory (Zulip) produce it; the in-memory adapter
- * never does. Tagged so the MCP edge and callers discriminate it from a
- * generic `PublisherError`.
+ * name. Tagged so the MCP edge and callers discriminate it from a generic
+ * `PublisherError`.
  */
 export class UnresolvedMention extends Data.TaggedError('UnresolvedMention')<{
   readonly operation: 'post' | 'edit'

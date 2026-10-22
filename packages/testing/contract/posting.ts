@@ -8,6 +8,7 @@ import {
   type MessageRef,
   mentionedIdentities,
   UnknownChannel,
+  UnresolvedMention,
 } from '@commy/core/ports'
 import { Effect, Option } from 'effect'
 import type { ContractEnv } from '../contract.ts'
@@ -93,6 +94,21 @@ export const publisherPostingContract = (env: () => ContractEnv): void => {
         const appended = messages.find((m) => m.body === 'one more thing')
         if (appended === undefined) throw new Error('expected the post in the resolved thread')
         expect(Option.map(appended.ref.thread, (t) => t.resolved)).toEqual(Option.some(true))
+      }),
+    ))
+  test('publisher.post refuses a body that mentions nobody in the realm, and posts nothing', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const body = decodeMessageBodySync('decision for @**Nobody Example** to make')
+        const error = yield* Effect.flip(env().comms.publisher.post(channel.name, body))
+        expect(error).toBeInstanceOf(UnresolvedMention)
+        if (error instanceof UnresolvedMention) {
+          expect(error.operation).toBe('post')
+          expect(error.tokens).toEqual(['Nobody Example'])
+        }
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        expect(findByBody(messages, body)).toBeUndefined()
       }),
     ))
   // A mention form inside a code span is literal text, not a failed delivery,
