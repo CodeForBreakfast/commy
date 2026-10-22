@@ -21,7 +21,7 @@ runAgentCommsContract('memory adapter', async () => {
     seedHuman: (name) => adapter.seedHuman(name).pipe(Effect.orDie),
     seedDeactivatedAgent: (name) => adapter.seedDeactivatedAgent(name).pipe(Effect.orDie),
     setPresence: adapter.setPresence,
-    newUnacquiredAdapter: () => memoryAdapter(),
+    newUnacquiredAdapter: () => adapter.newSeat(),
     peerPost: (peer, channel, body, opts) =>
       adapter.peerPost(peer, channel, body, opts).pipe(Effect.asVoid, Effect.orDie),
     channelDescriptionLimit: MEMORY_DESCRIPTION_LIMIT,
@@ -47,7 +47,7 @@ runAgentCommsContract('memory adapter (allowlist mode for UnknownIdentity covera
     seedDeactivatedAgent: (name) => adapter.seedDeactivatedAgent(name).pipe(Effect.orDie),
     setPresence: adapter.setPresence,
     newUnacquiredAdapter: () =>
-      memoryAdapter({
+      adapter.newSeat({
         acquirableNames: [
           'hermes-agent-cycle',
           'hermes-agent-a',

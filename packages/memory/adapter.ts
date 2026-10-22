@@ -136,6 +136,16 @@ interface Binding {
 
 type Emit = (event: InboundEvent) => void
 
+interface SeatFanOut {
+  readonly onPost: (stored: StoredMessage) => Effect.Effect<void>
+  readonly onReaction: (
+    messageId: string,
+    kind: 'reaction-added' | 'reaction-removed',
+    emoji: Emoji,
+    by: Identity,
+  ) => Effect.Effect<void>
+}
+
 export interface MemoryAdapterConfig {
   /**
    * When set, `acquire(name)` succeeds only for names in this list and
@@ -182,6 +192,12 @@ export interface MemoryAdapterConfig {
   readonly threadNameLimit?: number
 }
 
+/** What one seat decides for itself; the limits belong to the realm it sits on. */
+export type MemorySeatConfig = Pick<
+  MemoryAdapterConfig,
+  'acquirableNames' | 'bindOnDemand' | 'selfKind'
+>
+
 const DEFAULT_CHANNEL_DESCRIPTION_LIMIT = 512
 const DEFAULT_THREAD_NAME_LIMIT = 48
 
@@ -225,6 +241,12 @@ export type MemoryAdapter = AgentComms & {
     body: MessageBodyType,
     opts?: PostOpts,
   ) => Effect.Effect<MessageRef, UnknownChannel>
+  /**
+   * Stand up another seat on this adapter's realm. It starts unacquired,
+   * sees the same members, channels and messages, and keeps its own
+   * binding and subscriptions.
+   */
+  readonly newSeat: (config?: MemorySeatConfig) => Effect.Effect<MemoryAdapter>
 }
 
 const inRange =
@@ -252,7 +274,9 @@ const toMessage = (stored: StoredMessage, reactions: ReadonlyArray<Reaction>): M
   reactions,
 })
 
-export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<MemoryAdapter> =>
+// The state every seat on one realm shares, and the fan-out of each seat on
+// it, so a post or a reaction reaches every seat that hears it.
+const makeRealm = (config: MemoryAdapterConfig) =>
   Effect.gen(function* () {
     const presenceByIdentity = new Map<string, Presence>()
     const channelsById = new Map<string, ChannelRef>()
@@ -274,6 +298,72 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
     const descriptionsByChannel = new Map<string, ChannelDescription>()
     const descriptionLimit = config.channelDescriptionLimit ?? DEFAULT_CHANNEL_DESCRIPTION_LIMIT
     const threadNameLimit = config.threadNameLimit ?? DEFAULT_THREAD_NAME_LIMIT
+    const nextChannelId = yield* Ref.make(1)
+    const nextIdentityId = yield* Ref.make(1)
+    const nextMessageId = yield* Ref.make(1)
+    const nextCredentialsId = yield* Ref.make(1)
+    const nextTs = yield* Ref.make(Math.floor((yield* Clock.currentTimeMillis) / 1000))
+    // The sender of the notices the substrate posts itself. It is no member,
+    // so the directory never lists it.
+    const notificationBot: Identity = {
+      id: yield* decodeIdentityId('notification-bot').pipe(Effect.orDie),
+      name: yield* decodeDisplayName('Notification Bot').pipe(Effect.orDie),
+      kind: 'agent',
+    }
+    const seats = new Set<SeatFanOut>()
+    return {
+      presenceByIdentity,
+      channelsById,
+      channelsByName,
+      identitiesById,
+      identitiesByName,
+      deactivatedIdentities,
+      messagesByChannel,
+      messagesById,
+      reactionsByMessage,
+      resolvedThreadsByChannel,
+      descriptionsByChannel,
+      descriptionLimit,
+      threadNameLimit,
+      nextChannelId,
+      nextIdentityId,
+      nextMessageId,
+      nextCredentialsId,
+      nextTs,
+      notificationBot,
+      seats,
+    }
+  })
+
+type MemoryRealm = Effect.Effect.Success<ReturnType<typeof makeRealm>>
+
+export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<MemoryAdapter> =>
+  makeRealm(config).pipe(Effect.flatMap((realm) => memorySeat(realm, config)))
+
+const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect<MemoryAdapter> =>
+  Effect.gen(function* () {
+    const {
+      presenceByIdentity,
+      channelsById,
+      channelsByName,
+      identitiesById,
+      identitiesByName,
+      deactivatedIdentities,
+      messagesByChannel,
+      messagesById,
+      reactionsByMessage,
+      resolvedThreadsByChannel,
+      descriptionsByChannel,
+      descriptionLimit,
+      threadNameLimit,
+      nextChannelId,
+      nextIdentityId,
+      nextMessageId,
+      nextCredentialsId,
+      nextTs,
+      notificationBot,
+      seats,
+    } = realm
     const isThreadResolved = (channelId: string, threadName: string): boolean =>
       resolvedThreadsByChannel.get(channelId)?.has(threadName) ?? false
     const withThreadResolution = (stored: StoredMessage): StoredMessage =>
@@ -291,23 +381,14 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         }),
       })
 
-    const nextChannelId = yield* Ref.make(1)
-    const nextIdentityId = yield* Ref.make(1)
-    const nextMessageId = yield* Ref.make(1)
-    const nextCredentialsId = yield* Ref.make(1)
-    const nextTs = yield* Ref.make(Math.floor((yield* Clock.currentTimeMillis) / 1000))
     const bound = yield* Ref.make(Option.none<Binding>())
-    // The sender of the notices the substrate posts itself. It is no member,
-    // so the directory never lists it.
-    const notificationBot: Identity = {
-      id: yield* decodeIdentityId('notification-bot').pipe(Effect.orDie),
-      name: yield* decodeDisplayName('Notification Bot').pipe(Effect.orDie),
-      kind: 'agent',
-    }
 
     const allowlist =
       config.acquirableNames === undefined ? undefined : new Set(config.acquirableNames)
     const selfKind: IdentityKind = config.selfKind ?? 'agent'
+
+    const fanOutToSeats = (f: (seat: SeatFanOut) => Effect.Effect<void>): Effect.Effect<void> =>
+      Effect.forEach(seats, f, { discard: true })
 
     const allocId = (counter: Ref.Ref<number>): Effect.Effect<number> =>
       Ref.getAndUpdate(counter, (n) => n + 1)
@@ -560,7 +641,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         const stored: StoredMessage = { ref, sender, body, ts, mentions: mentionsIn(body) }
         bucket.push(stored)
         messagesById.set(id, stored)
-        yield* fanOutOnPost(stored)
+        yield* fanOutToSeats((seat) => seat.onPost(stored))
         return ref
       })
 
@@ -733,7 +814,9 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
             const reactors = byEmoji.get(emoji) ?? new Set<string>()
             reactors.add(self.id)
             byEmoji.set(emoji, reactors)
-            return fanOutOnReaction(message.id, 'reaction-added', emoji, self)
+            return fanOutToSeats((seat) =>
+              seat.onReaction(message.id, 'reaction-added', emoji, self),
+            )
           }),
         ),
       unreact: (message, emoji) =>
@@ -745,7 +828,9 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
               reactors.delete(self.id)
               if (reactors.size === 0) byEmoji?.delete(emoji)
             }
-            return fanOutOnReaction(message.id, 'reaction-removed', emoji, self)
+            return fanOutToSeats((seat) =>
+              seat.onReaction(message.id, 'reaction-removed', emoji, self),
+            )
           }),
         ),
       resolveThread: (channel, thread) => setThreadResolved(channel, thread, true),
@@ -869,6 +954,8 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         ),
       )
     }
+
+    yield* Effect.sync(() => seats.add({ onPost: fanOutOnPost, onReaction: fanOutOnReaction }))
 
     const inbox: MessageInbox = {
       // Declaring interest BINDS, in step with the Zulip adapter (comms-g5zh.2
@@ -1134,5 +1221,6 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       seedDeactivatedAgent,
       setPresence,
       peerPost,
+      newSeat: (seatConfig = {}) => memorySeat(realm, seatConfig),
     }
   })
