@@ -8,7 +8,7 @@
 import { decodeBotNameSync, decodeChannelIdSync, decodeChannelNameSync } from '@commy/core/ports'
 import type { ContractFactory } from '@commy/testing/contract'
 import { HttpClient } from '@effect/platform'
-import { Effect, Option, Redacted } from 'effect'
+import { Array as Arr, Effect, Option, Redacted } from 'effect'
 import { type ZulipAdapter, zulipAdapter } from './adapter.ts'
 import { CHANNEL_DESCRIPTION_LIMIT, makeInProcessRealm, TOPIC_LIMIT } from './in-process-realm.ts'
 import { permalinkBase, withChannelPermalink } from './permalink.ts'
@@ -50,6 +50,23 @@ export const inProcessContractFactory: ContractFactory = async () => {
         ),
         Effect.orDie,
       ),
+    seedHuman: (name) =>
+      realm.addUser(name, 'human').pipe(
+        Effect.flatMap((userId) =>
+          adapter.directory
+            .listHumans()
+            .pipe(Effect.map(Arr.findFirst((human) => human.id === String(userId)))),
+        ),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.die(new Error(`seedHuman: ${name} is not listed`)),
+            onSome: Effect.succeed,
+          }),
+        ),
+        Effect.orDie,
+      ),
+    setPresence: (human, presence) =>
+      realm.setPresence(Number(human.id), presence === 'online' ? 'active' : presence),
     newUnacquiredAdapter: buildAdapter,
     // A peer posts through its own adapter, bound to the peer by the same
     // acquire any seat would use.

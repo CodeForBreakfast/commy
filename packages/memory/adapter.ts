@@ -199,6 +199,11 @@ export type MemoryAdapter = AgentComms & {
    * tests and for modelling humans in MCP plugin tests.
    */
   readonly seedHuman: (name: string) => Effect.Effect<Identity, ParseResult.ParseError>
+  /** Report `presence` for `human` from `directory.presence` from now on. */
+  readonly setPresence: (
+    human: Identity,
+    presence: Exclude<Presence, 'unknown'>,
+  ) => Effect.Effect<void>
   /**
    * Inject a message authored by `peer` (sender ≠ the bound self) into the
    * substrate, running the same fan-out as a real post. The contract's
@@ -1040,7 +1045,10 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         resolveChannel(channel).pipe(
           Effect.map((channelRef) => Option.fromNullable(descriptionsByChannel.get(channelRef.id))),
         ),
-      presence: (target) => Effect.succeed(presenceByIdentity.get(target.id) ?? 'offline'),
+      presence: (target) =>
+        Effect.succeed(
+          target.kind === 'agent' ? 'unknown' : (presenceByIdentity.get(target.id) ?? 'offline'),
+        ),
     }
 
     // seed* expose the registration Effects directly: a malformed name
@@ -1051,6 +1059,13 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       registerIdentity(name, 'agent').pipe(Effect.map((registered) => registered.identity))
     const seedHuman = (name: string): Effect.Effect<Identity, ParseResult.ParseError> =>
       registerIdentity(name, 'human').pipe(Effect.map((registered) => registered.identity))
+    const setPresence = (
+      human: Identity,
+      presence: Exclude<Presence, 'unknown'>,
+    ): Effect.Effect<void> =>
+      Effect.sync(() => {
+        presenceByIdentity.set(human.id, presence)
+      })
 
     // Authored by `peer`, not the bound self: mirrors publisher.post's store +
     // fan-out path but stamps `sender: peer` and skips requireBound. The
@@ -1093,6 +1108,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       seedChannel,
       seedAgent,
       seedHuman,
+      setPresence,
       peerPost,
     }
   })

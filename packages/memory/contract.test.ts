@@ -18,6 +18,8 @@ runAgentCommsContract('memory adapter', async () => {
     comms: adapter,
     seedChannel: (name) => adapter.seedChannel(name).pipe(Effect.orDie),
     seedAgent: (name) => adapter.seedAgent(name).pipe(Effect.orDie),
+    seedHuman: (name) => adapter.seedHuman(name).pipe(Effect.orDie),
+    setPresence: adapter.setPresence,
     newUnacquiredAdapter: () => memoryAdapter(),
     peerPost: (peer, channel, body, opts) =>
       adapter.peerPost(peer, channel, body, opts).pipe(Effect.asVoid, Effect.orDie),
@@ -40,6 +42,8 @@ runAgentCommsContract('memory adapter (allowlist mode for UnknownIdentity covera
     comms: adapter,
     seedChannel: (name) => adapter.seedChannel(name).pipe(Effect.orDie),
     seedAgent: (name) => adapter.seedAgent(name).pipe(Effect.orDie),
+    seedHuman: (name) => adapter.seedHuman(name).pipe(Effect.orDie),
+    setPresence: adapter.setPresence,
     newUnacquiredAdapter: () =>
       memoryAdapter({
         acquirableNames: [

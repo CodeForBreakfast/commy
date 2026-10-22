@@ -979,7 +979,7 @@ test('presence (happy): returns presence for a cached identity', async () => {
       }
     ).id
     const body = expectStructured(await callTool(h.client, 'presence', { identity_id: alice }))
-    expect(['online', 'idle', 'offline']).toContain(body['presence'] as string)
+    expect(body['presence'] as string).toBe('unknown')
   } finally {
     await h.cleanup()
   }
@@ -1081,7 +1081,7 @@ test('presence (happy): resolves an identity first seen only via an inbound noti
     const body = expectStructured(
       await callTool(h.client, 'presence', { identity_id: 'stranger-99' }),
     )
-    expect(['online', 'idle', 'offline']).toContain(body['presence'] as string)
+    expect(body['presence'] as string).toBe('unknown')
   } finally {
     await h.cleanup()
   }
