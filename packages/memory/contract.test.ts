@@ -40,7 +40,16 @@ runAgentCommsContract('memory adapter (allowlist mode for UnknownIdentity covera
     comms: adapter,
     seedChannel: (name) => adapter.seedChannel(name).pipe(Effect.orDie),
     seedAgent: (name) => adapter.seedAgent(name).pipe(Effect.orDie),
-    newUnacquiredAdapter: () => memoryAdapter({ acquirableNames: ['hermes-agent-cycle'] }),
+    newUnacquiredAdapter: () =>
+      memoryAdapter({
+        acquirableNames: [
+          'hermes-agent-cycle',
+          'hermes-agent-a',
+          'hermes-agent-b',
+          'hermes-agent-c',
+          'hermes-agent-d',
+        ],
+      }),
     unacquirableName: 'no-such-bot',
     peerPost: (peer, channel, body, opts) =>
       adapter.peerPost(peer, channel, body, opts).pipe(Effect.asVoid, Effect.orDie),

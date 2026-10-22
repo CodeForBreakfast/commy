@@ -502,15 +502,6 @@ effectTest('zulipAdapter construction does NOT call /users — the call is defer
   }),
 )
 
-effectTest('currentIdentity before acquire throws — port is unauthenticated at construction', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
-    const exit = yield* Effect.exit(adapter.identity.currentIdentity())
-    expect(Exit.isFailure(exit)).toBe(true)
-  }),
-)
-
 effectTest(
   'identity.acquire on the bound name is idempotent and skips a second /users round-trip',
   () =>
@@ -546,17 +537,6 @@ effectTest('identity.release on a bound adapter deactivates the bot via DELETE /
     yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
     yield* adapter.identity.release()
     expect(yield* findRequest(stub, 'DELETE', `/api/v1/bots/${HERMES.user_id}`)).toBeDefined()
-  }),
-)
-
-effectTest('identity.release clears the binding — currentIdentity then throws', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedDeactivate(stub, HERMES.user_id)
-    const adapter = yield* buildAdapter(stub)
-    yield* adapter.identity.release()
-    const exit = yield* Effect.exit(adapter.identity.currentIdentity())
-    expect(Exit.isFailure(exit)).toBe(true)
   }),
 )
 
@@ -605,21 +585,6 @@ effectTest('identity.release({ persistent: true }) does NOT deactivate the bot',
     )
     expect(deletes).toHaveLength(0)
   }),
-)
-
-effectTest(
-  'identity.release({ persistent: true }) still clears the binding — currentIdentity throws',
-  () =>
-    Effect.gen(function* () {
-      const stub = yield* makeStubHttpClient
-      yield* seedUsers(stub, [HERMES])
-      yield* seedRegenerate(stub, HERMES.user_id)
-      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
-      yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-      yield* adapter.identity.release({ persistent: true })
-      const exit = yield* Effect.exit(adapter.identity.currentIdentity())
-      expect(Exit.isFailure(exit)).toBe(true)
-    }),
 )
 
 effectTest(

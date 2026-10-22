@@ -2,7 +2,7 @@
 
 import { expect, test } from 'bun:test'
 import { decodeBotNameSync, decodeDisplayNameSync, UnknownIdentity } from '@commy/core/ports'
-import { Effect, Exit, Option } from 'effect'
+import { Cause, Effect, Exit, Option } from 'effect'
 import type { ContractEnv } from '../contract.ts'
 
 export const identityContract = (env: () => ContractEnv): void => {
@@ -64,6 +64,66 @@ export const identityContract = (env: () => ContractEnv): void => {
         yield* fresh.identity.acquire(acquireName)
         const after = yield* fresh.identity.currentIdentity()
         expect(after.name).toEqual(decodeDisplayNameSync(rawName))
+      }),
+    ))
+  test('identity.acquire binds the adapter to the identity it returns', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const build = env().newUnacquiredAdapter
+        if (build === undefined) return
+        const fresh = yield* build()
+        const current = yield* env().comms.identity.currentIdentity()
+        const acquired = yield* fresh.identity.acquire(decodeBotNameSync(`${current.name}-cycle`))
+        expect(yield* fresh.identity.currentIdentity()).toEqual(acquired.identity)
+      }),
+    ))
+  test('identity.currentIdentity dies before the adapter has acquired', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const build = env().newUnacquiredAdapter
+        if (build === undefined) return
+        const fresh = yield* build()
+        const exit = yield* Effect.exit(fresh.identity.currentIdentity())
+        expect(Exit.isFailure(exit) && Cause.isDie(exit.cause)).toBe(true)
+      }),
+    ))
+  test('identity.release clears the binding — currentIdentity then dies', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        yield* env().comms.identity.release()
+        const exit = yield* Effect.exit(env().comms.identity.currentIdentity())
+        expect(Exit.isFailure(exit) && Cause.isDie(exit.cause)).toBe(true)
+      }),
+    ))
+  test('identity.release({ persistent: true }) still clears the binding', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        yield* env().comms.identity.release({ persistent: true })
+        const exit = yield* Effect.exit(env().comms.identity.currentIdentity())
+        expect(Exit.isFailure(exit) && Cause.isDie(exit.cause)).toBe(true)
+      }),
+    ))
+  test('concurrent identity.acquire of different names on a fresh adapter binds exactly one', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const build = env().newUnacquiredAdapter
+        if (build === undefined) return
+        const fresh = yield* build()
+        const current = yield* env().comms.identity.currentIdentity()
+        const names = ['a', 'b', 'c', 'd'].map((suffix) =>
+          decodeBotNameSync(`${current.name}-${suffix}`),
+        )
+        // Unbounded is safe here: an adapter binds at most once, so at most one
+        // acquire reaches the substrate's mint path.
+        const exits = yield* Effect.forEach(
+          names,
+          (name) => Effect.exit(fresh.identity.acquire(name)),
+          {
+            concurrency: 'unbounded',
+          },
+        )
+        const bound = exits.filter(Exit.isSuccess).map((exit) => exit.value.identity)
+        expect(bound).toEqual([yield* fresh.identity.currentIdentity()])
       }),
     ))
   test('identity.acquire fails with UnknownIdentity for a name the substrate cannot bind', () =>
