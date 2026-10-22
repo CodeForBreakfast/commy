@@ -2760,3 +2760,47 @@ test('an administrator turning message editing back on restores edit_message', a
     await h.cleanup()
   }
 })
+
+test('a runtime subscribe on a resumed seat with no boot-env session id keeps the persisted topic record', async () => {
+  const sid = 'c3c3c3c3-0000-4000-8000-000000000009'
+  const sessionIdDeferred = Deferred.unsafeMake<SessionIdValue>(FiberId.none)
+  const topicIntent = (thread: string): SubscribeIntent => ({
+    kind: 'thread',
+    channelName: decodeChannelNameSync('home'),
+    threadName: decodeThreadNameSync(thread),
+  })
+  const records = new Map<string, ReadonlyArray<SubscribeIntent>>([
+    [sid, [topicIntent('payments')]],
+  ])
+  // The boot rebuild is the first reader. Its read is slow, so a write that is
+  // not held back for the rebuild lands before it and the rebuild reads that.
+  let reads = 0
+  const slowFirstReadStore: SubscriptionStore = {
+    read: () =>
+      Deferred.await(sessionIdDeferred).pipe(
+        Effect.tap(() => (reads++ === 0 ? Effect.sleep('300 millis') : Effect.void)),
+        Effect.map((id) => Option.fromNullable(records.get(id as string))),
+      ),
+    write: (intents) =>
+      Deferred.await(sessionIdDeferred).pipe(
+        Effect.flatMap((id) => Effect.sync(() => void records.set(id as string, intents))),
+      ),
+  }
+  const h = await buildHarness({
+    ephemeral: true,
+    seedChannels: ['home'],
+    sessionIdDeferred,
+    subscriptionStore: slowFirstReadStore,
+  })
+  try {
+    await callTool(h.client, 'post', { channel_name: 'home', body: 'resumed', session_id: sid })
+    await callTool(h.client, 'subscribe', { target: 'home/refunds', session_id: sid })
+    await waitFor(
+      () => (records.get(sid) ?? []).some((i) => i.kind === 'thread' && i.threadName === 'refunds'),
+      2000,
+    )
+    expect(records.get(sid)).toContainEqual(topicIntent('payments'))
+  } finally {
+    await h.cleanup()
+  }
+})
