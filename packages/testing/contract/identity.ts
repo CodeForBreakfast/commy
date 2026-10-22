@@ -111,6 +111,21 @@ export const identityContract = (env: () => ContractEnv): void => {
         ).toHaveLength(1)
       }),
     ))
+  test("identity.acquire of a human member's name is refused", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const build = env().newUnacquiredAdapter
+        const seedHuman = env().seedHuman
+        if (build === undefined || seedHuman === undefined) return
+        const human = yield* seedHuman('Alice Example')
+        const exit = yield* Effect.exit(
+          (yield* build()).identity.acquire(decodeBotNameSync(human.name)),
+        )
+        expect(Exit.isFailure(exit) && Option.isSome(Cause.failureOption(exit.cause))).toBe(true)
+        const agents = yield* env().comms.directory.listAgents()
+        expect(agents.filter((a) => a.name === human.name)).toHaveLength(0)
+      }),
+    ))
   for (const { release, expected, label } of [
     { release: undefined, expected: false, label: 'an ephemeral release takes' },
     { release: { persistent: true }, expected: true, label: 'a persistent release leaves' },
