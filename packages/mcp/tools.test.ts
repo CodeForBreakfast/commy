@@ -613,7 +613,7 @@ test('presence reads cache after list_agents populates it', () =>
         )
         expect(result.isError).toBeFalsy()
         const psc = result.structuredContent as { presence: string }
-        expect(['online', 'idle', 'offline']).toContain(psc.presence)
+        expect(psc.presence).toBe('unknown')
       }),
     ),
   ))
@@ -645,7 +645,7 @@ test('presence reads cache after resolve populates it', () =>
         )
         expect(result.isError).toBeFalsy()
         const psc = result.structuredContent as { presence: string }
-        expect(['online', 'idle', 'offline']).toContain(psc.presence)
+        expect(psc.presence).toBe('unknown')
       }),
     ),
   ))

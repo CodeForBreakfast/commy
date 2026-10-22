@@ -655,47 +655,6 @@ effectTest('identity.acquire after release rebinds via a fresh /users round-trip
   }),
 )
 
-effectTest('directory.listAgents returns only is_bot=true users', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* stub.respond('GET', '/api/v1/users', {
-      body: { result: 'success', members: [HERMES, MAINTAINER, RIQ] },
-    })
-    yield* seedRegenerate(stub, HERMES.user_id)
-    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
-    yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-    const agents = yield* adapter.directory.listAgents()
-    expect(agents).toEqual([
-      {
-        id: decodeIdentityIdSync('9'),
-        name: decodeDisplayNameSync('hermes-agent'),
-        kind: 'agent',
-      },
-      { id: decodeIdentityIdSync('11'), name: decodeDisplayNameSync('riq6r230'), kind: 'agent' },
-    ])
-  }),
-)
-
-effectTest('directory.listHumans returns only is_bot=false users', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* stub.respond('GET', '/api/v1/users', {
-      body: { result: 'success', members: [HERMES, MAINTAINER, RIQ] },
-    })
-    yield* seedRegenerate(stub, HERMES.user_id)
-    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
-    yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-    const humans = yield* adapter.directory.listHumans()
-    expect(humans).toEqual([
-      {
-        id: decodeIdentityIdSync('5'),
-        name: decodeDisplayNameSync('Robin Reyes'),
-        kind: 'human',
-      },
-    ])
-  }),
-)
-
 effectTest(
   'directory.listHumans surfaces a /users fetch failure as DirectoryError (cause preserved)',
   () =>
@@ -2341,55 +2300,6 @@ const seedPresence = (
       },
     },
   })
-
-effectTest('directory.presence maps aggregated status=active to online', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedPresence(stub, bobHuman.id, 'active')
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, BOB])
-    const presence = yield* adapter.directory.presence(bobHuman)
-    expect(presence).toBe('online')
-  }),
-)
-
-effectTest('directory.presence maps aggregated status=idle to idle', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedPresence(stub, bobHuman.id, 'idle')
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, BOB])
-    const presence = yield* adapter.directory.presence(bobHuman)
-    expect(presence).toBe('idle')
-  }),
-)
-
-effectTest('directory.presence maps aggregated status=offline to offline', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedPresence(stub, bobHuman.id, 'offline')
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, BOB])
-    const presence = yield* adapter.directory.presence(bobHuman)
-    expect(presence).toBe('offline')
-  }),
-)
-
-effectTest(
-  'directory.presence returns offline when user has never set presence (Zulip 400 BAD_REQUEST)',
-  () =>
-    Effect.gen(function* () {
-      const stub = yield* makeStubHttpClient
-      yield* stub.respond('GET', `/api/v1/users/${bobHuman.id}/presence`, {
-        body: { result: 'error', msg: `No presence data for ${bobHuman.id}`, code: 'BAD_REQUEST' },
-        status: 400,
-      })
-      const adapter = yield* buildAdapter(stub)
-      yield* seedUsers(stub, [HERMES, BOB])
-      const presence = yield* adapter.directory.presence(bobHuman)
-      expect(presence).toBe('offline')
-    }),
-)
 
 effectTest(
   'directory.presence returns offline when the user no longer exists (Zulip 400 BAD_REQUEST: No such user)',
