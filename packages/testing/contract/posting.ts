@@ -7,6 +7,7 @@ import {
   decodeThreadNameSync,
   type MessageRef,
   mentionedIdentities,
+  UnboundEphemeralSession,
   UnknownChannel,
   UnresolvedMention,
 } from '@commy/core/ports'
@@ -213,6 +214,21 @@ export const publisherPostingContract = (env: () => ContractEnv): void => {
         )
         expect(followUp.channel.id).toEqual(channel.id)
         expect(followUp.channel.name).toEqual(channel.name)
+      }),
+    ))
+  // The factory's unacquired adapter is built with no bind-on-demand strategy,
+  // so nothing can bind it before the write.
+  test('publisher.post on an adapter that has not acquired an identity fails with UnboundEphemeralSession', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const newUnacquiredAdapter = env().newUnacquiredAdapter
+        if (newUnacquiredAdapter === undefined) return
+        const channel = yield* env().seedChannel('lobby')
+        const fresh = yield* newUnacquiredAdapter()
+        const error = yield* Effect.flip(
+          fresh.publisher.post(channel.name, decodeMessageBodySync('nobody to send it')),
+        )
+        expect(error).toBeInstanceOf(UnboundEphemeralSession)
       }),
     ))
 }

@@ -9,9 +9,28 @@ import {
   type InboundEvent,
   mentionedIdentities,
 } from '@commy/core/ports'
-import { Duration, Effect, Option, Queue, Stream } from 'effect'
+import { Chunk, Duration, Effect, Option, Queue, Stream } from 'effect'
 import type { ContractEnv } from '../contract.ts'
 import { awaitEvent, eventQueue, postSpaced } from './helpers.ts'
+
+/**
+ * Every event up to the next message-posted, then whatever follows it within a
+ * short silence window, so a test can assert on an event that must not arrive
+ * on either side of the post.
+ */
+const eventsThroughPost = (
+  queue: Queue.Queue<InboundEvent>,
+): Effect.Effect<ReadonlyArray<InboundEvent>> =>
+  Effect.gen(function* () {
+    const before: Array<InboundEvent> = []
+    yield* awaitEvent(queue, 'the peer post', (event) => {
+      before.push(event)
+      return event.kind === 'message-posted'
+    })
+    yield* Effect.sleep(Duration.millis(100))
+    const after = yield* Queue.takeAll(queue)
+    return [...before, ...Chunk.toReadonlyArray(after)]
+  })
 
 export const inboxContract = (env: () => ContractEnv): void => {
   test('inbox.subscribe(channel) + post yields message-posted with sender = currentIdentity', () =>
@@ -217,6 +236,52 @@ export const inboxContract = (env: () => ContractEnv): void => {
           )
           const result = yield* Queue.take(queue).pipe(Effect.timeoutOption(Duration.millis(100)))
           expect(Option.isNone(result)).toBe(true)
+        }),
+      ),
+    ))
+  test('a delivered peer post mentioning someone else raises no mention-received', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const peerPost = env().peerPost
+          if (peerPost === undefined) return
+          const channel = yield* env().seedChannel('lobby')
+          const alice = yield* env().seedAgent('alice')
+          const bob = yield* env().seedAgent('bob')
+          yield* env().comms.inbox.subscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* peerPost(
+            alice,
+            channel.name,
+            decodeMessageBodySync(`@**${bob.name}** over to you`),
+          )
+          const events = yield* eventsThroughPost(queue)
+          expect(events.map((e) => e.kind)).not.toContain('mention-received')
+        }),
+      ),
+    ))
+  // Talking about a seat's mention token is not mentioning the seat.
+  test('a peer post naming self only inside a code span raises no mention-received', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const peerPost = env().peerPost
+          if (peerPost === undefined) return
+          const channel = yield* env().seedChannel('lobby')
+          const me = yield* env().comms.identity.currentIdentity()
+          const peer = yield* env().seedAgent('alice')
+          yield* env().comms.inbox.subscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* peerPost(
+            peer,
+            channel.name,
+            decodeMessageBodySync(`never write \`@**${me.name}**\` in a code span`),
+          )
+          const events = yield* eventsThroughPost(queue)
+          expect(events.map((e) => e.kind)).not.toContain('mention-received')
+          const posted = events.find((e) => e.kind === 'message-posted')
+          if (posted?.kind !== 'message-posted') throw new Error('expected message-posted')
+          expect(posted.message.mentions).toEqual([])
         }),
       ),
     ))

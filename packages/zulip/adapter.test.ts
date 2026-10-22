@@ -928,24 +928,6 @@ effectTest('publisher.post refuses with a typed UnboundEphemeralSession when bin
   }),
 )
 
-effectTest('publisher.post refuses with a typed error when no binder is configured', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedSendMessage(stub, 42)
-    const config = yield* makeConfig()
-    const adapter = yield* zulipAdapter(stub, config)
-    const exit = yield* Effect.exit(
-      adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hello world')),
-    )
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) {
-      expect(Cause.isDie(exit.cause)).toBe(false)
-      const failure = Cause.failureOption(exit.cause)
-      expect(Option.map(failure, (e) => e._tag)).toEqual(Option.some('UnboundEphemeralSession'))
-    }
-  }),
-)
-
 effectTest('publisher.post with thread sends topic and threads the returned MessageRef', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
