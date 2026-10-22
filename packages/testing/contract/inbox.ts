@@ -8,6 +8,7 @@ import {
   decodeThreadNameSync,
   decodeTimestampSync,
   type InboundEvent,
+  isBindError,
   Mention,
   mentionedIdentities,
 } from '@commy/core/ports'
@@ -142,6 +143,44 @@ export const inboxContract = (env: () => ContractEnv): void => {
         }),
       ),
     ))
+  test('inbox.subscribe on an adapter that has not acquired an identity fails with a BindError', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const build = env().newUnacquiredAdapter
+        if (build === undefined) return
+        const channel = yield* env().seedChannel('lobby')
+        const fresh = yield* build()
+        const error = yield* Effect.flip(fresh.inbox.subscribe(channel.name))
+        expect(isBindError(error)).toBe(true)
+      }),
+    ))
+  // Zulip's producer re-checks an unbound seat on an interval, so the post can
+  // take that long to surface.
+  test(
+    'events() started before acquire observes a post made after a later acquire and subscribe',
+    () =>
+      Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const build = env().newUnacquiredAdapter
+            if (build === undefined) return
+            const channel = yield* env().seedChannel('lobby')
+            const me = yield* env().comms.identity.currentIdentity()
+            const fresh = yield* build()
+            const queue = yield* eventQueue(fresh)
+            yield* fresh.identity.acquire(decodeBotNameSync(`${me.name}-a`))
+            yield* fresh.inbox.subscribe(channel.name)
+            yield* fresh.publisher.post(channel.name, decodeMessageBodySync('after binding'))
+            yield* awaitEvent(
+              queue,
+              'a post made after the seat bound',
+              (e) => e.kind === 'message-posted' && e.message.body.includes('after binding'),
+            )
+          }),
+        ),
+      ),
+    15_000,
+  )
   test('inbox.subscribe → post → events() observes the post (subscribe implies readiness)', () =>
     // The natural consumer shape: subscribe, post, then iterate. The
     // queue must see events that landed between subscribe's resolution
@@ -531,6 +570,31 @@ export const inboxContract = (env: () => ContractEnv): void => {
           if (event.kind !== 'mention-received')
             throw new Error(`expected mention-received, got ${event.kind}`)
           expect(mentionedIdentities(event.mentions).map((m) => m.id)).toContain(me.id)
+        }),
+      ),
+    ))
+  test('a peer mention in a channel the seat never subscribed names that channel', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const peerPost = env().peerPost
+          if (peerPost === undefined) return
+          const home = yield* env().seedChannel('lobby')
+          const elsewhere = yield* env().seedChannel('elsewhere')
+          const me = yield* env().comms.identity.currentIdentity()
+          const peer = yield* env().seedAgent('alice')
+          yield* env().comms.inbox.subscribe(home.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* peerPost(peer, elsewhere.name, decodeMessageBodySync(`@**${me.name}** thoughts?`))
+          const event = yield* awaitEvent(
+            queue,
+            'a peer mention of self in a channel the seat never subscribed',
+            (e) => e.kind === 'mention-received',
+          )
+          if (event.kind !== 'mention-received')
+            throw new Error(`expected mention-received, got ${event.kind}`)
+          expect(mentionedIdentities(event.mentions).map((m) => m.id)).toContain(me.id)
+          expect(event.message.ref.channel.name).toEqual(elsewhere.name)
         }),
       ),
     ))

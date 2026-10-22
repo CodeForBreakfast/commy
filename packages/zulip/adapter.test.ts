@@ -2710,9 +2710,8 @@ effectTest('one seat unsubscribing writes only under its own principal, never a 
 
 // A seat that cannot bind must not fall back to the minter for receiving, for
 // the same reason `publisher.post` must not: the fallback is invisible and
-// leaves the seat reading a surface that is not its own. The refusal is the
-// typed BindError, surfaced rather than swallowed.
-effectTest('inbox.subscribe refuses rather than falling back to minter creds', () =>
+// leaves the seat reading a surface that is not its own.
+effectTest('an inbox.subscribe that cannot bind sends nothing as the minter', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedUsers(stub, [])
@@ -2723,8 +2722,7 @@ effectTest('inbox.subscribe refuses rather than falling back to minter creds', (
         new UnboundEphemeralSession({ message: 'commy: ephemeral mode requires a session_id' }),
       ),
     })
-    const exit = yield* Effect.exit(adapter.inbox.subscribe(generalChannel.name))
-    expect(Exit.isFailure(exit)).toBe(true)
+    yield* Effect.exit(adapter.inbox.subscribe(generalChannel.name))
     const reqs = yield* stub.captured
     expect(
       reqs.filter(

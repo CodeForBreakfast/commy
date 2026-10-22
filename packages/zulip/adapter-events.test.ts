@@ -30,11 +30,9 @@ import {
   decodeBotNameSync,
   decodeChannelIdSync,
   decodeChannelNameSync,
-  decodeDisplayNameSync,
   decodeMessageBodySync,
   decodeTimestampSync,
   type IdentityError,
-  mentionedIdentities,
   type UnknownIdentity,
 } from '@commy/core/ports'
 import { effectTest } from '@commy/testing/effect-test'
@@ -378,11 +376,11 @@ effectTest(
 //
 // The property that replaces it is not an await. It is the absence of a latch:
 // a producer that starts unbound keeps its unfold alive and re-reads the
-// inbox's registration each step, so a seat that binds LATER is picked up. This
-// test starts the pump on an unbound seat, binds afterwards, and requires the
-// event to arrive. It fails if any step in that path gives up permanently.
+// inbox's registration each step, so a seat that binds LATER is picked up. The
+// shared contract holds the delivery; this test holds the wire: nothing is
+// polled or registered while unbound, and polling starts once a subscribe binds.
 effectTest(
-  'a producer that starts unbound adopts the queue a later subscribe registers',
+  'a producer that starts unbound polls nothing until a later subscribe registers a queue',
   () =>
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
@@ -418,8 +416,7 @@ effectTest(
       yield* adapter.inbox.subscribe(homeChannel.name)
       yield* TestClock.adjust(Duration.seconds(30))
 
-      const event = yield* Queue.take(queue)
-      expect(event.kind).toBe('message-posted')
+      yield* Queue.take(queue)
       expect(yield* eventPolls(stub)).not.toHaveLength(0)
     }),
   { layer: TestContext.TestContext },
@@ -651,14 +648,12 @@ effectTest(
   { layer: TestContext.TestContext },
 )
 
-// Attached-persona capability: a session attached to a persona via a
-// supplied stable key wakes on `@persona` mentioned in a different channel than
-// the one it subscribed — because attach binds the persona as the session's own
-// identity, so the existing content-synthesis mention path fires for `@persona`
-// realm-wide. The home channel subscribe puts the queue in mode-'all'; the
-// mention lands in a channel the session never subscribed to.
+// A session attached to a persona via a supplied stable key wakes on `@persona`
+// mentioned in a channel it never subscribed, because attach binds the persona
+// as the session's own identity. The shared contract holds the wake itself;
+// this test holds that attaching reached it without rotating the persona's key.
 effectTest(
-  'inbox.events: attached persona wakes on @persona mentioned in another channel (no key regenerate)',
+  'inbox.events: an attached persona wakes on a mention without regenerating its key',
   () =>
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
@@ -703,17 +698,9 @@ effectTest(
       const queue = yield* eventQueue(adapter)
       // Drain until the mention-received surfaces (a message-posted for the same
       // frame may arrive first).
-      const mention = yield* Queue.take(queue).pipe(
+      yield* Queue.take(queue).pipe(
         Effect.repeat({ until: (e: InboundEvent) => e.kind === 'mention-received' }),
       )
-      expect(mention.kind).toBe('mention-received')
-      if (mention.kind === 'mention-received') {
-        expect(mentionedIdentities(mention.mentions).map((m) => m.name)).toContain(
-          decodeDisplayNameSync('hermes-agent'),
-        )
-        expect(mention.message.ref.channel.name).toEqual(decodeChannelNameSync('brewlife'))
-      }
-      // The wake came via attach, not a rotated key.
       const reqs = yield* stub.captured
       expect(reqs.find((r) => r.url.pathname.endsWith('/api_key/regenerate'))).toBeUndefined()
     }),
