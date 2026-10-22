@@ -1308,7 +1308,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     optionalTools.push({
       name: 'upload_file',
       description:
-        'Upload a local file to the realm so it can be referenced in a message. Takes an absolute path, returns {reference, filename, size}. The `reference` is a ready-to-embed string — drop it into a post body wherever you want the attachment to render (same as writing @**Name** markup yourself).',
+        'Upload a local file to the realm so it can be referenced in a message. Takes an absolute path that must sit under the operator-set COMMY_UPLOAD_DIR (every path is refused when the operator has not set it), returns {reference, filename, size}. The `reference` is a ready-to-embed string — drop it into a post body wherever you want the attachment to render (same as writing @**Name** markup yourself).',
       inputSchema: {
         type: 'object',
         properties: {

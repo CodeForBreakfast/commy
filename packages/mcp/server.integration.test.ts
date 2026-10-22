@@ -6,10 +6,11 @@ import {
   rmSync,
   type Stats,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { captureLogger } from '@commy/core/logging'
 import type {
   Directory,
@@ -723,15 +724,20 @@ test('download_file: falls back to a $TMPDIR temp dir when COMMY_DOWNLOAD_DIR is
   }
 })
 
-test('upload_file: server FileSystem builder reads the real local file and reports its byte length', async () => {
-  const localPath = join(tmpdir(), `upload-test-${process.pid}.bin`)
-  const payload = new Uint8Array([1, 2, 3, 4, 5])
-  writeFileSync(localPath, payload)
-  const h = await buildHarness({
+const uploadHarness = (uploadDir?: string) =>
+  buildHarness({
     seedChannels: ['home'],
     seedAgents: ['alice'],
     seedHumans: ['carol'],
+    ...(uploadDir === undefined ? {} : { env: { COMMY_UPLOAD_DIR: uploadDir } }),
   })
+
+test('upload_file: a file inside COMMY_UPLOAD_DIR uploads, reporting the real byte length', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'commy-upload-root-'))
+  const localPath = join(root, 'chart.bin')
+  const payload = new Uint8Array([1, 2, 3, 4, 5])
+  writeFileSync(localPath, payload)
+  const h = await uploadHarness(root)
   try {
     const result = await callTool(h.client, 'upload_file', { path: localPath })
     const content = expectStructured(result)
@@ -740,6 +746,73 @@ test('upload_file: server FileSystem builder reads the real local file and repor
     expect(content['size']).toBe(payload.byteLength)
     expect(content['filename']).toBe('stub')
     expect(content['reference']).toBe('[stub](/user_uploads/0/stub)')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    await h.cleanup()
+  }
+})
+
+test('upload_file: refuses a path outside COMMY_UPLOAD_DIR', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'commy-upload-root-'))
+  const outside = mkdtempSync(join(tmpdir(), 'commy-upload-outside-'))
+  const secret = join(outside, 'secret.txt')
+  writeFileSync(secret, 'hunter2')
+  const h = await uploadHarness(root)
+  try {
+    await expect(callTool(h.client, 'upload_file', { path: secret })).rejects.toThrow(
+      'COMMY_UPLOAD_DIR',
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+    await h.cleanup()
+  }
+})
+
+test('upload_file: refuses a ".." path that climbs out of COMMY_UPLOAD_DIR', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'commy-upload-root-'))
+  const outside = mkdtempSync(join(tmpdir(), 'commy-upload-outside-'))
+  writeFileSync(join(outside, 'secret.txt'), 'hunter2')
+  const h = await uploadHarness(root)
+  try {
+    const climbing = join(root, '..', basename(outside), 'secret.txt')
+    await expect(callTool(h.client, 'upload_file', { path: climbing })).rejects.toThrow(
+      'COMMY_UPLOAD_DIR',
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+    await h.cleanup()
+  }
+})
+
+test('upload_file: refuses a symlink inside COMMY_UPLOAD_DIR that points outside it', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'commy-upload-root-'))
+  const outside = mkdtempSync(join(tmpdir(), 'commy-upload-outside-'))
+  const secret = join(outside, 'secret.txt')
+  writeFileSync(secret, 'hunter2')
+  const link = join(root, 'innocent.txt')
+  symlinkSync(secret, link)
+  const h = await uploadHarness(root)
+  try {
+    await expect(callTool(h.client, 'upload_file', { path: link })).rejects.toThrow(
+      'COMMY_UPLOAD_DIR',
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+    await h.cleanup()
+  }
+})
+
+test('upload_file: refuses every path when COMMY_UPLOAD_DIR is unset', async () => {
+  const localPath = join(tmpdir(), `upload-test-${process.pid}.bin`)
+  writeFileSync(localPath, new Uint8Array([1, 2, 3]))
+  const h = await uploadHarness()
+  try {
+    await expect(callTool(h.client, 'upload_file', { path: localPath })).rejects.toThrow(
+      'COMMY_UPLOAD_DIR',
+    )
   } finally {
     rmSync(localPath, { force: true })
     await h.cleanup()
