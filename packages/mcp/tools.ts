@@ -50,6 +50,7 @@ import { parseSessionId } from './bootstrap.ts'
 import type { IdentityCache } from './identity-cache.ts'
 import type { NarrowSet } from './narrow-set.ts'
 import { currentSessionContext, withSessionContext } from './session-context.ts'
+import type { SubscribeIntent } from './subscribe-parser.ts'
 import { intentToTarget, parseSubscribeTarget } from './subscribe-parser.ts'
 
 interface ToolInputSchema {
@@ -580,6 +581,20 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         ),
       )
     }
+  // The narrow is added first so no event can arrive between the substrate
+  // subscribe and the filter that would pass it. A refused substrate subscribe
+  // takes the narrow back out, unless an earlier subscribe already held it.
+  const narrowWhileSubscribing = <A, E, R>(
+    intent: SubscribeIntent,
+    substrateSubscribe: Effect.Effect<A, E, R>,
+  ) =>
+    Effect.suspend(() => {
+      const alreadyHeld = narrowSet.has(intent)
+      narrowSet.add(intent)
+      return substrateSubscribe.pipe(
+        Effect.onError(() => Effect.sync(() => !alreadyHeld && narrowSet.remove(intent))),
+      )
+    })
   // Sticky engagement: active participation in a thread —
   // posting or reacting — implies interest in its replies. Idempotent;
   // narrow-set add is set-backed and inbox.subscribe mirrors the explicit
@@ -612,11 +627,10 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
       channelName: channel.name,
       threadName: threadName.value,
     }
-    narrowSet.add(intent)
     await run(
-      adapter.inbox
-        .subscribe(intentToTarget(intent))
-        .pipe(Effect.zipRight(deps.persistSessionSubscriptions ?? Effect.void)),
+      narrowWhileSubscribing(intent, adapter.inbox.subscribe(intentToTarget(intent))).pipe(
+        Effect.zipRight(deps.persistSessionSubscriptions ?? Effect.void),
+      ),
     )
   }
   const coreTools: ReadonlyArray<ToolDef> = [
@@ -951,9 +965,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
             // narrow tells the event pump to tee matching events through;
             // the substrate-side call subscribes THIS SEAT to the channel, so
             // the realm delivers its messages to the seat's own queue.
-            yield* Effect.sync(() => narrowSet.add(intent)).pipe(
-              Effect.andThen(adapter.inbox.subscribe(intentToTarget(intent))),
-            )
+            yield* narrowWhileSubscribing(intent, adapter.inbox.subscribe(intentToTarget(intent)))
             // Persist is id-blind (this call carries no session_id): it polls
             // the shared deferred internally and writes only when the id is
             // already known, so it fires here without an id argument.
