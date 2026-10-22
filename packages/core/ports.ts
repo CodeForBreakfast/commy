@@ -526,10 +526,11 @@ export interface IdentityPort {
    */
   acquire(name: BotName): Effect.Effect<AcquiredIdentity, UnknownIdentity | IdentityError>
   /**
-   * Release the bound identity. Substrate-side cleanup is best-effort
-   * (Zulip deactivates the bot, Discord no-ops, Memory clears the
-   * binding). Idempotent — calling on an unauthenticated adapter is
-   * a no-op, never fails.
+   * Release the bound identity. An ephemeral release deactivates the
+   * agent, so it stops resolving and drops out of `listAgents`; a
+   * persistent release leaves it active. Zulip and Memory both do this;
+   * Discord no-ops. The deactivation is best-effort. Idempotent —
+   * calling on an unauthenticated adapter is a no-op, never fails.
    *
    * Pass `{ persistent: true }` for an `COMMY_BOT_NAME`-pinned
    * identity so the substrate skips deactivation: a

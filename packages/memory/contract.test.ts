@@ -34,7 +34,12 @@ runAgentCommsContract('memory adapter', async () => {
 runAgentCommsContract('memory adapter (allowlist mode for UnknownIdentity coverage)', async () => {
   const adapter = await Effect.runPromise(
     memoryAdapter({
-      acquirableNames: ['hermes-agent', 'hermes-agent-conflict', 'hermes-agent-cycle'],
+      acquirableNames: [
+        'hermes-agent',
+        'hermes-agent-conflict',
+        'hermes-agent-cycle',
+        'hermes-agent-released',
+      ],
       channelDescriptionLimit: MEMORY_DESCRIPTION_LIMIT,
       threadNameLimit: MEMORY_THREAD_NAME_LIMIT,
     }),
@@ -53,6 +58,7 @@ runAgentCommsContract('memory adapter (allowlist mode for UnknownIdentity covera
         acquirableNames: [
           'hermes-agent-cycle',
           'hermes-agent-returning',
+          'hermes-agent-released',
           'hermes-agent-a',
           'hermes-agent-b',
           'hermes-agent-c',

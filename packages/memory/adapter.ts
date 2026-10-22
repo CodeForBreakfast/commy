@@ -630,7 +630,19 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
             }),
           ),
         ),
-      release: () => Ref.set(bound, Option.none()),
+      release: (opts) =>
+        Ref.getAndSet(bound, Option.none()).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.void,
+              onSome: (b) =>
+                opts?.persistent === true
+                  ? Effect.void
+                  : // As on Zulip, an ephemeral release deactivates the agent.
+                    deactivateAgent(b.identity),
+            }),
+          ),
+        ),
       resolve: (name) => Effect.sync(() => activeIdentityNamed(name)),
     }
 
