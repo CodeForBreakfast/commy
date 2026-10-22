@@ -102,6 +102,9 @@ const MINTER_PACE = Duration.millis(900)
 // (COMMY_BOT_NAME releases skip deactivation), so
 // subsequent runs re-acquire the still-active account.
 const PERSISTENT_BOT_NAME = 'cc-live-pl-test'
+// A persistent seat still keys its binding by session id, which the host hook
+// injects into every call; the test supplies it the same way the others do.
+const PERSISTENT_SESSION = 'f1f1f1f1-0000-0000-0000-000000000001'
 // UUID-shaped session ids — the session_id parser rejects anything else.
 // Deterministic prefixes give predictable bot
 // names (`cc-<first-8-hex>`) so the teardown assertions can fetch by
@@ -220,14 +223,7 @@ const buildHarness = (
   Effect.gen(function* () {
     const e = liveEnv()
 
-    const realAdapter = yield* zulipAdapter({
-      realmUrl: yield* RealmUrl(e.site).pipe(Effect.orDie),
-      minterEmail: yield* BotEmail(e.minterEmail).pipe(Effect.orDie),
-      minterApiKey: Redacted.make(yield* ApiKey(e.minterApiKey).pipe(Effect.orDie)),
-    }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient))
-
     const killSwitch = yield* Deferred.make<void>()
-    const wrappedAdapter = withKillSwitch(realAdapter, killSwitch)
 
     const mainEnv: Record<string, string | undefined> = {
       ZULIP_SITE: e.site,
@@ -248,16 +244,33 @@ const buildHarness = (
         Effect.provide(
           Layer.provideMerge(
             Layer.mergeAll(
-              substrateAdapterLayer(parseEnv.pipe(Effect.as(wrappedAdapter))),
+              // Built inside the layer so the adapter can bind on demand through
+              // the same `SessionBinder` the boot program installs a strategy
+              // into; an adapter built outside it has no way to mint an
+              // ephemeral seat's identity.
+              substrateAdapterLayer(
+                Effect.gen(function* () {
+                  yield* parseEnv
+                  const realAdapter = yield* zulipAdapter({
+                    realmUrl: yield* RealmUrl(e.site).pipe(Effect.orDie),
+                    minterEmail: yield* BotEmail(e.minterEmail).pipe(Effect.orDie),
+                    minterApiKey: Redacted.make(yield* ApiKey(e.minterApiKey).pipe(Effect.orDie)),
+                    bindOnDemand: bindThrough(yield* SessionBinder),
+                  }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient))
+                  return withKillSwitch(realAdapter, killSwitch)
+                }),
+              ),
               FileCursorStoreLive,
               FileQueueStateStoreLive,
-              // Feed the one shared session-id deferred into the store, which now
-              // awaits it — mergeAll won't wire a sibling's output to a sibling's
-              // input, so a plain merge leaves the store's SessionId unsatisfied.
-              Layer.provideMerge(FileSubscriptionStoreLive, SessionIdLive),
-              SessionBinderLive,
-              ResumeOutcomeLive,
+              FileSubscriptionStoreLive,
               stderrLoggerLayer,
+            ).pipe(
+              // The shared singletons the adapter and the stores read — mergeAll
+              // won't wire a sibling's output to a sibling's input, so they are
+              // provided once underneath.
+              Layer.provideMerge(
+                Layer.mergeAll(SessionIdLive, SessionBinderLive, ResumeOutcomeLive),
+              ),
             ),
             testPlatformLayer(mainEnv),
           ),
@@ -378,9 +391,22 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
               const client = yield* buildHarness({
                 COMMY_BOT_NAME: PERSISTENT_BOT_NAME,
                 COMMY_SUBSCRIBE: `${e.channelName}`,
+                CLAUDE_CODE_SESSION_ID: PERSISTENT_SESSION,
               })
 
-              const ident = expectStructured(yield* callTool(client, 'current_identity'))
+              // The persistent bot binds in the boot-forked subscribe, so the
+              // first read can land before it has finished.
+              const ident = yield* callTool(client, 'current_identity', {
+                session_id: PERSISTENT_SESSION,
+              }).pipe(
+                Effect.map(expectStructured),
+                Effect.filterOrFail(
+                  (r) => r['state'] === 'bound',
+                  () => 'unbound' as const,
+                ),
+                Effect.retry(Schedule.spaced(Duration.millis(500))),
+                Effect.timeout(Duration.seconds(30)),
+              )
               expect(ident['state']).toBe('bound')
               const identity = ident['identity'] as { id: string; name: string; kind: string }
               expect(identity.name).toBe(PERSISTENT_BOT_NAME)
@@ -388,25 +414,40 @@ describeLive('commy plugin live integration — zulip.example.com', () => {
 
               const marker = `live-plugin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
               const posted = expectStructured(
-                yield* callTool(client, 'post', { channel_name: e.channelName, body: marker }),
+                yield* callTool(client, 'post', {
+                  channel_name: e.channelName,
+                  body: marker,
+                  session_id: PERSISTENT_SESSION,
+                }),
               )
               const messageId = posted['message_id'] as string
               expect(typeof messageId).toBe('string')
               expect(posted['channel_name']).toBe(e.channelName)
 
               const history = expectStructured(
-                yield* callTool(client, 'read_channel', { channel_name: e.channelName }),
+                yield* callTool(client, 'read_channel', {
+                  channel_name: e.channelName,
+                  session_id: PERSISTENT_SESSION,
+                }),
               )
               const messages = history['messages'] as ReadonlyArray<{ body: string }>
               expect(messages.some((m) => m.body.includes(marker))).toBe(true)
 
               const reacted = expectStructured(
-                yield* callTool(client, 'react', { message_id: messageId, emoji: 'thumbs_up' }),
+                yield* callTool(client, 'react', {
+                  message_id: messageId,
+                  emoji: 'thumbs_up',
+                  session_id: PERSISTENT_SESSION,
+                }),
               )
               expect(reacted).toEqual({})
 
               const unreacted = expectStructured(
-                yield* callTool(client, 'unreact', { message_id: messageId, emoji: 'thumbs_up' }),
+                yield* callTool(client, 'unreact', {
+                  message_id: messageId,
+                  emoji: 'thumbs_up',
+                  session_id: PERSISTENT_SESSION,
+                }),
               )
               expect(unreacted).toEqual({})
             }),
