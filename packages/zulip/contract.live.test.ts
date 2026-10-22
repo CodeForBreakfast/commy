@@ -25,8 +25,10 @@
  *   contamination within a run (the channel-wide `readChannel` range tests
  *   assert `not.toContain` / exact-equality). The fake sidesteps it by
  *   building a fresh realm per `beforeEach`; the live factory namespaces
- *   instead. Streams accumulate (the non-admin minter cannot delete them) —
- *   acceptable on a test realm.
+ *   instead. The minter creates each stream, so the realm makes it the
+ *   stream's administrator, and the per-test `dispose` archives what the test
+ *   seeded, pass or fail. A run killed mid-test leaves its last test's
+ *   streams, which the next run's start-of-suite sweep archives.
  * - **Shared peer agents.** `seedAgent(name)` find-or-creates a persistent
  *   peer bot (`cc-contract-peer-<name>`) once and reuses it — peers carry no
  *   per-test state, so suite-level reuse costs no per-test mint.
@@ -42,7 +44,7 @@
  * unset the suite is skipped.
  */
 
-import { afterAll, describe, test } from 'bun:test'
+import { afterAll, beforeAll, describe, test } from 'bun:test'
 import type { ChannelRef, Identity } from '@commy/core/ports'
 import {
   decodeBotNameSync,
@@ -93,6 +95,12 @@ const MINTER_PACE = Duration.millis(900)
 const SELF_NAME = decodeBotNameSync('cc-contract-self')
 const NS_PREFIX = 'cc-ct'
 const PEER_PREFIX = 'cc-contract-peer'
+const RUN_STREAM_PATTERN = /^cc-ct-([0-9a-z]+)-/
+// A run's streams are another run's leftovers only once that run is long
+// over; younger ones may belong to a run still going elsewhere.
+// ponytail: fixed age, so a killed run's streams survive until a run this much later
+const LEFTOVER_AFTER = Duration.hours(1)
+const SWEEP_TIMEOUT_MS = 120_000
 
 const successSchema = Schema.Struct({ result: Schema.Literal('success') })
 const streamsListSchema = Schema.Struct({
@@ -236,6 +244,33 @@ if (env === undefined) {
       return resolved.value
     }).pipe(Effect.orDie)
 
+  const archiveStream = (minter: ZulipHttp, streamId: number | string) =>
+    minter.delete(`/streams/${streamId}`, successSchema)
+
+  const isLeftoverRunStream = (name: string): boolean => {
+    const run = RUN_STREAM_PATTERN.exec(name)?.[1]
+    return (
+      run !== undefined && Number.parseInt(run, 36) < Date.now() - Duration.toMillis(LEFTOVER_AFTER)
+    )
+  }
+
+  // Covers runs killed before their dispose could archive their streams.
+  beforeAll(async () => {
+    const minter = await Effect.runPromise(buildMinterHttp())
+    await Effect.runPromise(
+      minter.get('/streams', streamsListSchema, { include_public: true }).pipe(
+        Effect.flatMap((res) =>
+          Effect.forEach(
+            res.streams.filter((s) => isLeftoverRunStream(s.name)),
+            (s) => archiveStream(minter, s.stream_id),
+            { discard: true },
+          ),
+        ),
+        Effect.orDie,
+      ),
+    )
+  }, SWEEP_TIMEOUT_MS)
+
   afterAll(async () => {
     for (const a of builtAdapters) await a.close()
   })
@@ -255,10 +290,15 @@ if (env === undefined) {
     for (const channel of held)
       await Effect.runPromise(adapter.inbox.unsubscribe(channel).pipe(Effect.orDie))
 
+    const seeded = new Set<ChannelRef['id']>()
+
     return {
       comms: adapter,
       attachments: adapter,
-      seedChannel: (name) => ensureStream(minter, `${ns}-${name}`),
+      seedChannel: (name) =>
+        ensureStream(minter, `${ns}-${name}`).pipe(
+          Effect.tap((channel) => Effect.sync(() => seeded.add(channel.id))),
+        ),
       seedAgent: (name) => ensurePeer(minter, adapter, name),
       // A seeded peer posts (mentioning self) through its own bound adapter so
       // the mention-floor tests run cross-identity — the shape that surfaces on
@@ -277,6 +317,11 @@ if (env === undefined) {
       dispose: () =>
         Effect.sleep(MINTER_PACE).pipe(
           Effect.zipRight(adapter.identity.release({ persistent: true })),
+          Effect.zipRight(
+            Effect.forEach(seeded, (id) => archiveStream(minter, id), { discard: true }),
+          ),
+          Effect.zipRight(Effect.sync(() => seeded.clear())),
+          Effect.orDie,
         ),
     }
   }
