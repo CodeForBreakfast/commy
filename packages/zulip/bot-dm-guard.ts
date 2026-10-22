@@ -15,8 +15,8 @@
  * path will route through `boundHttp` and trip this guard.
  */
 
+import type { IdentityKind } from '@commy/core/ports'
 import { Data, Effect, Either, type ParseResult, Schema } from 'effect'
-
 import type { ZulipApiError, ZulipHttp, ZulipParams } from './http.ts'
 import type { ZulipUserRef } from './user-ref.ts'
 
@@ -29,7 +29,7 @@ export class BotToBotDirectMessageError extends Data.TaggedError('BotToBotDirect
 }
 
 export interface RecipientDirectory {
-  readonly byId: ReadonlyMap<number, { readonly kind: 'agent' | 'human' }>
+  readonly byId: ReadonlyMap<number, { readonly kind: IdentityKind }>
 }
 
 /**

@@ -36,7 +36,7 @@
  * - `ZULIP_LIVE_CHANNEL_NAME` an existing channel the live tests post into
  */
 
-import { describe, expect, test } from 'bun:test'
+import { beforeAll, describe, expect, test } from 'bun:test'
 import type {
   BotName,
   Credentials,
@@ -51,6 +51,7 @@ import {
   decodeMessageBodySync,
   decodeThreadNameSync,
 } from '@commy/core/ports'
+import { requireLiveChannel } from '@commy/testing/live-channel'
 import { FetchHttpClient, HttpClient, HttpClientRequest } from '@effect/platform'
 import { Duration, Effect, Encoding, Option, Redacted, Schema, Stream } from 'effect'
 import type { ZulipAdapter } from './adapter.ts'
@@ -313,6 +314,14 @@ const describeLiveChannel =
     : describe
 
 describeLiveChannel('zulip live resolve-then-post — zulip.example.com', () => {
+  beforeAll(() =>
+    Effect.runPromise(
+      buildAdapter().pipe(
+        Effect.flatMap((adapter) => requireLiveChannel(adapter.directory, liveChannelName ?? '')),
+      ),
+    ),
+  )
+
   // The regression this file exists to catch (comms-00t0). Zulip has no
   // resolved flag — resolution *renames* the topic to `✔ <name>` — and Zulip
   // creates topics implicitly on send. So a post addressed to the clean name of
@@ -635,11 +644,9 @@ describeLiveChannel('zulip live per-seat receiving — zulip.example.com', () =>
     45_000,
   )
 
-  // comms-g5zh.3's acceptance, behaviourally. Under the shared minter this was
-  // a live bug: one subscription row served every seat, so B's unsubscribe
-  // DELETEd the row A was receiving through and A went silently deaf. Two real
-  // principals are the only way to show it is gone — with a row each, B's
-  // unsubscribe cannot reach A's.
+  // The shared contract holds this against the in-process realm, which only
+  // models Zulip's subscriptions. This proves it on a real server, where each
+  // seat's subscription is a row under its own principal.
   test(
     'one seat unsubscribing does not deafen another seat on the same channel',
     () =>

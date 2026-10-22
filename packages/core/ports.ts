@@ -176,7 +176,8 @@ export const decodeEmojiSync = Schema.decodeSync(EmojiSchema)
 export const decodeGroupNameSync = Schema.decodeSync(GroupNameSchema)
 export const decodeAttachmentRefSync = Schema.decodeSync(AttachmentRefSchema)
 
-export type IdentityKind = 'human' | 'agent'
+/** `unknown` is a sender the realm could not place; it is never assumed to be a person. */
+export type IdentityKind = 'human' | 'agent' | 'unknown'
 
 export interface Identity {
   /** Stable, branded handle. Adapters mint via `decodeIdentityId` at the parse boundary. */
@@ -306,6 +307,20 @@ export const mentionsIdentity = (mentions: ReadonlyArray<Mention>, identity: Ide
 export const mentionedIdentities = (mentions: ReadonlyArray<Mention>): ReadonlyArray<Identity> =>
   mentions.filter(Mention.$is('UserMention')).map((m) => m.identity)
 
+/**
+ * Whether these mentions notify the identity, given whether it holds the
+ * message's channel. A wildcard notifies the channel's subscribers, as on
+ * Zulip, so outside the channel only a mention by name reaches it.
+ */
+export const notifiesIdentity = (
+  mentions: ReadonlyArray<Mention>,
+  identity: IdentityId,
+  holdsChannel: boolean,
+): boolean =>
+  holdsChannel
+    ? mentionsIdentity(mentions, identity)
+    : mentionedIdentities(mentions).some((m) => m.id === identity)
+
 export interface Message {
   readonly ref: MessageRef
   readonly sender: Identity
@@ -324,19 +339,11 @@ export interface Range {
   readonly limit?: number
 }
 
+/**
+ * Who a post mentions is whatever mention markup its `body` carries (Zulip's
+ * `@**name**`), as the substrate renders it; `Message.mentions` reports that.
+ */
 export interface PostOpts {
-  /**
-   * Identities to notify. Metadata-only: adapters do not mutate
-   * `body` based on this list. Where a substrate needs literal mention
-   * markup inside the message text to trigger a notification (Zulip's
-   * `@**name**`, Discord's `<@id>`), the caller writes that markup
-   * directly into `body` at the position they want it rendered. The
-   * `mentions[]` array is a side-channel for adapters with a separate
-   * notification primitive — substrate-derived render-time mentions
-   * still surface via `Message.mentions` on the inbound side regardless
-   * of whether this field was set on the post.
-   */
-  readonly mentions?: ReadonlyArray<Identity>
   /** Named conversation slice; adapter does find-or-create. */
   readonly thread?: ThreadName
   /** Best-effort in-thread reply. Adapters without an in-thread reply primitive may quote-block or drop. */
@@ -519,10 +526,11 @@ export interface IdentityPort {
    */
   acquire(name: BotName): Effect.Effect<AcquiredIdentity, UnknownIdentity | IdentityError>
   /**
-   * Release the bound identity. Substrate-side cleanup is best-effort
-   * (Zulip deactivates the bot, Discord no-ops, Memory clears the
-   * binding). Idempotent — calling on an unauthenticated adapter is
-   * a no-op, never fails.
+   * Release the bound identity. An ephemeral release deactivates the
+   * agent, so it stops resolving and drops out of `listAgents`; a
+   * persistent release leaves it active. Zulip and Memory both do this;
+   * Discord no-ops. The deactivation is best-effort. Idempotent —
+   * calling on an unauthenticated adapter is a no-op, never fails.
    *
    * Pass `{ persistent: true }` for an `COMMY_BOT_NAME`-pinned
    * identity so the substrate skips deactivation: a
@@ -611,9 +619,10 @@ export interface MessagePublisher {
    * addressed by `channel` + plain thread `name` (never a resolution-encoded
    * form — the paired verbs, mirroring `react`/`unreact`, carry the direction).
    * Idempotent: a thread already in the requested state is a no-op with no
-   * substrate write. Like `edit`, this mutates substrate state and emits no
-   * InboundEvent — a consumer observes the new status via `ObservedThread.resolved`
-   * when it next reads the thread. A substrate failure (including a thread the
+   * substrate write. A flip makes the substrate post a notice into the thread,
+   * sent by the substrate rather than the caller and naming the caller, and a
+   * subscriber receives it as a `message-posted` whose `ObservedThread.resolved`
+   * carries the new status. A substrate failure (including a thread the
    * substrate has no messages for) surfaces as a typed `PublisherError`;
    * calling before `identity.acquire` is a defect, not a typed failure.
    *
@@ -782,7 +791,7 @@ export interface HistoryReader {
 /**
  * Failure surface for the Effect-returning `Directory` reads. The Zulip
  * adapter mints this when the backing substrate call fails, carrying the
- * underlying error as `cause`; the in-memory adapter never produces it.
+ * underlying error as `cause`; the in-memory adapter produces it only for an `acquire` that Zulip would refuse.
  * `operation` names the port method that failed.
  */
 export class DirectoryError extends Data.TaggedError('DirectoryError')<{
@@ -928,9 +937,8 @@ export class ChannelDescriptionRejected extends Data.TaggedError('ChannelDescrip
  * tokens the substrate would actually render as mentions count — a dead form
  * inside a code span is literal text, not a failed delivery, and does not
  * trigger it. `tokens` lists the unresolved forms so the caller can fix the
- * name. Adapters with a directory (Zulip) produce it; the in-memory adapter
- * never does. Tagged so the MCP edge and callers discriminate it from a
- * generic `PublisherError`.
+ * name. Tagged so the MCP edge and callers discriminate it from a generic
+ * `PublisherError`.
  */
 export class UnresolvedMention extends Data.TaggedError('UnresolvedMention')<{
   readonly operation: 'post' | 'edit'
@@ -1095,9 +1103,9 @@ export class InboxError extends Data.TaggedError('InboxError')<{
 }
 
 /**
- * Failure surface for the Effect-returning `HistoryReader` reads. The
- * Zulip adapter mints this when the backing substrate call fails; the
- * in-memory adapter never produces it.
+ * Failure surface for the Effect-returning `HistoryReader` reads. An adapter
+ * mints this when the backing substrate call fails, and when a read names a
+ * channel the substrate does not have.
  */
 export class HistoryError extends Data.TaggedError('HistoryError')<{
   readonly operation: 'readChannel' | 'readThread' | 'recentThreads' | 'messagePermalink'

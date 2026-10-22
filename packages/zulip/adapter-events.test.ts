@@ -30,12 +30,9 @@ import {
   decodeBotNameSync,
   decodeChannelIdSync,
   decodeChannelNameSync,
-  decodeDisplayNameSync,
   decodeMessageBodySync,
-  decodeThreadNameSync,
   decodeTimestampSync,
   type IdentityError,
-  mentionedIdentities,
   type UnknownIdentity,
 } from '@commy/core/ports'
 import { effectTest } from '@commy/testing/effect-test'
@@ -167,6 +164,16 @@ const homeChannel: ChannelRef = {
   name: decodeChannelNameSync('general'),
   permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/1234-general'),
 }
+
+// Replay reads the seat's own subscription rows to decide who a wildcard
+// notifies.
+const seedMySubscriptions = (
+  stub: StubHttpClient,
+  names: ReadonlyArray<string> = [],
+): Effect.Effect<void> =>
+  stub.respond('GET', '/api/v1/users/me/subscriptions', {
+    body: { result: 'success', subscriptions: names.map((name) => ({ name })) },
+  })
 
 const seedSubscribeOk = (stub: StubHttpClient): Effect.Effect<void> =>
   stub.respond('POST', '/api/v1/users/me/subscriptions', {
@@ -372,55 +379,6 @@ effectTest(
   { layer: TestContext.TestContext },
 )
 
-// A new-topics narrow makes the adapter filter its channel itself, passing a
-// reply only while the seat holds some other narrow there.
-effectTest(
-  'a reply in a held topic still arrives after a sibling topic is unsubscribed beside a new-topics narrow',
-  () =>
-    Effect.gen(function* () {
-      const stub = yield* makeStubHttpClient
-      const adapter = yield* buildAdapter(stub)
-      yield* seedRegister(stub)
-      yield* seedSubscribeOk(stub)
-      yield* stub.respond('DELETE', '/api/v1/users/me/subscriptions', {
-        body: { result: 'success', removed: ['general'], not_removed: [] },
-      })
-      yield* stub.respondSequence('GET', '/api/v1/events', [
-        {
-          body: {
-            result: 'success',
-            events: [
-              messageEvent(5, aZulipMessage({ id: 100, subject: 'held', content: 'opens' })),
-              messageEvent(6, aZulipMessage({ id: 101, subject: 'held', content: 'replies' })),
-            ],
-          },
-        },
-        { hang: true },
-      ])
-      yield* adapter.inbox.subscribe({ kind: 'new-topics-in-channel', channel: homeChannel.name })
-      yield* adapter.inbox.subscribe({
-        channel: homeChannel.name,
-        thread: decodeThreadNameSync('held'),
-      })
-      yield* adapter.inbox.subscribe({
-        channel: homeChannel.name,
-        thread: decodeThreadNameSync('dropped'),
-      })
-      yield* adapter.inbox.unsubscribe({
-        channel: homeChannel.name,
-        thread: decodeThreadNameSync('dropped'),
-      })
-      const queue = yield* eventQueue(adapter)
-      yield* awaitEventPolls(stub, 2)
-      const delivered = yield* Queue.takeAll(queue)
-      const ids = [...delivered].flatMap((e) =>
-        e.kind === 'message-posted' ? [String(e.message.ref.id)] : [],
-      )
-      expect(ids).toEqual(['100', '101'])
-    }),
-  { layer: TestContext.TestContext },
-)
-
 // comms-9iro, dissolved rather than mitigated. That bug was a ONE-SHOT: the
 // producer consulted the session once at materialisation, got nothing, and
 // latched — a seat that lost that race stayed deaf for the pump's entire
@@ -428,11 +386,11 @@ effectTest(
 //
 // The property that replaces it is not an await. It is the absence of a latch:
 // a producer that starts unbound keeps its unfold alive and re-reads the
-// inbox's registration each step, so a seat that binds LATER is picked up. This
-// test starts the pump on an unbound seat, binds afterwards, and requires the
-// event to arrive. It fails if any step in that path gives up permanently.
+// inbox's registration each step, so a seat that binds LATER is picked up. The
+// shared contract holds the delivery; this test holds the wire: nothing is
+// polled or registered while unbound, and polling starts once a subscribe binds.
 effectTest(
-  'a producer that starts unbound adopts the queue a later subscribe registers',
+  'a producer that starts unbound polls nothing until a later subscribe registers a queue',
   () =>
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
@@ -468,8 +426,7 @@ effectTest(
       yield* adapter.inbox.subscribe(homeChannel.name)
       yield* TestClock.adjust(Duration.seconds(30))
 
-      const event = yield* Queue.take(queue)
-      expect(event.kind).toBe('message-posted')
+      yield* Queue.take(queue)
       expect(yield* eventPolls(stub)).not.toHaveLength(0)
     }),
   { layer: TestContext.TestContext },
@@ -701,14 +658,12 @@ effectTest(
   { layer: TestContext.TestContext },
 )
 
-// Attached-persona capability: a session attached to a persona via a
-// supplied stable key wakes on `@persona` mentioned in a different channel than
-// the one it subscribed — because attach binds the persona as the session's own
-// identity, so the existing content-synthesis mention path fires for `@persona`
-// realm-wide. The home channel subscribe puts the queue in mode-'all'; the
-// mention lands in a channel the session never subscribed to.
+// A session attached to a persona via a supplied stable key wakes on `@persona`
+// mentioned in a channel it never subscribed, because attach binds the persona
+// as the session's own identity. The shared contract holds the wake itself;
+// this test holds that attaching reached it without rotating the persona's key.
 effectTest(
-  'inbox.events: attached persona wakes on @persona mentioned in another channel (no key regenerate)',
+  'inbox.events: an attached persona wakes on a mention without regenerating its key',
   () =>
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
@@ -753,17 +708,9 @@ effectTest(
       const queue = yield* eventQueue(adapter)
       // Drain until the mention-received surfaces (a message-posted for the same
       // frame may arrive first).
-      const mention = yield* Queue.take(queue).pipe(
+      yield* Queue.take(queue).pipe(
         Effect.repeat({ until: (e: InboundEvent) => e.kind === 'mention-received' }),
       )
-      expect(mention.kind).toBe('mention-received')
-      if (mention.kind === 'mention-received') {
-        expect(mentionedIdentities(mention.mentions).map((m) => m.name)).toContain(
-          decodeDisplayNameSync('hermes-agent'),
-        )
-        expect(mention.message.ref.channel.name).toEqual(decodeChannelNameSync('brewlife'))
-      }
-      // The wake came via attach, not a rotated key.
       const reqs = yield* stub.captured
       expect(reqs.find((r) => r.url.pathname.endsWith('/api_key/regenerate'))).toBeUndefined()
     }),
@@ -927,6 +874,7 @@ effectTest(
       yield* stub.respond('GET', '/api/v1/messages', {
         body: gapMessagesBody('posted during the gap'),
       })
+      yield* seedMySubscriptions(stub)
       yield* stub.respondSequence('GET', '/api/v1/events', [
         {
           body: {
@@ -986,6 +934,7 @@ effectTest(
       yield* stub.respond('GET', '/api/v1/messages', {
         body: gapMessagesBody('posted during the reconnect gap'),
       })
+      yield* seedMySubscriptions(stub)
       // Sequence across both iterators:
       //   poll1 (iter1) — live ts=1000, advances the watermark
       //   poll2 (iter1) — HANG: the long-poll holds, so iter1's eager drain
