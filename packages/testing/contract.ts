@@ -19,6 +19,7 @@
 import { afterEach, beforeEach, describe } from 'bun:test'
 import type {
   AgentComms,
+  AttachmentStore,
   ChannelName,
   ChannelRef,
   Identity,
@@ -27,6 +28,7 @@ import type {
   Presence,
 } from '@commy/core/ports'
 import { Effect } from 'effect'
+import { attachmentsContract } from './contract/attachments.ts'
 import { directoryContract } from './contract/directory.ts'
 import { historyContract } from './contract/history.ts'
 import { identityContract } from './contract/identity.ts'
@@ -132,22 +134,47 @@ export interface ContractEnv {
 
 export type ContractFactory = () => Promise<ContractEnv>
 
+/**
+ * A contract environment whose adapter also implements `AttachmentStore`.
+ * Only an adapter that does runs the attachment contract.
+ */
+export interface AttachmentContractEnv extends ContractEnv {
+  /** The adapter under test's `AttachmentStore`, bound as `comms` is. */
+  readonly attachments: AttachmentStore
+}
+
+export type AttachmentContractFactory = () => Promise<AttachmentContractEnv>
+
+/** Build a fresh environment before each test and dispose of it after. */
+const envPerTest = <E extends ContractEnv>(factory: () => Promise<E>): (() => E) => {
+  let env: E
+
+  beforeEach(async () => {
+    env = await factory()
+  }, REALM_HOOK_TIMEOUT_MS)
+
+  afterEach(() => Effect.runPromise(env.dispose()), REALM_HOOK_TIMEOUT_MS)
+
+  return () => env
+}
+
 export const runAgentCommsContract = (label: string, factory: ContractFactory): void => {
   describe(`AgentComms contract — ${label}`, () => {
-    let env: ContractEnv
-
-    beforeEach(async () => {
-      env = await factory()
-    }, REALM_HOOK_TIMEOUT_MS)
-
-    afterEach(() => Effect.runPromise(env.dispose()), REALM_HOOK_TIMEOUT_MS)
-
-    const currentEnv = (): ContractEnv => env
+    const currentEnv = envPerTest(factory)
     publisherPostingContract(currentEnv)
     publisherContract(currentEnv)
     directoryContract(currentEnv)
     historyContract(currentEnv)
     identityContract(currentEnv)
     inboxContract(currentEnv)
+  })
+}
+
+export const runAttachmentStoreContract = (
+  label: string,
+  factory: AttachmentContractFactory,
+): void => {
+  describe(`AttachmentStore contract — ${label}`, () => {
+    attachmentsContract(envPerTest(factory))
   })
 }

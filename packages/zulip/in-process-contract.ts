@@ -6,7 +6,7 @@
  */
 
 import { decodeBotNameSync, decodeChannelIdSync, decodeChannelNameSync } from '@commy/core/ports'
-import type { ContractFactory } from '@commy/testing/contract'
+import type { AttachmentContractFactory } from '@commy/testing/contract'
 import { HttpClient } from '@effect/platform'
 import { Array as Arr, Effect, Option, Redacted } from 'effect'
 import { type ZulipAdapter, zulipAdapter } from './adapter.ts'
@@ -15,7 +15,7 @@ import { permalinkBase, withChannelPermalink } from './permalink.ts'
 
 const SELF_NAME = decodeBotNameSync('contract-self')
 
-export const inProcessContractFactory: ContractFactory = async () => {
+export const inProcessContractFactory: AttachmentContractFactory = async () => {
   const realm = await Effect.runPromise(makeInProcessRealm)
 
   const buildAdapter = (): Effect.Effect<ZulipAdapter> =>
@@ -30,6 +30,7 @@ export const inProcessContractFactory: ContractFactory = async () => {
 
   return {
     comms: adapter,
+    attachments: adapter,
     seedChannel: (name) =>
       realm.addChannel(name).pipe(
         Effect.map((channel) =>

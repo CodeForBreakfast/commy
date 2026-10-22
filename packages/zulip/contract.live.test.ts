@@ -51,7 +51,11 @@ import {
   decodeChannelNameSync,
   decodeDisplayNameSync,
 } from '@commy/core/ports'
-import { runAgentCommsContract } from '@commy/testing/contract'
+import {
+  type AttachmentContractFactory,
+  runAgentCommsContract,
+  runAttachmentStoreContract,
+} from '@commy/testing/contract'
 import { FetchHttpClient, HttpClient } from '@effect/platform'
 import { Duration, Effect, Option, Redacted, Schema } from 'effect'
 import type { ZulipAdapter } from './adapter.ts'
@@ -237,7 +241,7 @@ if (env === undefined) {
     for (const a of builtAdapters) await a.close()
   })
 
-  runAgentCommsContract('zulip-live', async () => {
+  const liveContractFactory: AttachmentContractFactory = async () => {
     const ns = `${NS_PREFIX}-${runId}-${seq++}`
     const adapter = await Effect.runPromise(buildAdapter())
     builtAdapters.push(adapter)
@@ -254,6 +258,7 @@ if (env === undefined) {
 
     return {
       comms: adapter,
+      attachments: adapter,
       seedChannel: (name) => ensureStream(minter, `${ns}-${name}`),
       seedAgent: (name) => ensurePeer(minter, adapter, name),
       // A seeded peer posts (mentioning self) through its own bound adapter so
@@ -274,5 +279,8 @@ if (env === undefined) {
           Effect.zipRight(adapter.identity.release({ persistent: true })),
         ),
     }
-  })
+  }
+
+  runAgentCommsContract('zulip-live', liveContractFactory)
+  runAttachmentStoreContract('zulip-live', liveContractFactory)
 }

@@ -45,7 +45,10 @@ The ports are the seam, so tests sit on one side of them or the other:
   `bun run check` runs the whole contract against both the in-memory adapter
   and the Zulip adapter, which it runs on an in-process realm. That is how
   `@commy/memory` earns the right to stand in for Zulip elsewhere: it is a
-  *proven* contract-equivalent, not a hopeful mock.
+  *proven* contract-equivalent, not a hopeful mock. `AttachmentStore` is the
+  exception, because not every substrate carries files. Its contract has its
+  own runner, and only an adapter that implements the port runs it, which today
+  is the Zulip adapter alone.
 
   So a test of how a port behaves goes in the contract module for that port,
   never in an adapter's own suite. A behaviour pinned in one adapter's suite
