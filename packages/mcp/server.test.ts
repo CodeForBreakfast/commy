@@ -315,6 +315,23 @@ test('main boots cleanly when COMMY_DOWNLOAD_DIR points at an existing directory
   expect(fake.calls.acquired).toEqual(['myproject-concierge'])
 })
 
+test('main fails boot with EnvConfigError when COMMY_UPLOAD_DIR is set but not a directory', async () => {
+  const fake = buildFakeAdapter()
+  const exit = await runProgram(
+    { ...validEnv, COMMY_UPLOAD_DIR: '/commy-upload-dir-does-not-exist-xyz' },
+    fake.adapter,
+  )
+  const error = failureValue(exit)
+  expect(error).toBeInstanceOf(EnvConfigError)
+  expect((error as EnvConfigError).message).toContain('COMMY_UPLOAD_DIR')
+})
+
+test('main boots cleanly when COMMY_UPLOAD_DIR points at an existing directory', async () => {
+  const fake = buildFakeAdapter()
+  const exit = await runProgram({ ...validEnv, COMMY_UPLOAD_DIR: tmpdir() }, fake.adapter)
+  expect(Exit.isSuccess(exit)).toBe(true)
+})
+
 test('main writes acquire failure to stderr in the canonical format, fails boot, still closes adapter', async () => {
   const fake = buildFakeAdapter({ acquireError: new Error('substrate rejected acquire') })
   const stderr: string[] = []

@@ -79,7 +79,7 @@ There's also an optional `COMMY_SUBSCRIBE` (comma-separated subscribe tokens,
 e.g. `my-project`) for agents that should already be listening the moment they
 boot. It bootstraps a bot's subscriptions when the bot is created and is not
 read again — after that the agent owns them and changes them with the
-`subscribe` / `unsubscribe` tools. Mentions of the bot need no token — they
+`subscribe` / `unsubscribe` tools, and reads them back with `list_subscriptions`. Mentions of the bot need no token — they
 always arrive. To set any of these non-interactively, repeat
 `--config KEY=value` on the `install` line.
 

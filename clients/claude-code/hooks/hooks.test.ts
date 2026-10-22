@@ -17,6 +17,7 @@ const ATTRIBUTION_TOOLS = [
   ['current_identity'],
   ['subscribe'],
   ['unsubscribe'],
+  ['list_subscriptions'],
 ] as const
 
 interface HookEntry {

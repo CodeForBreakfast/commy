@@ -56,6 +56,7 @@ import {
   isBindError,
   MessageEditRefused,
   mentionsIdentity,
+  notifiesIdentity,
   PublisherError,
   UnboundEphemeralSession,
   UnknownChannel,
@@ -342,6 +343,11 @@ const regenerateKeySchema = Schema.Struct({
 const sentMessageSchema = Schema.Struct({
   result: Schema.Literal('success'),
   id: Schema.Int,
+})
+
+const storedMessageSchema = Schema.Struct({
+  result: Schema.Literal('success'),
+  message: Schema.Struct({ subject: Schema.String }),
 })
 
 const successSchema = Schema.Struct({ result: Schema.Literal('success') })
@@ -760,7 +766,7 @@ export const zulipAdapter = (
         for (const u of members) {
           const ident = yield* toIdentity(u)
           byId.set(ZulipUserRef(u.user_id), ident)
-          byName.set(u.full_name, ident)
+          byName.set(u.full_name.toLowerCase(), ident)
           byIdentityId.set(ident.id, ZulipUserRef(u.user_id))
           if (u.is_active) active.add(ident.id)
         }
@@ -1361,6 +1367,18 @@ export const zulipAdapter = (
       subscriptions: Schema.Array(Schema.Struct({ name: Schema.NonEmptyString })),
     })
 
+    // The channels whose subscription rows name the client's own user.
+    const readSubscribedChannels = (
+      http: BotHttp,
+    ): Effect.Effect<ReadonlyArray<ChannelName>, ZulipApiError | ParseResult.ParseError> =>
+      http
+        .get('/users/me/subscriptions', mySubscriptionsResponseSchema)
+        .pipe(
+          Effect.flatMap((res) =>
+            Effect.forEach(res.subscriptions, (row) => decodeChannelName(row.name)),
+          ),
+        )
+
     const streamsListResponseSchema = Schema.Struct({
       result: Schema.Literal('success'),
       streams: Schema.Array(Schema.Struct({ name: Schema.NonEmptyString, stream_id: Schema.Int })),
@@ -1719,10 +1737,7 @@ export const zulipAdapter = (
                 // the server-canonical "(no topic)" placeholder when the caller
                 // omits a thread — same string Zulip's UI uses for empty
                 // topics; an unnamed thread has no resolution state to probe
-                // for. `opts.mentions` is metadata-only per PostOpts: we
-                // don't fold it into `content`. Zulip pings are driven by
-                // `@**Name**` markup inside the body, so callers that want a
-                // ping write the markup themselves where they want it rendered.
+                // for.
                 (thread === undefined
                   ? Effect.succeed({ topic: '(no topic)', resolved: false })
                   : addressThread(effective.name, thread)
@@ -1737,20 +1752,33 @@ export const zulipAdapter = (
                       })
                       .pipe(
                         Effect.flatMap((sent) =>
-                          decodeMessageId(String(sent.id)).pipe(
-                            Effect.map(
-                              (id): MessageRef =>
-                                // The probe tells us which substrate form the
-                                // message landed in, so the ref reports the
-                                // thread's real resolution state rather than
-                                // assuming an unresolved one.
-                                decorateMessageRef(
-                                  id,
-                                  effective,
-                                  thread === undefined
-                                    ? undefined
-                                    : { name: thread, resolved: addressed.resolved },
+                          Effect.all({
+                            id: decodeMessageId(String(sent.id)),
+                            // The send response omits the topic, and the realm
+                            // truncates one over its length limit, so the stored
+                            // name is read back from the message itself. Its
+                            // resolution state comes from the same read.
+                            stored: Effect.transposeMapOption(Option.fromNullable(thread), () =>
+                              http
+                                .get(
+                                  `/messages/${encodeURIComponent(sent.id)}`,
+                                  storedMessageSchema,
+                                )
+                                .pipe(
+                                  Effect.flatMap(({ message }) => {
+                                    const { name, resolved } = splitTopic(message.subject)
+                                    return decodeThreadName(name).pipe(
+                                      Effect.map((storedName) => ({
+                                        name: storedName,
+                                        resolved,
+                                      })),
+                                    )
+                                  }),
                                 ),
+                            ),
+                          }).pipe(
+                            Effect.map(({ id, stored }) =>
+                              decorateMessageRef(id, effective, Option.getOrUndefined(stored)),
                             ),
                           ),
                         ),
@@ -2016,10 +2044,7 @@ export const zulipAdapter = (
       subscriptions: () =>
         boundHttp().pipe(
           Effect.flatMap((http) =>
-            http.get('/users/me/subscriptions', mySubscriptionsResponseSchema).pipe(
-              Effect.flatMap((res) =>
-                Effect.forEach(res.subscriptions, (row) => decodeChannelName(row.name)),
-              ),
+            readSubscribedChannels(http).pipe(
               Effect.mapError((cause) => new InboxError({ operation: 'subscribe', cause })),
             ),
           ),
@@ -2180,6 +2205,14 @@ export const zulipAdapter = (
             Effect.fork(buildDirectoryLookup()),
             SynchronizedRef.get(boundRef),
           ])
+          // History is read as the minter, so the seat's subscriptions come
+          // from its own rows: a wildcard notifies only the channel's
+          // subscribers, as live delivery's recipient set does.
+          const seatChannels = yield* Option.match(current, {
+            onNone: () => Effect.succeed(HashSet.empty<ChannelName>()),
+            onSome: (bound) =>
+              readSubscribedChannels(bound.http).pipe(Effect.map(HashSet.fromIterable)),
+          })
           // Catch-up has no cap of its own: a seat that was away for a week
           // has to be told everything it missed, however many pages that
           // spans.
@@ -2225,7 +2258,19 @@ export const zulipAdapter = (
                 messageRefCache.set(ev.message.ref.id, ev.message.ref)
               }
             }
-            out.push(...mapped)
+            out.push(
+              ...mapped.filter(
+                (ev) =>
+                  ev.kind !== 'mention-received' ||
+                  Option.exists(current, (bound) =>
+                    notifiesIdentity(
+                      ev.mentions,
+                      bound.identity.id,
+                      HashSet.has(seatChannels, ev.message.ref.channel.name),
+                    ),
+                  ),
+              ),
+            )
           }
           return out
         }).pipe(Effect.mapError((cause) => new InboxError({ operation: 'replay', cause })))
@@ -2282,7 +2327,10 @@ export const zulipAdapter = (
                     const threadKey = (channel: ChannelName, thread: ThreadName) =>
                       Data.struct({ channel, thread })
                     let seen = HashMap.empty<ReturnType<typeof threadKey>, RecentThread>()
-                    for (const m of res.messages) {
+                    // Zulip returns the page oldest-first; walk it newest-first so
+                    // the first post seen per thread is its latest.
+                    const newestFirst = Arr.reverse(res.messages)
+                    for (const m of newestFirst) {
                       const channel = yield* decodeChannelName(m.display_recipient)
                       // Surface the clean thread name — a resolved topic's ✔
                       // prefix is a substrate detail, never crosses the port.

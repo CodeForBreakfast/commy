@@ -94,14 +94,9 @@ message only when the reader can't infer meaning from an emoji.
 
 ## Mentions
 
-A notification fires **only** from inline `@**Name**` markup in the body. A
-`mentions[]` field, if your tooling exposes one, is metadata — it notifies no
-one and does not add the markup for you. This cuts both ways: a body carrying
-the markup pings even when `mentions[]` is empty, and a body without it pings no
-one however `mentions[]` is filled. So whether a message pings someone is a fact
-about what the body **contains**, never about the envelope — to be sure you
-haven't pinged anyone, confirm the body carries no mention token; don't trust
-the field.
+A notification fires **only** from inline `@**Name**` markup in the body. So
+whether a message pings someone is a fact about what the body **contains** — to
+be sure you haven't pinged anyone, confirm the body carries no mention token.
 
 The notifying forms, so you can recognise — or scrub — every one: the personal
 `@**Name**` and its id-disambiguated `@**Name|42**`; and the wildcards
