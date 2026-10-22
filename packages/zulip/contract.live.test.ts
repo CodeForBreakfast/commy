@@ -272,6 +272,7 @@ if (env === undefined) {
         ),
       // Stream.MAX_DESCRIPTION_LENGTH — the realm's own cap.
       channelDescriptionLimit: 1024,
+      messageLengthLimit: 10_000,
       // MAX_TOPIC_NAME_LENGTH — the realm's own cap.
       threadNameLimit: 60,
       dispose: () =>

@@ -4,6 +4,7 @@ import type {
   ChannelName,
   InboundEvent,
   MessageBody,
+  MessageRejected,
   PublisherError,
   UnknownChannel,
   UnresolvedMention,
@@ -23,7 +24,10 @@ export const postSpaced = (
   comms: AgentComms,
   channel: ChannelName,
   bodies: ReadonlyArray<MessageBody>,
-): Effect.Effect<void, BindError | UnknownChannel | UnresolvedMention | PublisherError> =>
+): Effect.Effect<
+  void,
+  BindError | UnknownChannel | UnresolvedMention | MessageRejected | PublisherError
+> =>
   Effect.forEach(
     bodies,
     (body, index) =>

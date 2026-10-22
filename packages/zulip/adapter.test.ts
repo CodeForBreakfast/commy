@@ -23,6 +23,7 @@ import {
   IdentityError,
   MessageEditRefused,
   MessagePermalinkSchema,
+  MessageRejected,
   mentionedIdentities,
   PublisherError,
   ThreadPermalinkSchema,
@@ -753,6 +754,23 @@ const seedSendMessage = (stub: StubHttpClient, id: number): Effect.Effect<void> 
     yield* stub.respond('POST', '/api/v1/messages', {
       body: { result: 'success', id },
     })
+    yield* seedMessageLimit(stub, 10_000)
+  })
+
+// Zulip clips a body past `max_message_length` and still answers success, so
+// the realm's limit is the only thing that tells an adapter a write is unsafe.
+// It is read from `/register`, the one place Zulip publishes it.
+const seedMessageLimit = (stub: StubHttpClient, limit: number): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    yield* stub.respond('POST', '/api/v1/register', {
+      body: {
+        result: 'success',
+        queue_id: 'limit-queue',
+        last_event_id: -1,
+        max_message_length: limit,
+      },
+    })
+    yield* stub.respond('DELETE', '/api/v1/events', { body: { result: 'success' } })
   })
 
 // What the realm reports for a sent message's topic. The send response omits
@@ -783,6 +801,35 @@ effectTest(
       expect(params.get('content')).toBe('hello world')
       expect(params.get('topic')).toBe('(no topic)')
     }),
+)
+
+// Zulip counts code points, not UTF-16 units: an emoji is one character to it.
+effectTest('publisher.post counts the realm limit in code points', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 42)
+    yield* seedMessageLimit(stub, 10)
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('😀'.repeat(10)))
+    const err = yield* Effect.flip(
+      adapter.publisher.post(generalChannel.name, decodeMessageBodySync('😀'.repeat(11))),
+    )
+    expect(err).toBeInstanceOf(MessageRejected)
+  }),
+)
+
+effectTest('publisher.post reads the realm limit once, not per post', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 42)
+    const adapter = yield* buildAdapter(stub)
+    yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('one'))
+    yield* adapter.publisher.post(generalChannel.name, decodeMessageBodySync('two'))
+    const reads = (yield* stub.captured).filter(
+      (r) => r.method === 'POST' && r.url.pathname === '/api/v1/register',
+    )
+    expect(reads).toHaveLength(1)
+  }),
 )
 
 effectTest(
@@ -1057,6 +1104,7 @@ effectTest(
   () =>
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
+      yield* seedMessageLimit(stub, 10_000)
       yield* stub.respond('GET', '/api/v1/streams', { body: { result: 'success', streams: [] } })
       const adapter = yield* buildAdapter(stub)
       const error = yield* Effect.flip(
@@ -1074,6 +1122,7 @@ effectTest(
 effectTest('publisher.post does not issue POST /messages when pre-flight rejects the channel', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
+    yield* seedMessageLimit(stub, 10_000)
     yield* stub.respond('GET', '/api/v1/streams', { body: { result: 'success', streams: [] } })
     yield* stub.respond('POST', '/api/v1/messages', { body: { result: 'success', id: 999 } })
     const adapter = yield* buildAdapter(stub)
@@ -1099,6 +1148,7 @@ effectTest(
   () =>
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
+      yield* seedMessageLimit(stub, 10_000)
       yield* stub.respond('GET', '/api/v1/streams', {
         body: { result: 'success', streams: [{ stream_id: 1234, name: 'general' }] },
       })
@@ -1299,6 +1349,7 @@ effectTest('publisher.post skips the directory fetch when the body has no mentio
 effectTest('publisher.edit PATCHes /messages/{id} with the new content', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
+    yield* seedMessageLimit(stub, 10_000)
     yield* stub.respond('PATCH', '/api/v1/messages/42', { body: { result: 'success' } })
     const adapter = yield* buildAdapter(stub)
     const target: MessageRef = {
@@ -1351,6 +1402,7 @@ effectTest(
   () =>
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
+      yield* seedMessageLimit(stub, 10_000)
       yield* stub.respond('PATCH', '/api/v1/messages/42', {
         body: {
           result: 'error',
@@ -1382,6 +1434,7 @@ effectTest(
   () =>
     Effect.gen(function* () {
       const stub = yield* makeStubHttpClient
+      yield* seedMessageLimit(stub, 10_000)
       yield* stub.respond('PATCH', '/api/v1/messages/42', {
         body: {
           result: 'error',
@@ -2753,6 +2806,7 @@ effectTest(
 effectTest('publisher.post after acquire uses BOUND bot creds, not minter creds', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
+    yield* seedMessageLimit(stub, 10_000)
     yield* stub.respond('GET', '/api/v1/streams', {
       body: {
         result: 'success',

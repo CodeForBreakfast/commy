@@ -143,6 +143,14 @@ export interface ContractEnv {
    */
   readonly channelDescriptionLimit: number
   /**
+   * Longest message body this substrate stores whole, in characters. The
+   * over-length tests build their input from it, so the contract asserts that
+   * a substrate refuses what it cannot hold and never what the cap happens to
+   * be. Zulip reports its realm's `max_message_length`, memory its configured
+   * limit.
+   */
+  readonly messageLengthLimit: number
+  /**
    * Longest thread name this substrate keeps, in characters. A substrate that
    * cuts a longer name short must return the name it kept from `post`; the
    * thread-name test builds its over-length input from this limit.

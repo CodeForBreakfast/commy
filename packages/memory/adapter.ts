@@ -73,6 +73,7 @@ import {
   Mention,
   MessageEditRefused,
   MessagePermalinkSchema,
+  MessageRejected,
   mentionsIdentity,
   notifiesIdentity,
   PublisherError,
@@ -186,6 +187,13 @@ export interface MemoryAdapterConfig {
    */
   readonly channelDescriptionLimit?: number
   /**
+   * Longest message body this substrate will store, in characters. A longer
+   * body is refused with `MessageRejected` on post and edit rather than stored
+   * clipped. Like the description limit, the default is memory's own number
+   * and not Zulip's.
+   */
+  readonly messageLengthLimit?: number
+  /**
    * Longest thread name this substrate keeps, in characters. A longer name is
    * stored cut to this length, as a real substrate cuts an over-long topic, and
    * the returned ref carries the name that was kept. Like the description
@@ -201,6 +209,7 @@ export type MemorySeatConfig = Pick<
 >
 
 const DEFAULT_CHANNEL_DESCRIPTION_LIMIT = 512
+const DEFAULT_MESSAGE_LENGTH_LIMIT = 4096
 const DEFAULT_THREAD_NAME_LIMIT = 48
 
 export type MemoryAdapter = AgentComms & {
@@ -309,6 +318,7 @@ const makeRealm = (config: MemoryAdapterConfig) =>
     const descriptionsByChannel = new Map<string, ChannelDescription>()
     const descriptionLimit = config.channelDescriptionLimit ?? DEFAULT_CHANNEL_DESCRIPTION_LIMIT
     const threadNameLimit = config.threadNameLimit ?? DEFAULT_THREAD_NAME_LIMIT
+    const messageLimit = config.messageLengthLimit ?? DEFAULT_MESSAGE_LENGTH_LIMIT
     const nextChannelId = yield* Ref.make(1)
     const nextIdentityId = yield* Ref.make(1)
     const nextMessageId = yield* Ref.make(1)
@@ -336,6 +346,7 @@ const makeRealm = (config: MemoryAdapterConfig) =>
       descriptionsByChannel,
       descriptionLimit,
       threadNameLimit,
+      messageLimit,
       nextChannelId,
       nextIdentityId,
       nextMessageId,
@@ -367,6 +378,7 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
       descriptionsByChannel,
       descriptionLimit,
       threadNameLimit,
+      messageLimit,
       nextChannelId,
       nextIdentityId,
       nextMessageId,
@@ -375,6 +387,19 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
       notificationBot,
       seats,
     } = realm
+    const refuseOverlongBody = (
+      operation: 'post' | 'edit',
+      body: MessageBodyType,
+    ): Effect.Effect<void, MessageRejected> =>
+      body.length > messageLimit
+        ? Effect.fail(
+            new MessageRejected({
+              operation,
+              substrate: 'memory',
+              detail: `message is too long (limit: ${messageLimit} characters, got ${body.length})`,
+            }),
+          )
+        : Effect.void
     const isThreadResolved = (channelId: string, threadName: string): boolean =>
       resolvedThreadsByChannel.get(channelId)?.has(threadName) ?? false
     const withThreadResolution = (stored: StoredMessage): StoredMessage =>
@@ -861,6 +886,7 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
         Effect.gen(function* () {
           const self = yield* requireBound()
           const channelRef = yield* resolveChannel(channel)
+          yield* refuseOverlongBody('post', body)
           yield* refuseDeadMentions('post', body)
           const thread =
             opts?.thread === undefined
@@ -875,6 +901,7 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
       edit: (message, body) =>
         Effect.gen(function* () {
           const self = yield* requireBound()
+          yield* refuseOverlongBody('edit', body)
           const stored = messagesById.get(message.id)
           if (stored === undefined) {
             return yield* new PublisherError({

@@ -13,6 +13,7 @@ import {
   MessageEditRefused,
   MessagePermalinkSchema,
   type MessageRef,
+  MessageRejected,
   mentionedIdentities,
   PublisherError,
   UnknownChannel,
@@ -34,6 +35,19 @@ const drainUntilSilent = (queue: Queue.Queue<InboundEvent>): Effect.Effect<void>
   )
 
 export const publisherContract = (env: () => ContractEnv): void => {
+  test('publisher.edit refuses a body longer than the substrate stores', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const original = decodeMessageBodySync('short')
+        const ref = yield* env().comms.publisher.post(channel.name, original)
+        const tooLong = decodeMessageBodySync('x'.repeat(env().messageLengthLimit + 1))
+        const error = yield* Effect.flip(env().comms.publisher.edit(ref, tooLong))
+        expect(error).toBeInstanceOf(MessageRejected)
+        const messages = yield* env().comms.history.readChannel(channel.name, { limit: 10 })
+        expect(messages.map((m) => m.body)).toEqual([original])
+      }),
+    ))
   // Resolution is a status distinct from the thread name: the name a consumer
   // addresses stays stable, and the flag surfaces on read as
   // ObservedThread.resolved. These hold on both substrates — memory tracks the

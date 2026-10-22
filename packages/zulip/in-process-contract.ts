@@ -17,7 +17,12 @@ import type { AttachmentContractFactory } from '@commy/testing/contract'
 import { HttpClient } from '@effect/platform'
 import { Array as Arr, Effect, Option, Redacted } from 'effect'
 import { type ZulipAdapter, zulipAdapter } from './adapter.ts'
-import { CHANNEL_DESCRIPTION_LIMIT, makeInProcessRealm, TOPIC_LIMIT } from './in-process-realm.ts'
+import {
+  CHANNEL_DESCRIPTION_LIMIT,
+  MESSAGE_LENGTH_LIMIT,
+  makeInProcessRealm,
+  TOPIC_LIMIT,
+} from './in-process-realm.ts'
 import { permalinkBase, withChannelPermalink } from './permalink.ts'
 
 const SELF_NAME = decodeBotNameSync('contract-self')
@@ -96,6 +101,7 @@ export const inProcessContractFactory: AttachmentContractFactory = async () => {
         .currentIdentity()
         .pipe(Effect.flatMap((me) => realm.revokeApiKey(Number(me.id)))),
     channelDescriptionLimit: CHANNEL_DESCRIPTION_LIMIT,
+    messageLengthLimit: MESSAGE_LENGTH_LIMIT,
     threadNameLimit: TOPIC_LIMIT,
     // The realm and its adapters hold nothing outside the heap, so there is
     // nothing to tear down.
