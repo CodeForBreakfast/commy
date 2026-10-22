@@ -268,6 +268,13 @@ const classifyEnvelope = (
   })
 }
 
+/**
+ * Whether the realm refused the request's credential itself, as opposed to
+ * refusing the request. Zulip answers an invalidated or deactivated bot key
+ * with 401 and no other request failure.
+ */
+export const isCredentialRejected = (err: ZulipApiError): boolean => err.status === 401
+
 const TRANSPORT_FAILURE_STATUS = 0
 
 /**

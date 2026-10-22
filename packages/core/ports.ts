@@ -506,6 +506,15 @@ export interface IdentityPort {
    */
   currentIdentity(): Effect.Effect<Identity, never>
   /**
+   * Whether the realm has refused the bound credential as invalid since this
+   * adapter bound it. Passive: reads what earlier calls already learned and
+   * never touches the realm or mints. A rejected credential stays rejected
+   * until `release()` and a fresh `acquire`, because nothing else replaces
+   * it. Always `false` on a substrate with no credentials to invalidate, and
+   * `false` before any bind.
+   */
+  credentialRejected(): Effect.Effect<boolean, never>
+  /**
    * Bind the adapter to an identity with the given display name. Per
    * substrate:
    *   - Memory: registers the identity in-process (always succeeds,

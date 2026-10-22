@@ -388,6 +388,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
 
     const identity: IdentityPort = {
       currentIdentity: () => readBound(),
+      credentialRejected: () => Effect.succeed(false),
       acquire: (name) =>
         Ref.get(bound).pipe(
           Effect.flatMap(

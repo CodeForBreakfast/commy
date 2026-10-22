@@ -107,6 +107,7 @@ import {
   ApiKey,
   BotEmail,
   decodeUserUploadPath,
+  isCredentialRejected,
   isTransientZulipError,
   makeZulipHttp,
   ZulipApiError,
@@ -624,6 +625,26 @@ export const zulipAdapter = (
       ),
     )
     const boundRef = yield* SynchronizedRef.make<Option.Option<BoundState>>(Option.none())
+    const credentialRejectedRef = yield* Ref.make(false)
+
+    // Every call the bound credential makes, the events-queue poll included,
+    // goes out through this, so the first refusal of the key itself is
+    // recorded wherever it happens rather than only when a write loses.
+    const recordRejection = <A, E, R>(call: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+      call.pipe(
+        Effect.tapError((e) =>
+          e instanceof ZulipApiError && isCredentialRejected(e)
+            ? Ref.set(credentialRejectedRef, true)
+            : Effect.void,
+        ),
+      )
+    const watchBoundHttp = (inner: BotHttp): BotHttp => ({
+      get: (path, schema, params) => recordRejection(inner.get(path, schema, params)),
+      post: (path, schema, body) => recordRejection(inner.post(path, schema, body)),
+      patch: (path, schema, body) => recordRejection(inner.patch(path, schema, body)),
+      delete: (path, schema, body) => recordRejection(inner.delete(path, schema, body)),
+      uploadRaw: (filename, data) => recordRejection(inner.uploadRaw(filename, data)),
+    })
 
     const requireBound = (): Effect.Effect<BoundState> =>
       SynchronizedRef.get(boundRef).pipe(
@@ -1157,6 +1178,7 @@ export const zulipAdapter = (
       // need a coherent error — dying matches the port
       // contract of "throws when unbound".
       currentIdentity: () => requireBound().pipe(Effect.map((b) => b.identity)),
+      credentialRejected: () => Ref.get(credentialRejectedRef),
       // check-bound -> mint -> set is one atomic SynchronizedRef transition:
       // the effectful mint round-trip runs while the ref is locked, so two
       // concurrent acquires can never both observe `none` and double-mint.
@@ -1196,7 +1218,9 @@ export const zulipAdapter = (
                         config.hostHeader,
                       ),
                     ).pipe(Effect.provideService(HttpClient.HttpClient, httpClient))
-                    const http = wrapBotHttp(innerHttp, recipientDirectory, minted.userId)
+                    const http = watchBoundHttp(
+                      wrapBotHttp(innerHttp, recipientDirectory, minted.userId),
+                    )
                     const ident: Identity = {
                       id: yield* decodeIdentityId(String(minted.userId)),
                       name: yield* decodeDisplayName(name),
@@ -1216,6 +1240,7 @@ export const zulipAdapter = (
                       http,
                       origin: minted.origin,
                     }
+                    yield* Ref.set(credentialRejectedRef, false)
                     return [
                       { identity: ident, credentials, origin: minted.origin },
                       Option.some(next),
