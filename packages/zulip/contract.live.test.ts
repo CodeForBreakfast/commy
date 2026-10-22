@@ -246,6 +246,12 @@ if (env === undefined) {
       Effect.sleep(MINTER_PACE).pipe(Effect.zipRight(adapter.identity.acquire(SELF_NAME))),
     )
 
+    // The self bot is persistent, so subscriptions from earlier tests and runs
+    // outlive them and would break the tests that assert the exact set.
+    const held = await Effect.runPromise(adapter.inbox.subscriptions().pipe(Effect.orDie))
+    for (const channel of held)
+      await Effect.runPromise(adapter.inbox.unsubscribe(channel).pipe(Effect.orDie))
+
     return {
       comms: adapter,
       seedChannel: (name) => ensureStream(minter, `${ns}-${name}`),
