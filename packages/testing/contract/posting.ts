@@ -166,6 +166,49 @@ export const publisherPostingContract = (env: () => ContractEnv): void => {
         expect(findByBody(messages, body)).toBeUndefined()
       }),
     ))
+  test('publisher.post accepts a name|id mention of an agent and reports that agent', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const alice = yield* env().seedAgent('alice')
+        const body = decodeMessageBodySync(`@**${alice.name}|${alice.id}** wake up`)
+        yield* env().comms.publisher.post(channel.name, body)
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        const found = messages.find((m) => m.body === body)
+        expect(mentionedIdentities(found?.mentions ?? []).map((m) => m.id)).toEqual([alice.id])
+      }),
+    ))
+  test('publisher.post refuses a name|id mention of a deactivated agent, and posts nothing', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const deactivateAgent = env().deactivateAgent
+        if (deactivateAgent === undefined) return
+        const gone = yield* env().seedAgent('alice')
+        yield* deactivateAgent(gone)
+        const channel = yield* env().seedChannel('lobby')
+        const token = `${gone.name}|${gone.id}`
+        const body = decodeMessageBodySync(`decision for @**${token}** to make`)
+        const error = yield* Effect.flip(env().comms.publisher.post(channel.name, body))
+        expect(error).toBeInstanceOf(UnresolvedMention)
+        if (error instanceof UnresolvedMention) expect(error.tokens).toEqual([token])
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        expect(findByBody(messages, body)).toBeUndefined()
+      }),
+    ))
+  test('publisher.post refuses a name|id mention whose name is not the named agent', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const alice = yield* env().seedAgent('alice')
+        const bob = yield* env().seedAgent('bob')
+        const token = `${bob.name}|${alice.id}`
+        const error = yield* Effect.flip(
+          env().comms.publisher.post(channel.name, decodeMessageBodySync(`@**${token}** hi`)),
+        )
+        expect(error).toBeInstanceOf(UnresolvedMention)
+        if (error instanceof UnresolvedMention) expect(error.tokens).toEqual([token])
+      }),
+    ))
   test('publisher.post refusing dead mentions names each dead token once and no live name', () =>
     Effect.runPromise(
       Effect.gen(function* () {
