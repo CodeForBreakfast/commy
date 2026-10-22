@@ -69,6 +69,7 @@ import {
   decodeTimestamp,
   type Emoji,
   HistoryError,
+  MessageEditRefused,
   MessagePermalinkSchema,
   mentionsIdentity,
   PublisherError,
@@ -640,27 +641,29 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
       // is a non-fatal domain failure surfaced as a typed PublisherError,
       // mirroring the Zulip adapter's PATCH-on-unknown-id → PublisherError.
       edit: (message, body) =>
-        requireBound().pipe(
-          Effect.flatMap(() => {
-            const stored = messagesById.get(message.id)
-            if (stored === undefined) {
-              return Effect.fail(
-                new PublisherError({
-                  operation: 'edit',
-                  cause: new Error(`memoryAdapter: no message ${message.id} to edit`),
-                }),
-              )
-            }
-            const updated: StoredMessage = { ...stored, body }
-            messagesById.set(message.id, updated)
-            const bucket = messagesByChannel.get(stored.ref.channel.id)
-            if (bucket !== undefined) {
-              const idx = bucket.indexOf(stored)
-              if (idx !== -1) bucket[idx] = updated
-            }
-            return Effect.void
-          }),
-        ),
+        Effect.gen(function* () {
+          const self = yield* requireBound()
+          const stored = messagesById.get(message.id)
+          if (stored === undefined) {
+            return yield* new PublisherError({
+              operation: 'edit',
+              cause: new Error(`memoryAdapter: no message ${message.id} to edit`),
+            })
+          }
+          if (stored.sender.id !== self.id) {
+            return yield* new MessageEditRefused({
+              reason: 'not-original-sender',
+              cause: new Error(`memoryAdapter: message ${message.id} was sent by someone else`),
+            })
+          }
+          const updated: StoredMessage = { ...stored, body }
+          messagesById.set(message.id, updated)
+          const bucket = messagesByChannel.get(stored.ref.channel.id)
+          if (bucket !== undefined) {
+            const idx = bucket.indexOf(stored)
+            if (idx !== -1) bucket[idx] = updated
+          }
+        }),
       // The in-memory store has no realm-wide editing switch to turn off, so
       // editing is always available — the honest answer for a substrate whose
       // only edit refusals are per-message.
