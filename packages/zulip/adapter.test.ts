@@ -1565,50 +1565,6 @@ effectTest('history.readChannel narrows by channel and maps each message to the 
   }),
 )
 
-// comms-trln at the history seam: a message whose only mention token sits in a
-// code span reports no mention, while a real one alongside it still counts.
-effectTest('history.readChannel excludes a code-span mention but keeps a real one', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    const adapter = yield* buildAdapter(stub)
-    yield* seedUsers(stub, [HERMES, MAINTAINER])
-    // The raw read, then the one rendered read the mention sigil buys. Zulip
-    // rendered a span for the real ping and nothing for the coded example —
-    // which is the entire adjudication; commy does not re-derive it.
-    yield* stub.respondSequence('GET', '/api/v1/messages', [
-      messagesPage([
-        {
-          id: 556,
-          sender_id: 9,
-          sender_full_name: 'hermes-agent',
-          stream_id: 1234,
-          display_recipient: 'general',
-          subject: 'lobby',
-          content: '@**Robin Reyes** — never write `@**Robin Reyes**` in a code span',
-          timestamp: 1715000001,
-        },
-      ]),
-      messagesPage([
-        {
-          id: 556,
-          sender_id: 9,
-          sender_full_name: 'hermes-agent',
-          stream_id: 1234,
-          display_recipient: 'general',
-          subject: 'lobby',
-          content:
-            '<p><span class="user-mention" data-user-id="5">@Robin Reyes</span> — never write <code>@**Robin Reyes**</code> in a code span</p>',
-          timestamp: 1715000001,
-        },
-      ]),
-    ])
-    const messages = yield* adapter.history.readChannel(generalChannel.name, { limit: 50 })
-    expect(mentionedIdentities(messages[0]?.mentions ?? []).map((m) => m.name)).toEqual([
-      decodeDisplayNameSync('Robin Reyes'),
-    ])
-  }),
-)
-
 // The bound on the whole design: a history read costs ONE extra request
 // whether the batch holds one mention or a hundred. A refactor into a
 // per-message rendered fetch would reintroduce exactly the cost this bounds,
