@@ -35,7 +35,8 @@
     "undici": "^7.30.0",
     "hono": "^4.13.13",
     "ws": "^8.22.0",
-    "fast-uri": "^4.2.2"
+    "fast-uri": "^4.2.2",
+    "ip-address": "^10.7.4"
   },
   "devDependencies": {
     "@commy/testing": "workspace:*",
