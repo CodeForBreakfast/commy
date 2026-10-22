@@ -594,7 +594,17 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
                             ).pipe(
                               Effect.tap((winner) =>
                                 winner === acquired
-                                  ? Ref.update(subscriptions, HashSet.add<SubKey>(MENTIONS_KEY))
+                                  ? Effect.all(
+                                      [
+                                        Ref.update(
+                                          subscriptions,
+                                          HashSet.add<SubKey>(MENTIONS_KEY),
+                                        ),
+                                        // As on Zulip, acquiring a deactivated agent's name reactivates it.
+                                        Effect.sync(() => deactivatedIdentities.delete(ident.id)),
+                                      ],
+                                      { discard: true },
+                                    )
                                   : Effect.void,
                               ),
                             )
