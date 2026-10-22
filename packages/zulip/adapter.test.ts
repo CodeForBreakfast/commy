@@ -1204,6 +1204,58 @@ effectTest(
     }),
 )
 
+const postMention = (adapter: ZulipAdapter, body: string) =>
+  adapter.publisher.post(generalChannel.name, decodeMessageBodySync(body))
+
+effectTest('publisher.post reads the user list once for repeated live mentions', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 205)
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, PINNED])
+    yield* postMention(adapter, '@**pinned-bot** one')
+    yield* postMention(adapter, '@**pinned-bot** two')
+    yield* postMention(adapter, '@**pinned-bot** three')
+    expect(yield* userListReads(stub)).toHaveLength(2) // one at acquire, one for all three posts
+  }),
+)
+
+effectTest(
+  'publisher.post reads the user list again once the cached one has expired',
+  () =>
+    Effect.gen(function* () {
+      const stub = yield* makeStubHttpClient
+      yield* seedSendMessage(stub, 206)
+      const adapter = yield* buildAdapter(stub)
+      yield* seedUsers(stub, [HERMES, PINNED])
+      yield* postMention(adapter, '@**pinned-bot** one')
+      yield* TestClock.adjust('5 minutes')
+      yield* postMention(adapter, '@**pinned-bot** two')
+      expect(yield* userListReads(stub)).toHaveLength(3)
+    }),
+  { layer: TestContext.TestContext },
+)
+
+effectTest('publisher.post delivers a mention of a member renamed since the list was cached', () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    yield* seedSendMessage(stub, 207)
+    const adapter = yield* buildAdapter(stub)
+    yield* seedUsers(stub, [HERMES, PINNED])
+    yield* postMention(adapter, '@**pinned-bot** one')
+    yield* seedUsers(stub, [HERMES, { ...PINNED, full_name: 'renamed-bot' }])
+    yield* seedRender(
+      stub,
+      '<p><span class="user-mention" data-user-id="777">@renamed-bot</span></p>',
+    )
+    yield* postMention(adapter, '@**renamed-bot** two')
+    const posted = yield* stub.captured.pipe(
+      Effect.map((reqs) => reqs.filter((r) => r.url.pathname === '/api/v1/messages')),
+    )
+    expect(posted.filter((r) => r.method === 'POST')).toHaveLength(2)
+  }),
+)
+
 effectTest('history.readChannel names a sender the cached user list has not caught up with', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
