@@ -765,6 +765,19 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
       return out
     }
 
+    const requireStoredMessage = (
+      operation: 'react' | 'unreact',
+      messageId: string,
+    ): Effect.Effect<void, PublisherError> =>
+      messagesById.has(messageId)
+        ? Effect.void
+        : Effect.fail(
+            new PublisherError({
+              operation,
+              cause: new Error(`memoryAdapter: no message ${messageId} to ${operation}`),
+            }),
+          )
+
     const reactionsForMessage = (messageId: string): Map<Emoji, Set<string>> => {
       const existing = reactionsByMessage.get(messageId)
       if (existing !== undefined) return existing
@@ -915,31 +928,39 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
       // only edit refusals are per-message.
       editingAvailable: () => Effect.succeed(true),
       react: (message, emoji) =>
-        requireBound().pipe(
-          Effect.flatMap((self) => {
-            const byEmoji = reactionsForMessage(message.id)
-            const reactors = byEmoji.get(emoji) ?? new Set<string>()
-            reactors.add(self.id)
-            byEmoji.set(emoji, reactors)
-            return fanOutToSeats((seat) =>
-              seat.onReaction(message.id, 'reaction-added', emoji, self),
-            )
-          }),
-        ),
+        Effect.gen(function* () {
+          const self = yield* requireBound()
+          yield* requireStoredMessage('react', message.id)
+          const byEmoji = reactionsForMessage(message.id)
+          const reactors = byEmoji.get(emoji) ?? new Set<string>()
+          if (reactors.has(self.id)) {
+            return yield* new PublisherError({
+              operation: 'react',
+              cause: new Error(`memoryAdapter: already reacted ${emoji} on message ${message.id}`),
+            })
+          }
+          reactors.add(self.id)
+          byEmoji.set(emoji, reactors)
+          yield* fanOutToSeats((seat) => seat.onReaction(message.id, 'reaction-added', emoji, self))
+        }),
       unreact: (message, emoji) =>
-        requireBound().pipe(
-          Effect.flatMap((self) => {
-            const byEmoji = reactionsByMessage.get(message.id)
-            const reactors = byEmoji?.get(emoji)
-            if (reactors !== undefined) {
-              reactors.delete(self.id)
-              if (reactors.size === 0) byEmoji?.delete(emoji)
-            }
-            return fanOutToSeats((seat) =>
-              seat.onReaction(message.id, 'reaction-removed', emoji, self),
-            )
-          }),
-        ),
+        Effect.gen(function* () {
+          const self = yield* requireBound()
+          yield* requireStoredMessage('unreact', message.id)
+          const byEmoji = reactionsByMessage.get(message.id)
+          const reactors = byEmoji?.get(emoji)
+          if (reactors === undefined || !reactors.has(self.id)) {
+            return yield* new PublisherError({
+              operation: 'unreact',
+              cause: new Error(`memoryAdapter: no ${emoji} reaction to remove on ${message.id}`),
+            })
+          }
+          reactors.delete(self.id)
+          if (reactors.size === 0) byEmoji?.delete(emoji)
+          yield* fanOutToSeats((seat) =>
+            seat.onReaction(message.id, 'reaction-removed', emoji, self),
+          )
+        }),
       resolveThread: (channel, thread) => setThreadResolved(channel, thread, true),
       unresolveThread: (channel, thread) => setThreadResolved(channel, thread, false),
       setChannelDescription,

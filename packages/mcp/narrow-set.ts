@@ -28,6 +28,7 @@ import type { SubscribeIntent } from './subscribe-parser.ts'
 export interface NarrowSet {
   add(intent: SubscribeIntent): void
   remove(intent: SubscribeIntent): void
+  has(intent: SubscribeIntent): boolean
   /**
    * A receiving seat always holds an identity: the events queue is registered
    * against the seat's own principal, so an unbound seat owns no queue to poll
@@ -201,6 +202,7 @@ export const createNarrowSet = (): NarrowSet => {
       intents = withoutIntent(intents, key)
       if (recording) pending.push({ op: 'remove', key })
     },
+    has: (intent) => HashSet.has(intents, intentKey(intent)),
     size: () => HashSet.size(intents),
     intents: () => Arr.fromIterable(intents).map(keyToIntent),
     beginBuffering: () => {

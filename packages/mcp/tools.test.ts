@@ -9,6 +9,7 @@ import {
   decodeThreadNameSync,
   HistoryError,
   type IdentityError,
+  InboxError,
   type UnknownIdentity,
 } from '@commy/core/ports'
 import type { MemoryAdapterConfig } from '@commy/memory/adapter'
@@ -25,6 +26,7 @@ import type { NarrowSet } from './narrow-set.ts'
 import { createNarrowSet } from './narrow-set.ts'
 import type { BindOnDemand } from './session-binder.ts'
 import { binderFor, bindThrough, installBinder } from './session-binder.ts'
+import type { SubscribeIntent } from './subscribe-parser.ts'
 import type { ToolsCache } from './tools.ts'
 import { registerTools } from './tools.ts'
 
@@ -2233,6 +2235,116 @@ test('upload_file rejects a relative path', () =>
           }),
         )
         expect(error.message).toContain('absolute')
+      }),
+    ),
+  ))
+
+const rejectSubscribes = (adapter: MemoryAdapterRig): void => {
+  adapter.inbox.subscribe = () =>
+    Effect.fail(new InboxError({ operation: 'subscribe', cause: 'realm refused' }))
+}
+
+const callFails = (
+  rig: ConnectedRig,
+  params: { name: string; arguments: Record<string, unknown> },
+) =>
+  Effect.promise(() =>
+    rig.client.callTool(params).then(
+      (result) => result.isError === true,
+      () => true,
+    ),
+  )
+
+const homeRefundsIntent: SubscribeIntent = {
+  kind: 'thread',
+  channelName: decodeChannelNameSync('home'),
+  threadName: decodeThreadNameSync('refunds'),
+}
+
+test('a subscribe the substrate refuses errors and leaves no intent in the narrow set', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const adapter = yield* rigAdapter()
+        rejectSubscribes(adapter)
+        const deps = yield* buildDeps(adapter)
+        yield* adapter.seedChannel('home').pipe(Effect.orDie)
+        const rig = yield* mountAndConnect(adapter, deps)
+
+        expect(
+          yield* callFails(rig, { name: 'subscribe', arguments: { target: 'home/refunds' } }),
+        ).toBe(true)
+        expect(rig.narrowSet.intents()).toEqual([])
+      }),
+    ),
+  ))
+
+test('a refused re-subscribe keeps the intent an earlier subscribe established', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const adapter = yield* rigAdapter()
+        const deps = yield* buildDeps(adapter)
+        yield* adapter.seedChannel('home').pipe(Effect.orDie)
+        const rig = yield* mountAndConnect(adapter, deps)
+        const subscribe = { name: 'subscribe', arguments: { target: 'home/refunds' } }
+
+        expect(yield* callFails(rig, subscribe)).toBe(false)
+        rejectSubscribes(adapter)
+        expect(yield* callFails(rig, subscribe)).toBe(true)
+        expect(rig.narrowSet.intents()).toEqual([homeRefundsIntent])
+      }),
+    ),
+  ))
+
+test('a post whose sticky subscribe the substrate refuses leaves no intent in the narrow set', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const adapter = yield* rigAdapter()
+        rejectSubscribes(adapter)
+        const deps = yield* buildDeps(adapter)
+        const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+        const rig = yield* mountAndConnect(adapter, deps)
+        rig.cache.rememberChannel(channelRef)
+
+        expect(
+          yield* callFails(rig, {
+            name: 'post',
+            arguments: { channel_name: 'home', body: 'hello', thread: 'refunds' },
+          }),
+        ).toBe(true)
+        expect(rig.narrowSet.intents()).toEqual([])
+      }),
+    ),
+  ))
+
+test('a react whose sticky subscribe the substrate refuses leaves no intent in the narrow set', () =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const adapter = yield* rigAdapter()
+        const deps = yield* buildDeps(adapter)
+        const channelRef = yield* adapter.seedChannel('home').pipe(Effect.orDie)
+        const rig = yield* mountAndConnect(adapter, deps)
+        rig.cache.rememberChannel(channelRef)
+        const posted = yield* Effect.promise(() =>
+          rig.client.callTool({
+            name: 'post',
+            arguments: { channel_name: 'home', body: 'hello', thread: 'refunds' },
+          }),
+        )
+        const messageId = (posted.structuredContent as { message_id: string }).message_id
+        rig.narrowSet.remove(homeRefundsIntent)
+        rejectSubscribes(adapter)
+
+        expect(
+          yield* callFails(rig, {
+            name: 'react',
+            arguments: { message_id: messageId, emoji: 'tada' },
+          }),
+        ).toBe(true)
+        expect(rig.narrowSet.intents()).toEqual([])
       }),
     ),
   ))
