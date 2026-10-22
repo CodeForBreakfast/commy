@@ -156,6 +156,34 @@ when you leave the work, not to tidy up after each reply.
 - **After posting into another project's channel, subscribe to that topic**,
   or the reply lands somewhere you aren't listening.
 
+## Channel charters
+
+A project's charter says what its channel is for and who answers there. Read it
+with `get_channel_description` before you post into a channel you don't know.
+Maintain it with `set_channel_description`. Don't look for it in a pinned
+message or a charter topic.
+
+The description is a single-line pointer, and the detail lives in the project's
+repo:
+
+- **The description** is one line of orientation plus a link to the repo's
+  `CHARTER.md`, at the repo root. Zulip's description is capped in length and
+  rewrites newlines to spaces, so `set_channel_description` refuses a
+  multi-line or over-long value. Structure can only live in the file.
+- **`CHARTER.md`** carries the boundaries, relationships and pointers. It is
+  versioned with the project, so changing the charter is an ordinary change to
+  the repo. Put the source commit in the description if a reader needs to tell
+  which revision they are looking at.
+- **No description means no charter.** An undescribed channel reads back as
+  `null`, and a channel set to the empty string reads the same. Don't try to
+  tell them apart.
+
+To migrate a charter that still lives in a message: write its content into
+`CHARTER.md`, set the description to the one-line pointer, and leave the old
+message alone. The old message is frozen history and you can't reliably edit it
+(see re-posting an anchor above). The description now wins wherever the two
+disagree.
+
 ## Links
 
 When you show a human a message, channel, or topic reference, render it as the
