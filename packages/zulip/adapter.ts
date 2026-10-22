@@ -475,6 +475,7 @@ const senderMessagesResponseSchema = Schema.Struct({
 
 const RECENT_THREADS_DEFAULT_LIMIT = 10
 const RECENT_THREADS_FETCH_LIMIT = 50
+const OUTBOUND_DIRECTORY_TTL = Duration.minutes(1)
 const HISTORY_DEFAULT_LIMIT = 100
 
 /**
@@ -794,6 +795,16 @@ export const zulipAdapter = (
       ZulipApiError | ParseResult.ParseError
     > => fetchMembers().pipe(Effect.flatMap(directoryOf))
 
+    // Outbound mention checks run on a third of all posts, so they read the
+    // directory from a short-lived copy. A failed fetch is not kept.
+    const [recentDirectoryLookup, forgetDirectoryLookup] = yield* Effect.cachedInvalidateWithTTL(
+      buildDirectoryLookup(),
+      OUTBOUND_DIRECTORY_TTL,
+    )
+    const cachedDirectoryLookup = recentDirectoryLookup.pipe(
+      Effect.tapError(() => forgetDirectoryLookup),
+    )
+
     // Recipient directory shape consumed by bot-dm-guard — narrower than
     // the full DirectoryLookup so the wrapping helper stays decoupled.
     const recipientDirectory = (): Effect.Effect<
@@ -847,24 +858,36 @@ export const zulipAdapter = (
     // mention-free body — the common case — never pays for a directory fetch
     // onto the rate-limited realm. Only user tokens can be dead, so a body
     // whose only mentions are wildcards or groups skips the fetch too.
+    const deadMentionsAfterFreshRead = (body: string) =>
+      buildDirectoryLookup().pipe(
+        Effect.flatMap((directory) => {
+          const dead = unresolvedMentions(body, notifiableMentionDirectory(directory))
+          return Arr.isEmptyReadonlyArray(dead)
+            ? Effect.succeed(dead)
+            : renderedMentionIds(body).pipe(
+                Effect.flatMap(directory.cover),
+                Effect.map((covered) =>
+                  unresolvedMentions(body, notifiableMentionDirectory(covered)),
+                ),
+              )
+        }),
+      )
+
     const validateOutboundMentions = (
       operation: 'post' | 'edit',
       body: string,
     ): Effect.Effect<void, UnresolvedMention | ZulipApiError | ParseResult.ParseError> =>
       !mentionTokens(body).some(MentionToken.$is('UserToken'))
         ? Effect.void
-        : buildDirectoryLookup().pipe(
-            Effect.flatMap((directory) => {
-              const dead = unresolvedMentions(body, notifiableMentionDirectory(directory))
-              return Arr.isEmptyReadonlyArray(dead)
-                ? Effect.succeed(dead)
-                : renderedMentionIds(body).pipe(
-                    Effect.flatMap(directory.cover),
-                    Effect.map((covered) =>
-                      unresolvedMentions(body, notifiableMentionDirectory(covered)),
-                    ),
-                  )
-            }),
+        : cachedDirectoryLookup.pipe(
+            Effect.map((directory) =>
+              unresolvedMentions(body, notifiableMentionDirectory(directory)),
+            ),
+            // A mention the copy cannot place may name someone who joined,
+            // was renamed or was reactivated since it was taken.
+            Effect.filterOrElse(Arr.isEmptyReadonlyArray, () =>
+              forgetDirectoryLookup.pipe(Effect.zipRight(deadMentionsAfterFreshRead(body))),
+            ),
             Effect.flatMap((dead) =>
               Arr.isEmptyReadonlyArray(dead)
                 ? Effect.void
