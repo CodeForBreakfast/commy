@@ -234,6 +234,32 @@ export const publisherPostingContract = (env: () => ContractEnv): void => {
         if (error instanceof UnresolvedMention) expect(error.tokens).toEqual([token])
       }),
     ))
+  test('publisher.post accepts a plain mention of an agent by a case variant of its name and reports that agent', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const alice = yield* env().seedAgent('alice')
+        const body = decodeMessageBodySync(`@**${String(alice.name).toUpperCase()}** wake up`)
+        yield* env().comms.publisher.post(channel.name, body)
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        const found = messages.find((m) => m.body === body)
+        expect(mentionedIdentities(found?.mentions ?? []).map((m) => m.id)).toEqual([alice.id])
+      }),
+    ))
+  test('publisher.post accepts a plain mention of a human by a case variant of their name and reports them', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const seedHuman = env().seedHuman
+        if (seedHuman === undefined) return
+        const channel = yield* env().seedChannel('lobby')
+        const human = yield* seedHuman('Alice Example')
+        const body = decodeMessageBodySync(`@**${String(human.name).toLowerCase()}** please decide`)
+        yield* env().comms.publisher.post(channel.name, body)
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        const found = messages.find((m) => m.body === body)
+        expect(mentionedIdentities(found?.mentions ?? []).map((m) => m.id)).toEqual([human.id])
+      }),
+    ))
   test('publisher.post refusing dead mentions names each dead token once and no live name', () =>
     Effect.runPromise(
       Effect.gen(function* () {

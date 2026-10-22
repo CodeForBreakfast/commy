@@ -69,7 +69,7 @@ const MAINTAINER: Identity = {
 const directoryFor = (...identities: ReadonlyArray<Identity>): DirectoryLookup => {
   const directory: DirectoryLookup = {
     byId: new Map(identities.map((i) => [Number(i.id), i])),
-    byName: new Map(identities.map((i) => [i.name, i])),
+    byName: new Map(identities.map((i) => [i.name.toLowerCase(), i])),
     cover: () => Effect.succeed(directory),
   }
   return directory
