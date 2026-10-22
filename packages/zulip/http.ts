@@ -6,6 +6,7 @@ import {
   Effect,
   Either,
   Encoding,
+  Equal,
   Option,
   type ParseResult,
   Schedule,
@@ -119,8 +120,31 @@ const decodeEnvelope = Schema.decodeUnknownEither(Schema.parseJson(envelopeSchem
 export type ZulipParamValue = string | number | boolean
 export type ZulipParams = Readonly<Record<string, ZulipParamValue>>
 
+const isPlainSegment = (segment: string): boolean =>
+  Either.match(Encoding.decodeUriComponent(segment), {
+    onLeft: () => false,
+    onRight: (name) => !/[/\\]/.test(name),
+  })
+
+const decodePath = (path: string): Option.Option<string> =>
+  Either.getRight(Encoding.decodeUriComponent(path))
+
+// The HTTP client resolves dot segments, their percent-encoded forms and
+// backslashes before it sends a request, so a path it would rewrite can land
+// outside /user_uploads/ while still starting with it.
+const isPlainPath = (raw: string): boolean => {
+  const written = decodePath(raw)
+  const sent = Option.fromNullable(URL.parse(raw, 'http://realm.invalid')).pipe(
+    Option.flatMap((url) => decodePath(url.pathname)),
+  )
+  return (
+    Option.isSome(written) && Equal.equals(written, sent) && raw.split('/').every(isPlainSegment)
+  )
+}
+
 export const UserUploadPathSchema = Schema.NonEmptyString.pipe(
   Schema.pattern(/^\/user_uploads\//),
+  Schema.filter(isPlainPath, { message: () => 'a plain path under /user_uploads/' }),
   Schema.brand('UserUploadPath'),
 )
 

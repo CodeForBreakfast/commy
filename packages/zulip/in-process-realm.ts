@@ -581,7 +581,16 @@ const isResolved = (topic: string): boolean => topic.startsWith(RESOLVED_TOPIC_P
 const unresolvedName = (topic: string): string =>
   isResolved(topic) ? topic.slice(RESOLVED_TOPIC_PREFIX.length) : topic
 
-const SAFE_FILENAME = /[^A-Za-z0-9._-]/g
+// This follows Zulip's sanitize_name. Unicode word characters survive, so a
+// stored path can hold characters that a URL percent-encodes.
+const sanitizeUploadName = (name: string): string => {
+  const value = name
+    .normalize('NFKC')
+    .replace(/[^\p{L}\p{N}_\s.-]/gu, '')
+    .trim()
+    .replace(/[-\s]+/gu, '-')
+  return value === '' || value === '.' || value === '..' ? 'uploaded-file' : value
+}
 
 export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(function* () {
   const serial = yield* Ref.make(0)
@@ -1233,7 +1242,7 @@ export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(func
         Effect.gen(function* () {
           if (Option.isNone(call.file)) return yield* refuse('You must specify a file to upload')
           const file = call.file.value
-          const filename = file.filename.replace(SAFE_FILENAME, '-') || 'file'
+          const filename = sanitizeUploadName(file.filename)
           const url = `/user_uploads/2/${yield* nextId}/${filename}`
           yield* SubscriptionRef.update(stateRef, (s) => ({
             ...s,
@@ -1292,6 +1301,10 @@ export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(func
   const serve = (web: Request): Effect.Effect<Response> =>
     Effect.gen(function* () {
       const url = new URL(web.url)
+      const pathname = Either.getOrElse(
+        Encoding.decodeUriComponent(url.pathname),
+        () => url.pathname,
+      )
       const contentType = web.headers.get('content-type') ?? ''
       const multipart = contentType.startsWith('multipart/form-data')
       const file = multipart ? yield* firstFile(web) : Option.none()
@@ -1301,10 +1314,10 @@ export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(func
       const state = yield* SubscriptionRef.get(stateRef)
       return yield* Effect.gen(function* () {
         const route = yield* Either.fromOption(
-          Arr.findFirst(routes, (r) => r.method === web.method && r.path.test(url.pathname)),
+          Arr.findFirst(routes, (r) => r.method === web.method && r.path.test(pathname)),
           () =>
             refusal(
-              `in-process realm has no handler for ${web.method} ${url.pathname}`,
+              `in-process realm has no handler for ${web.method} ${pathname}`,
               'NOT_FOUND',
               404,
             ),
@@ -1313,7 +1326,7 @@ export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(func
         return yield* route.handle({
           caller,
           params,
-          path: (route.path.exec(url.pathname) ?? []).slice(1),
+          path: (route.path.exec(pathname) ?? []).slice(1),
           file,
         })
       }).pipe(Effect.catchTag('RealmRefusal', (r) => Effect.succeed(refusalResponse(r))))
