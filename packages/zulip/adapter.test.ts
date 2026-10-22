@@ -2545,7 +2545,7 @@ const decodeBasicAuth = (header: string | null): { email: string; apiKey: string
 
 const minterAuth = { email: 'minter@example.com', apiKey: 'minter-key' }
 
-effectTest('history.readChannel runs pre-acquire and routes via minter creds', () =>
+effectTest('history.readChannel routes via minter creds before acquire', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedUsers(stub, [HERMES, MAINTAINER])
