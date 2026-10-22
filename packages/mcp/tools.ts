@@ -360,20 +360,6 @@ const reconstructMessageRef = (
     return { id, channel, thread: Option.none(), permalink: yield* decodeMessagePermalink(id) }
   })
 
-const resolveMentions = (
-  cache: InternalCache,
-  mentionIds: ReadonlyArray<string>,
-): Effect.Effect<ReadonlyArray<Identity>, UnknownIdentityError | ParseResult.ParseError> =>
-  Effect.forEach(mentionIds, (raw) =>
-    Effect.gen(function* () {
-      const identity = cache.identityById.get(yield* decodeIdentityId(raw))
-      if (identity === undefined) {
-        return yield* new UnknownIdentityError({ id: raw })
-      }
-      return identity
-    }),
-  )
-
 const encodeThreadFacet = Schema.encode(Schema.OptionFromNullOr(ObservedThreadSchema))
 const encodeChannel = Schema.encode(ChannelRefSchema)
 const encodeMessagePermalink = Schema.encode(MessagePermalinkSchema)
@@ -481,7 +467,6 @@ const PostArgs = Schema.Struct({
   channel_name: Schema.String,
   body: Schema.String,
   thread: Schema.optional(Schema.String),
-  mentions: Schema.optional(Schema.Array(Schema.String)),
   reply_to: Schema.optional(Schema.String),
 })
 const EditMessageArgs = Schema.Struct({
@@ -746,7 +731,7 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
     {
       name: 'post',
       description:
-        'Post a message to a channel by name. Optional thread (topic), mentions (identity ids the bot has seen), and reply_to (message id). To ping someone on Zulip, write the @**Name** markup inline in body where you want it rendered — the mentions array is notification metadata only and does not modify body. Returns {message_id, channel_id, channel_name, thread, permalink}. When you show a human this message afterwards, link it by the returned permalink — never a bare name or message id.',
+        'Post a message to a channel by name. Optional thread (topic) and reply_to (message id). To ping someone, write the @**Name** markup inline in body where you want it rendered. Returns {message_id, channel_id, channel_name, thread, permalink}. When you show a human this message afterwards, link it by the returned permalink — never a bare name or message id.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -754,15 +739,9 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
           body: {
             type: 'string',
             description:
-              'Message body, written verbatim. Include @**Name** markup inline to trigger Zulip @-mention pings; the mentions[] field is metadata-only and will not add markup for you.',
+              'Message body, written verbatim. Include @**Name** markup inline to trigger Zulip @-mention pings.',
           },
           thread: { type: 'string', description: 'Thread / topic name (optional)' },
-          mentions: {
-            type: 'array',
-            items: { type: 'string' },
-            description:
-              'Identity ids to notify (metadata-only — does not modify body). Useful for substrates with a separate notification primitive. Ids must be cached via resolve/list_*/inbound events first.',
-          },
           reply_to: {
             type: 'string',
             description: 'Message id of a prior message to reply to',
@@ -777,16 +756,13 @@ const buildToolDefs = (deps: RegisterToolsDeps, cache: InternalCache): ReadonlyA
         const run = runFor(args)
         const ref = await run(
           Effect.gen(function* () {
-            const { channel_name, body, thread, mentions, reply_to } =
+            const { channel_name, body, thread, reply_to } =
               yield* Schema.decodeUnknown(PostArgs)(args)
             const channel = yield* decodeChannelName(channel_name)
             const messageBody = yield* decodeMessageBody(body)
             const opts: { -readonly [K in keyof PostOpts]: PostOpts[K] } = {}
             if (thread !== undefined) {
               opts.thread = yield* decodeThreadName(thread)
-            }
-            if (mentions !== undefined) {
-              opts.mentions = yield* resolveMentions(cache, mentions)
             }
             if (reply_to !== undefined) {
               opts.replyTo = yield* reconstructMessageRef(cache, reply_to, channel_name)

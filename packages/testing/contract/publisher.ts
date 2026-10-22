@@ -12,6 +12,7 @@ import {
   MessageEditRefused,
   MessagePermalinkSchema,
   type MessageRef,
+  mentionedIdentities,
   PublisherError,
   UnknownChannel,
 } from '@commy/core/ports'
@@ -237,6 +238,22 @@ export const publisherContract = (env: () => ContractEnv): void => {
         // Original body must be gone — edit is replace, not append.
         const original = messages.find((m) => m.body === 'original body')
         expect(original).toBeUndefined()
+      }),
+    ))
+  test('publisher.edit reports who the new body @-mentions, not the old', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const alice = yield* env().seedAgent('alice')
+        const bob = yield* env().seedAgent('bob')
+        const ref = yield* env().comms.publisher.post(
+          channel.name,
+          decodeMessageBodySync(`@**${alice.name}** first cut`),
+        )
+        yield* env().comms.publisher.edit(ref, decodeMessageBodySync(`@**${bob.name}** second cut`))
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        const found = messages.find((m) => String(m.ref.id) === String(ref.id))
+        expect(mentionedIdentities(found?.mentions ?? []).map((m) => m.id)).toEqual([bob.id])
       }),
     ))
   test('publisher.edit on a thread message keeps the thread association', () =>

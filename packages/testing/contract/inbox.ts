@@ -162,9 +162,7 @@ export const inboxContract = (env: () => ContractEnv): void => {
           const peer = yield* env().seedAgent('alice')
           yield* env().comms.inbox.subscribe(channel.name)
           const queue = yield* eventQueue(env().comms)
-          yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** wake up`), {
-            mentions: [me],
-          })
+          yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** wake up`))
           const event = yield* awaitEvent(
             queue,
             'a peer mention of self',
@@ -191,9 +189,7 @@ export const inboxContract = (env: () => ContractEnv): void => {
           const me = yield* env().comms.identity.currentIdentity()
           const peer = yield* env().seedAgent('alice')
           const queue = yield* eventQueue(env().comms)
-          yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** wake up`), {
-            mentions: [me],
-          })
+          yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** wake up`))
           const event = yield* awaitEvent(
             queue,
             'a peer mention of self with nothing subscribed',
@@ -215,9 +211,10 @@ export const inboxContract = (env: () => ContractEnv): void => {
           const channel = yield* env().seedChannel('lobby')
           const alice = yield* env().seedAgent('alice')
           const queue = yield* eventQueue(env().comms)
-          yield* env().comms.publisher.post(channel.name, decodeMessageBodySync('hello alice'), {
-            mentions: [alice],
-          })
+          yield* env().comms.publisher.post(
+            channel.name,
+            decodeMessageBodySync(`@**${alice.name}** hello`),
+          )
           const result = yield* Queue.take(queue).pipe(Effect.timeoutOption(Duration.millis(100)))
           expect(Option.isNone(result)).toBe(true)
         }),
@@ -396,9 +393,7 @@ export const inboxContract = (env: () => ContractEnv): void => {
           yield* env().comms.inbox.subscribe(channel.name)
           yield* env().comms.inbox.unsubscribe(channel.name)
           const queue = yield* eventQueue(env().comms)
-          yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** still here`), {
-            mentions: [me],
-          })
+          yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** still here`))
           const event = yield* awaitEvent(
             queue,
             'a peer mention of self in an unsubscribed channel',
@@ -576,9 +571,7 @@ export const inboxContract = (env: () => ContractEnv): void => {
         const channel = yield* env().seedChannel('lobby')
         const me = yield* env().comms.identity.currentIdentity()
         const peer = yield* env().seedAgent('alice')
-        yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** catch up`), {
-          mentions: [me],
-        })
+        yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** catch up`))
         const [posted] = yield* env().comms.history.readChannel(channel.name, {})
         if (posted === undefined) throw new Error('expected the peer post in channel history')
         const events = yield* env().comms.inbox.replay(posted.ts)

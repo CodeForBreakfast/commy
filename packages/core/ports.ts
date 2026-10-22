@@ -325,19 +325,11 @@ export interface Range {
   readonly limit?: number
 }
 
+/**
+ * Who a post mentions is whatever mention markup its `body` carries (Zulip's
+ * `@**name**`), as the substrate renders it; `Message.mentions` reports that.
+ */
 export interface PostOpts {
-  /**
-   * Identities to notify. Metadata-only: adapters do not mutate
-   * `body` based on this list. Where a substrate needs literal mention
-   * markup inside the message text to trigger a notification (Zulip's
-   * `@**name**`, Discord's `<@id>`), the caller writes that markup
-   * directly into `body` at the position they want it rendered. The
-   * `mentions[]` array is a side-channel for adapters with a separate
-   * notification primitive — substrate-derived render-time mentions
-   * still surface via `Message.mentions` on the inbound side regardless
-   * of whether this field was set on the post.
-   */
-  readonly mentions?: ReadonlyArray<Identity>
   /** Named conversation slice; adapter does find-or-create. */
   readonly thread?: ThreadName
   /** Best-effort in-thread reply. Adapters without an in-thread reply primitive may quote-block or drop. */

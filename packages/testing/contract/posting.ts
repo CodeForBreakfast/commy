@@ -152,56 +152,34 @@ export const publisherPostingContract = (env: () => ContractEnv): void => {
         expect(bodies).toContain(decodeMessageBodySync('topic-b'))
       }),
     ))
-  test('publisher.post with mentions surfaces them via history.readChannel as Identity[]', () =>
+  test('publisher.post reports who its body @-mentions via history.readChannel', () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const channel = yield* env().seedChannel('lobby')
         const alice = yield* env().seedAgent('alice')
-        yield* env().comms.publisher.post(
-          channel.name,
-          decodeMessageBodySync(`@**${alice.name}** wake up`),
-          {
-            mentions: [alice],
-          },
-        )
+        const body = decodeMessageBodySync(`@**${alice.name}** wake up`)
+        yield* env().comms.publisher.post(channel.name, body)
         const messages = yield* env().comms.history.readChannel(channel.name, {})
-        const found = messages.find((m) => m.body.includes('wake up'))
+        const found = messages.find((m) => m.body === body)
         expect(found).toBeDefined()
         expect(mentionedIdentities(found?.mentions ?? []).map((m) => m.id)).toEqual([alice.id])
       }),
     ))
-  // PostOpts.mentions is metadata-only: adapters must not mutate `body`
-  // based on the array. Cross-adapter spec — both Zulip and memory must
-  // round-trip the literal body string through history.readChannel even
-  // when mentions[] is set.
-  test('publisher.post does not mutate body based on opts.mentions', () =>
+  // A token quoted in code is literal text: the substrate renders it as code
+  // and notifies nobody.
+  test('publisher.post reports no mention for a token inside a code span or block', () =>
     Effect.runPromise(
       Effect.gen(function* () {
         const channel = yield* env().seedChannel('lobby')
         const alice = yield* env().seedAgent('alice')
-        yield* env().comms.publisher.post(channel.name, decodeMessageBodySync('oi look here'), {
-          mentions: [alice],
-        })
-        const messages = yield* env().comms.history.readChannel(channel.name, {})
-        const found = messages.find((m) => m.body === 'oi look here')
-        expect(found).toBeDefined()
-      }),
-    ))
-  // Caller writes `@**Name**` inline and passes
-  // mentions[] for the same identity. Body must round-trip with exactly
-  // one occurrence of the mention markup, not two.
-  test('publisher.post with inline @-mention markup and opts.mentions does not double the markup in body', () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const channel = yield* env().seedChannel('lobby')
-        const alice = yield* env().seedAgent('alice')
-        const body = decodeMessageBodySync(`@**${alice.name}** look at this`)
-        yield* env().comms.publisher.post(channel.name, body, { mentions: [alice] })
+        const body = decodeMessageBodySync(
+          `write \`@**${alice.name}**\` to ping\n\n\`\`\`\n@**${alice.name}**\n\`\`\``,
+        )
+        yield* env().comms.publisher.post(channel.name, body)
         const messages = yield* env().comms.history.readChannel(channel.name, {})
         const found = messages.find((m) => m.body === body)
-        if (found === undefined) throw new Error('expected posted message in channel history')
-        const occurrences = found.body.split(`@**${alice.name}**`).length - 1
-        expect(occurrences).toBe(1)
+        expect(found).toBeDefined()
+        expect(found?.mentions).toEqual([])
       }),
     ))
   test('publisher.post with replyTo does not throw (substrate may quote-block or drop)', () =>

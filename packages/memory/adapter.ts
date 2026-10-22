@@ -223,6 +223,14 @@ const inRange =
     return true
   }
 
+// Zulip's personal-mention markup, and the code regions it renders no mention
+// inside. Wildcards and groups are left out: the store has neither.
+const MENTION_MARKUP = /@\*\*([^*]+)\*\*/g
+const CODE_REGIONS = /```[\s\S]*?```|~~~[\s\S]*?~~~|(`+)[\s\S]*?\1/g
+
+const mentionedNames = (body: string): ReadonlyArray<string> =>
+  Arr.map([...body.replace(CODE_REGIONS, ' ').matchAll(MENTION_MARKUP)], ([, name]) => name ?? '')
+
 const toMessage = (stored: StoredMessage, reactions: ReadonlyArray<Reaction>): Message => ({
   ref: stored.ref,
   sender: stored.sender,
@@ -307,6 +315,18 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
         identitiesByName.set(name, identity)
         return { identity, origin: 'minted' as const }
       })
+
+    // Who a body mentions, as Zulip renders it: each known name once, in the
+    // order written. A name nobody holds mentions nobody.
+    const mentionsIn = (body: MessageBodyType): ReadonlyArray<Mention> =>
+      userMentions(
+        Arr.dedupeWith(
+          Arr.filterMap(mentionedNames(body), (name) =>
+            Option.fromNullable(identitiesByName.get(name)),
+          ),
+          (a, b) => a.id === b.id,
+        ),
+      )
 
     // With no strategy wired, an explicit `acquire` is the only way to bind:
     // use whatever is already bound, and refuse otherwise.
@@ -629,7 +649,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
             sender: self,
             body,
             ts,
-            mentions: userMentions(opts?.mentions ?? []),
+            mentions: mentionsIn(body),
           }
           bucket.push(stored)
           messagesById.set(id, stored)
@@ -656,7 +676,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
               cause: new Error(`memoryAdapter: message ${message.id} was sent by someone else`),
             })
           }
-          const updated: StoredMessage = { ...stored, body }
+          const updated: StoredMessage = { ...stored, body, mentions: mentionsIn(body) }
           messagesById.set(message.id, updated)
           const bucket = messagesByChannel.get(stored.ref.channel.id)
           if (bucket !== undefined) {
@@ -1053,7 +1073,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
           sender: peer,
           body,
           ts,
-          mentions: userMentions(opts?.mentions ?? []),
+          mentions: mentionsIn(body),
         }
         bucket.push(stored)
         messagesById.set(id, stored)
