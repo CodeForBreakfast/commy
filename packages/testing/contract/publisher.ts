@@ -63,6 +63,44 @@ export const publisherContract = (env: () => ContractEnv): void => {
         expect(Option.map(found.ref.thread, (t) => t.resolved)).toEqual(Option.some(false))
       }),
     ))
+  // The substrate announces each flip with a notice in the thread, sent by the
+  // substrate rather than the caller, and a subscriber receives it like any post.
+  test('a subscriber receives a notice in the thread when it is resolved and unresolved', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const channel = yield* env().seedChannel('lobby')
+          const thread = decodeThreadNameSync('design')
+          const me = yield* env().comms.identity.currentIdentity()
+          yield* env().comms.inbox.subscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* env().comms.publisher.post(channel.name, decodeMessageBodySync('settle this'), {
+            thread,
+          })
+          const awaitNotice = (resolved: boolean) =>
+            awaitEvent(
+              queue,
+              `the notice that the thread was ${resolved ? 'resolved' : 'unresolved'}`,
+              (e) =>
+                e.kind === 'message-posted' &&
+                e.message.sender.id !== me.id &&
+                Option.exists(
+                  e.message.ref.thread,
+                  (t) => t.name === thread && t.resolved === resolved,
+                ),
+            )
+          yield* env().comms.publisher.resolveThread(channel.name, thread)
+          const resolvedNotice = yield* awaitNotice(true)
+          yield* env().comms.publisher.unresolveThread(channel.name, thread)
+          const unresolvedNotice = yield* awaitNotice(false)
+          for (const notice of [resolvedNotice, unresolvedNotice]) {
+            if (notice.kind !== 'message-posted') throw new Error('unexpected event kind')
+            expect(notice.message.body).toContain(me.name)
+            expect(notice.message.ref.channel.id).toEqual(channel.id)
+          }
+        }),
+      ),
+    ))
   test('publisher.resolveThread is idempotent when the thread is already resolved', () =>
     Effect.runPromise(
       Effect.gen(function* () {

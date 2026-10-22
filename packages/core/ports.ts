@@ -604,9 +604,10 @@ export interface MessagePublisher {
    * addressed by `channel` + plain thread `name` (never a resolution-encoded
    * form — the paired verbs, mirroring `react`/`unreact`, carry the direction).
    * Idempotent: a thread already in the requested state is a no-op with no
-   * substrate write. Like `edit`, this mutates substrate state and emits no
-   * InboundEvent — a consumer observes the new status via `ObservedThread.resolved`
-   * when it next reads the thread. A substrate failure (including a thread the
+   * substrate write. A flip makes the substrate post a notice into the thread,
+   * sent by the substrate rather than the caller and naming the caller, and a
+   * subscriber receives it as a `message-posted` whose `ObservedThread.resolved`
+   * carries the new status. A substrate failure (including a thread the
    * substrate has no messages for) surfaces as a typed `PublisherError`;
    * calling before `identity.acquire` is a defect, not a typed failure.
    *
