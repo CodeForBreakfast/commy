@@ -441,11 +441,21 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
         (identity) => !deactivatedIdentities.has(identity.id),
       )
 
+    // A plain `@**name**` mention matches the name whatever its case, as
+    // Zulip's `full_name__iexact` does.
+    const activeIdentityNamedIgnoringCase = (name: string): Option.Option<Identity> =>
+      Arr.findFirst(
+        [...identitiesByName.values()],
+        (identity) =>
+          identity.name.toLowerCase() === name.toLowerCase() &&
+          !deactivatedIdentities.has(identity.id),
+      )
+
     // Zulip's `name|id` form names a member by id. Given a name, it must be
     // that member's, or Zulip renders no mention.
     const activeIdentityMentioned = (token: string): Option.Option<Identity> => {
       const disambiguated = DISAMBIGUATED.exec(token)
-      if (disambiguated === null) return activeIdentityNamed(token)
+      if (disambiguated === null) return activeIdentityNamedIgnoringCase(token)
       const [, name = '', id = ''] = disambiguated
       return Option.fromNullable(identitiesById.get(id)).pipe(
         Option.filter(
