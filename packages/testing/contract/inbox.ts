@@ -234,6 +234,29 @@ export const inboxContract = (env: () => ContractEnv): void => {
         }),
       ),
     ))
+  test('a peer id-only mention of self surfaces as mention-received', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const peerPost = env().peerPost
+          if (peerPost === undefined) return
+          const channel = yield* env().seedChannel('lobby')
+          const me = yield* env().comms.identity.currentIdentity()
+          const peer = yield* env().seedAgent('alice')
+          yield* env().comms.inbox.subscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**|${me.id}** wake up`))
+          const event = yield* awaitEvent(
+            queue,
+            'a peer id-only mention of self',
+            (e) => e.kind === 'mention-received',
+          )
+          if (event.kind !== 'mention-received')
+            throw new Error(`expected mention-received, got ${event.kind}`)
+          expect(mentionedIdentities(event.mentions).map((m) => m.id)).toContain(me.id)
+        }),
+      ),
+    ))
   // The mention floor with NOTHING subscribed — the cell comms-n1my exists to
   // fix. A session outside a git repo resolves no project slug, so neither
   // default narrow set gives it anything to subscribe to; mentions are its

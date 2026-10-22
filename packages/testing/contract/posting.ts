@@ -178,6 +178,18 @@ export const publisherPostingContract = (env: () => ContractEnv): void => {
         expect(mentionedIdentities(found?.mentions ?? []).map((m) => m.id)).toEqual([alice.id])
       }),
     ))
+  test('publisher.post accepts an id-only mention of an agent and reports that agent', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const alice = yield* env().seedAgent('alice')
+        const body = decodeMessageBodySync(`@**|${alice.id}** wake up`)
+        yield* env().comms.publisher.post(channel.name, body)
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        const found = messages.find((m) => m.body === body)
+        expect(mentionedIdentities(found?.mentions ?? []).map((m) => m.id)).toEqual([alice.id])
+      }),
+    ))
   test('publisher.post refuses a name|id mention of a deactivated agent, and posts nothing', () =>
     Effect.runPromise(
       Effect.gen(function* () {
