@@ -644,11 +644,9 @@ describeLiveChannel('zulip live per-seat receiving — zulip.example.com', () =>
     45_000,
   )
 
-  // comms-g5zh.3's acceptance, behaviourally. Under the shared minter this was
-  // a live bug: one subscription row served every seat, so B's unsubscribe
-  // DELETEd the row A was receiving through and A went silently deaf. Two real
-  // principals are the only way to show it is gone — with a row each, B's
-  // unsubscribe cannot reach A's.
+  // The shared contract holds this against the in-process realm, which only
+  // models Zulip's subscriptions. This proves it on a real server, where each
+  // seat's subscription is a row under its own principal.
   test(
     'one seat unsubscribing does not deafen another seat on the same channel',
     () =>

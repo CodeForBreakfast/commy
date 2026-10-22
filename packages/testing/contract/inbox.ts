@@ -2,6 +2,7 @@
 
 import { expect, test } from 'bun:test'
 import {
+  decodeBotNameSync,
   decodeEmojiSync,
   decodeMessageBodySync,
   decodeThreadNameSync,
@@ -401,6 +402,29 @@ export const inboxContract = (env: () => ContractEnv): void => {
           )
           const result = yield* Queue.take(queue).pipe(Effect.timeoutOption(Duration.millis(100)))
           expect(Option.isNone(result)).toBe(true)
+        }),
+      ),
+    ))
+  test('one seat unsubscribing leaves another seat on the same channel still hearing it', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const build = env().newUnacquiredAdapter
+          if (build === undefined) return
+          const channel = yield* env().seedChannel('lobby')
+          const me = yield* env().comms.identity.currentIdentity()
+          const leaver = yield* build()
+          yield* leaver.identity.acquire(decodeBotNameSync(`${me.name}-a`))
+          yield* env().comms.inbox.subscribe(channel.name)
+          yield* leaver.inbox.subscribe(channel.name)
+          yield* leaver.inbox.unsubscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* leaver.publisher.post(channel.name, decodeMessageBodySync('still-heard'))
+          yield* awaitEvent(
+            queue,
+            'a post to the channel the other seat left',
+            (e) => e.kind === 'message-posted' && e.message.body.includes('still-heard'),
+          )
         }),
       ),
     ))
