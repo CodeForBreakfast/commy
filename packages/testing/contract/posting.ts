@@ -45,6 +45,66 @@ export const publisherPostingContract = (env: () => ContractEnv): void => {
           env().comms.publisher.post(phantom, decodeMessageBodySync('should fail')),
         )
         expect(error).toBeInstanceOf(UnknownChannel)
+        if (error instanceof UnknownChannel) expect(error.channel).toEqual(phantom)
+      }),
+    ))
+  test('publisher.post without a thread returns a MessageRef with no thread', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const ref = yield* env().comms.publisher.post(channel.name, decodeMessageBodySync('bare'))
+        expect(ref.thread).toEqual(Option.none())
+      }),
+    ))
+  test('publisher.post with thread returns a MessageRef naming that thread, unresolved', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const thread = decodeThreadNameSync('planning')
+        const ref = yield* env().comms.publisher.post(channel.name, decodeMessageBodySync('hi'), {
+          thread,
+        })
+        expect(Option.map(ref.thread, (t) => t.name)).toEqual(Option.some(thread))
+        expect(Option.map(ref.thread, (t) => t.resolved)).toEqual(Option.some(false))
+      }),
+    ))
+  // A substrate that resolves by renaming the thread must address the renamed
+  // form, or the post mints a sibling thread under the clean name and the
+  // read below finds the new message in an unresolved thread. The substrate
+  // may add its own notice of the resolve to the thread, so the read looks for
+  // the post rather than the whole thread.
+  test('publisher.post into a resolved thread appends to it and leaves it resolved', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const thread = decodeThreadNameSync('planning')
+        yield* env().comms.publisher.post(channel.name, decodeMessageBodySync('settled'), {
+          thread,
+        })
+        yield* env().comms.publisher.resolveThread(channel.name, thread)
+        const ref = yield* env().comms.publisher.post(
+          channel.name,
+          decodeMessageBodySync('one more thing'),
+          { thread },
+        )
+        expect(Option.map(ref.thread, (t) => t.name)).toEqual(Option.some(thread))
+        expect(Option.map(ref.thread, (t) => t.resolved)).toEqual(Option.some(true))
+        const messages = yield* env().comms.history.readThread(channel.name, thread, {})
+        const appended = messages.find((m) => m.body === 'one more thing')
+        if (appended === undefined) throw new Error('expected the post in the resolved thread')
+        expect(Option.map(appended.ref.thread, (t) => t.resolved)).toEqual(Option.some(true))
+      }),
+    ))
+  // A mention form inside a code span is literal text, not a failed delivery,
+  // so it never triggers UnresolvedMention.
+  test('publisher.post delivers a mention form naming nobody verbatim when it sits in a code span', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const channel = yield* env().seedChannel('lobby')
+        const body = decodeMessageBodySync('the dead form `@**Nobody Example**` names nobody')
+        yield* env().comms.publisher.post(channel.name, body)
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        expect(findByBody(messages, body)).toBeDefined()
       }),
     ))
   test('publisher.post with thread is visible via history.readThread', () =>

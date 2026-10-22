@@ -483,7 +483,7 @@ export const memoryAdapter = (config: MemoryAdapterConfig = {}): Effect.Effect<M
                 channel,
                 thread: Option.some({
                   name: thread,
-                  resolved: false,
+                  resolved: isThreadResolved(channel.id, thread),
                   permalink: synthTopicPermalink(channel.id, thread),
                 }),
                 permalink: synthMessagePermalink(channel.id, messageId, thread),
