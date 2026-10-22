@@ -365,6 +365,32 @@ export const inboxContract = (env: () => ContractEnv): void => {
         }),
       ),
     ))
+  // A channel wildcard notifies the channel's subscribers, so it never reaches
+  // a seat outside the channel. The personal mention that follows is the
+  // sentinel: the first mention-received to arrive must be it.
+  test('a peer channel wildcard in a channel self is not subscribed to raises no mention-received', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const peerPost = env().peerPost
+          if (peerPost === undefined) return
+          const channel = yield* env().seedChannel('lobby')
+          const me = yield* env().comms.identity.currentIdentity()
+          const peer = yield* env().seedAgent('alice')
+          const queue = yield* eventQueue(env().comms)
+          yield* peerPost(peer, channel.name, decodeMessageBodySync('heads up @**all**'))
+          yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** sentinel`))
+          const event = yield* awaitEvent(
+            queue,
+            'a peer mention of self after the wildcard',
+            (e) => e.kind === 'mention-received',
+          )
+          if (event.kind !== 'mention-received')
+            throw new Error(`expected mention-received, got ${event.kind}`)
+          expect(event.message.body).toContain('sentinel')
+        }),
+      ),
+    ))
   test('inbox.subscribe(channel) + react yields reaction-added with target = posted ref', () =>
     Effect.runPromise(
       Effect.scoped(
