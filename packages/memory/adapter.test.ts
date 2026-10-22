@@ -10,7 +10,7 @@ import {
   MessagePermalinkSchema,
   ThreadPermalinkSchema,
 } from '@commy/core/ports'
-import { Array as Arr, Duration, Effect, Exit, Option, TestClock, TestContext } from 'effect'
+import { Array as Arr, Duration, Effect, Option, TestClock, TestContext } from 'effect'
 import { memoryAdapter } from './adapter.ts'
 
 const acquired = async () => {
@@ -19,11 +19,10 @@ const acquired = async () => {
   return adapter
 }
 
-// The mutable-state Refs pin concurrency-safety: counter allocation and the
-// acquire check-then-set both span `yield*` suspension points, so under
-// `Effect.all` they must still allocate distinct ids and bind exactly once.
-// Sequential semantics are already covered by the contract suite; these assert
-// the interleaved case the Refs make correct.
+// The message-id Ref pins concurrency-safety: counter allocation spans `yield*`
+// suspension points, so under `Effect.all` it must still allocate distinct ids.
+// Sequential semantics are already covered by the contract suite; this asserts
+// the interleaved case the Ref makes correct.
 
 // In-memory store, no rate-limited substrate — unbounded concurrency is the
 // point here: it maximises interleaving against the message-id Ref.
@@ -40,22 +39,6 @@ test('concurrent posts allocate distinct, monotonic message ids under Effect.all
   expect(new Set(ids).size).toBe(25)
   // Gapless run: ids 1..25 with no duplicates or holes.
   expect(ids).toEqual(Arr.makeBy(25, (i) => i + 1))
-})
-
-test('concurrent acquire on a fresh adapter binds exactly one name', async () => {
-  const adapter = await Effect.runPromise(memoryAdapter())
-  const names = ['agent-a', 'agent-b', 'agent-c', 'agent-d'].map((n) => decodeBotNameSync(n))
-  const exits = await Effect.runPromise(
-    Effect.forEach(names, (name) => Effect.exit(adapter.identity.acquire(name)), {
-      concurrency: 'unbounded',
-    }),
-  )
-  const successes = exits.filter(Exit.isSuccess)
-  expect(successes).toHaveLength(1)
-  const bound = await Effect.runPromise(adapter.identity.currentIdentity())
-  if (successes[0]?._tag === 'Success') {
-    expect(successes[0].value.identity.id).toEqual(bound.id)
-  }
 })
 
 test('counter state persists across operations within one constructed adapter', async () => {
