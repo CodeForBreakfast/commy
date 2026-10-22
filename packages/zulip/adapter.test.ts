@@ -2577,7 +2577,7 @@ effectTest('directory.listAgents runs pre-acquire and routes via minter creds', 
 
 // The presence read path runs for humans only (agents short-circuit to
 // 'unknown'), so the minter-cred routing assertion uses a human.
-effectTest('directory.presence runs pre-acquire and routes via minter creds', () =>
+effectTest('directory.presence routes via minter creds before acquire', () =>
   Effect.gen(function* () {
     const stub = yield* makeStubHttpClient
     yield* seedUsers(stub, [MAINTAINER])
