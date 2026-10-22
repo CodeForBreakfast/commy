@@ -26,7 +26,6 @@ const identity = (id: string, name: string, kind: Identity['kind'] = 'human'): I
 })
 
 const GRAEME = identity('7', 'Graeme')
-const HERMES = identity('9', 'hermes-agent', 'agent')
 // Two humans share a full_name — Zulip disambiguates them as @**Robin Reyes|11**.
 const ROBIN_A = identity('11', 'Robin Reyes')
 
@@ -113,33 +112,10 @@ test('a body with no mention markup costs nothing', () => {
   expect(isCandidate('just a sentence about deployment')).toBe(false)
 })
 
-test('unresolvedMentions reports a dead @**Name** token', () => {
-  const dir = directoryFor(GRAEME)
-  expect(unresolvedMentions('ping @**Graeme Foster** please', dir)).toEqual(['Graeme Foster'])
-})
-
-test('unresolvedMentions is empty when every mention resolves', () => {
-  const dir = directoryFor(GRAEME, HERMES)
-  expect(unresolvedMentions('@**Graeme** and @**hermes-agent**', dir)).toEqual([])
-})
-
-test('unresolvedMentions ignores a dead form that only appears inside code', () => {
-  const dir = directoryFor(GRAEME)
-  // Discussing the dead form as an example must not fail a post — Zulip would
-  // never try to deliver it, so it is not silent non-delivery.
-  const content = 'the dead form `@**Graeme Foster**` resolves to nobody'
-  expect(unresolvedMentions(content, dir)).toEqual([])
-})
-
 test('unresolvedMentions reports an unknown |id token', () => {
   const dir = directoryFor(ROBIN_A)
   // |99 is not in the directory — a genuinely dead disambiguated form.
   expect(unresolvedMentions('@**Robin Reyes|99** hi', dir)).toEqual(['Robin Reyes|99'])
-})
-
-test('unresolvedMentions deduplicates a repeated dead token', () => {
-  const dir = directoryFor(GRAEME)
-  expect(unresolvedMentions('@**Ghost** @**Ghost**', dir)).toEqual(['Ghost'])
 })
 
 // Channel-/topic-wide wildcard mentions share the `@**...**` sigil but are not

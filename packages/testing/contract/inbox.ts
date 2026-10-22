@@ -8,6 +8,7 @@ import {
   decodeThreadNameSync,
   decodeTimestampSync,
   type InboundEvent,
+  Mention,
   mentionedIdentities,
 } from '@commy/core/ports'
 import { Chunk, Duration, Effect, Option, Queue, Stream } from 'effect'
@@ -283,6 +284,45 @@ export const inboxContract = (env: () => ContractEnv): void => {
           const posted = events.find((e) => e.kind === 'message-posted')
           if (posted?.kind !== 'message-posted') throw new Error('expected message-posted')
           expect(posted.message.mentions).toEqual([])
+        }),
+      ),
+    ))
+  test('a peer post mentioning self silently raises no mention-received', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const peerPost = env().peerPost
+          if (peerPost === undefined) return
+          const channel = yield* env().seedChannel('lobby')
+          const me = yield* env().comms.identity.currentIdentity()
+          const peer = yield* env().seedAgent('alice')
+          yield* env().comms.inbox.subscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* peerPost(peer, channel.name, decodeMessageBodySync(`as @_**${me.name}** said`))
+          const events = yield* eventsThroughPost(queue)
+          expect(events.map((e) => e.kind)).not.toContain('mention-received')
+        }),
+      ),
+    ))
+  test('a peer channel wildcard surfaces as mention-received for self', () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const peerPost = env().peerPost
+          if (peerPost === undefined) return
+          const channel = yield* env().seedChannel('lobby')
+          const peer = yield* env().seedAgent('alice')
+          yield* env().comms.inbox.subscribe(channel.name)
+          const queue = yield* eventQueue(env().comms)
+          yield* peerPost(peer, channel.name, decodeMessageBodySync('heads up @**all**'))
+          const event = yield* awaitEvent(
+            queue,
+            'a peer channel wildcard',
+            (e) => e.kind === 'mention-received',
+          )
+          if (event.kind !== 'mention-received')
+            throw new Error(`expected mention-received, got ${event.kind}`)
+          expect(event.mentions).toEqual([Mention.ChannelWildcardMention()])
         }),
       ),
     ))
