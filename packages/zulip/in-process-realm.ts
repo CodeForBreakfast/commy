@@ -59,6 +59,8 @@ export interface InProcessRealm {
   /** An active member of the realm, returning its user id. */
   readonly addUser: (fullName: string, kind: 'human' | 'bot') => Effect.Effect<number>
   readonly setPresence: (userId: number, status: PresenceStatus) => Effect.Effect<void>
+  /** Invalidates the user's API key, so the next call made with it is refused. */
+  readonly revokeApiKey: (userId: number) => Effect.Effect<void>
 }
 
 const REALM_HOST = 'zulip.example.com'
@@ -1333,5 +1335,19 @@ export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(func
         ...s,
         presence: HashMap.set(s.presence, userId, status),
       })),
+    revokeApiKey: (userId) =>
+      newKey.pipe(
+        Effect.flatMap((apiKey) =>
+          SubscriptionRef.update(stateRef, (s) =>
+            Option.match(
+              findUser(s, (u) => u.userId === userId),
+              {
+                onNone: () => s,
+                onSome: (user) => putUser(s, { ...user, apiKey }),
+              },
+            ),
+          ),
+        ),
+      ),
   }
 })

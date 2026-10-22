@@ -1,7 +1,13 @@
 /** The shared contract's tests for IdentityPort. */
 
 import { expect, test } from 'bun:test'
-import { decodeBotNameSync, decodeDisplayNameSync, UnknownIdentity } from '@commy/core/ports'
+import {
+  decodeBotNameSync,
+  decodeChannelNameSync,
+  decodeDisplayNameSync,
+  decodeMessageBodySync,
+  UnknownIdentity,
+} from '@commy/core/ports'
 import { Effect, Exit, Option } from 'effect'
 import type { ContractEnv } from '../contract.ts'
 
@@ -75,6 +81,56 @@ export const identityContract = (env: () => ContractEnv): void => {
         const fresh = yield* build()
         const error = yield* Effect.flip(fresh.identity.acquire(decodeBotNameSync(target)))
         expect(error).toBeInstanceOf(UnknownIdentity)
+      }),
+    ))
+  const postHello = (): Effect.Effect<unknown, unknown> => {
+    const channel = env().seedChannel('credential-check')
+    return channel.pipe(
+      Effect.flatMap((ref) => env().comms.publisher.post(ref.name, decodeMessageBodySync('hello'))),
+    )
+  }
+  test('identity.credentialRejected is false while the bound credential has not been refused', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        yield* postHello()
+        expect(yield* env().comms.identity.credentialRejected()).toBe(false)
+      }),
+    ))
+  test('identity.credentialRejected stays false when a write is refused for another reason', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        yield* Effect.flip(
+          env().comms.publisher.post(
+            decodeChannelNameSync('no-such-channel'),
+            decodeMessageBodySync('hello'),
+          ),
+        )
+        expect(yield* env().comms.identity.credentialRejected()).toBe(false)
+      }),
+    ))
+  test('identity.credentialRejected is true once the substrate has refused the bound credential', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const revoke = env().revokeBoundCredential
+        if (revoke === undefined) return
+        const ref = yield* env().seedChannel('credential-check')
+        yield* revoke()
+        yield* Effect.flip(env().comms.publisher.post(ref.name, decodeMessageBodySync('hello')))
+        expect(yield* env().comms.identity.credentialRejected()).toBe(true)
+      }),
+    ))
+  test('identity.credentialRejected clears when the seat releases and binds again', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const revoke = env().revokeBoundCredential
+        if (revoke === undefined) return
+        const me = yield* env().comms.identity.currentIdentity()
+        const ref = yield* env().seedChannel('credential-check')
+        yield* revoke()
+        yield* Effect.flip(env().comms.publisher.post(ref.name, decodeMessageBodySync('hello')))
+        yield* env().comms.identity.release()
+        yield* env().comms.identity.acquire(decodeBotNameSync(me.name))
+        expect(yield* env().comms.identity.credentialRejected()).toBe(false)
       }),
     ))
 }

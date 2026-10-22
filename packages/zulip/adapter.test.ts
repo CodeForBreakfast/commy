@@ -888,62 +888,6 @@ effectTest('publisher.post returns a MessageRef built from the response id', () 
   }),
 )
 
-const seedRefusedSend = (stub: StubHttpClient, response: StubResponse): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    yield* seedSendMessage(stub, 1)
-    yield* stub.respond('POST', '/api/v1/messages', response)
-  })
-
-effectTest('identity.credentialRejected is false until the realm refuses the bound key', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedRefusedSend(stub, {
-      body: { result: 'error', msg: 'Invalid API key', code: 'UNAUTHORIZED' },
-      status: 401,
-    })
-    const adapter = yield* buildAdapter(stub)
-    expect(yield* adapter.identity.credentialRejected()).toBe(false)
-    yield* Effect.flip(
-      adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hello world')),
-    )
-    expect(yield* adapter.identity.credentialRejected()).toBe(true)
-  }),
-)
-
-effectTest(
-  'identity.credentialRejected stays false when the realm refuses a write for another reason',
-  () =>
-    Effect.gen(function* () {
-      const stub = yield* makeStubHttpClient
-      yield* seedRefusedSend(stub, {
-        body: { result: 'error', msg: 'Message too long', code: 'BAD_REQUEST' },
-        status: 400,
-      })
-      const adapter = yield* buildAdapter(stub)
-      yield* Effect.flip(
-        adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hello world')),
-      )
-      expect(yield* adapter.identity.credentialRejected()).toBe(false)
-    }),
-)
-
-effectTest('identity.credentialRejected clears when the seat releases and binds again', () =>
-  Effect.gen(function* () {
-    const stub = yield* makeStubHttpClient
-    yield* seedRefusedSend(stub, {
-      body: { result: 'error', msg: 'Invalid API key', code: 'UNAUTHORIZED' },
-      status: 401,
-    })
-    const adapter = yield* buildAdapter(stub)
-    yield* Effect.flip(
-      adapter.publisher.post(generalChannel.name, decodeMessageBodySync('hello world')),
-    )
-    yield* adapter.identity.release()
-    yield* adapter.identity.acquire(decodeBotNameSync('hermes-agent'))
-    expect(yield* adapter.identity.credentialRejected()).toBe(false)
-  }),
-)
-
 /**
  * A `bindOnDemand` that counts its invocations and binds through the very
  * adapter it is configured on. The adapter cannot be referenced inside its own

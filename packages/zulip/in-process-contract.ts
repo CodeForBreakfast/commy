@@ -60,6 +60,10 @@ export const inProcessContractFactory: ContractFactory = async () => {
         Effect.asVoid,
         Effect.orDie,
       ),
+    revokeBoundCredential: () =>
+      adapter.identity
+        .currentIdentity()
+        .pipe(Effect.flatMap((me) => realm.revokeApiKey(Number(me.id)))),
     channelDescriptionLimit: CHANNEL_DESCRIPTION_LIMIT,
     // The realm and its adapters hold nothing outside the heap, so there is
     // nothing to tear down.

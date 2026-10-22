@@ -97,6 +97,13 @@ export interface ContractEnv {
     opts?: PostOpts,
   ) => Effect.Effect<void>
   /**
+   * Optional. Invalidate the credential the bound self holds, so the
+   * substrate refuses its next call as unauthenticated. Substrates with no
+   * credentials to invalidate (Memory) omit it and the suite skips the
+   * tests that need a refused credential.
+   */
+  readonly revokeBoundCredential?: () => Effect.Effect<void>
+  /**
    * Longest channel description this substrate stores, in characters. The
    * description tests build their over-length input from it rather than
    * assuming any substrate's number — the contract asserts that a substrate
