@@ -606,6 +606,7 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
 
     const identity: IdentityPort = {
       currentIdentity: () => readBound(),
+      credentialRejected: () => Effect.succeed(false),
       acquire: (name) =>
         Ref.get(bound).pipe(
           Effect.flatMap(

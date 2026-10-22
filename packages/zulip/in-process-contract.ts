@@ -96,6 +96,10 @@ export const inProcessContractFactory: AttachmentContractFactory = async () => {
         Effect.asVoid,
         Effect.orDie,
       ),
+    revokeBoundCredential: () =>
+      adapter.identity
+        .currentIdentity()
+        .pipe(Effect.flatMap((me) => realm.revokeApiKey(Number(me.id)))),
     channelDescriptionLimit: CHANNEL_DESCRIPTION_LIMIT,
     messageLengthLimit: MESSAGE_LENGTH_LIMIT,
     threadNameLimit: TOPIC_LIMIT,
