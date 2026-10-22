@@ -56,6 +56,7 @@ import {
   isBindError,
   MessageEditRefused,
   mentionsIdentity,
+  notifiesIdentity,
   PublisherError,
   UnboundEphemeralSession,
   UnknownChannel,
@@ -1366,6 +1367,18 @@ export const zulipAdapter = (
       subscriptions: Schema.Array(Schema.Struct({ name: Schema.NonEmptyString })),
     })
 
+    // The channels whose subscription rows name the client's own user.
+    const readSubscribedChannels = (
+      http: BotHttp,
+    ): Effect.Effect<ReadonlyArray<ChannelName>, ZulipApiError | ParseResult.ParseError> =>
+      http
+        .get('/users/me/subscriptions', mySubscriptionsResponseSchema)
+        .pipe(
+          Effect.flatMap((res) =>
+            Effect.forEach(res.subscriptions, (row) => decodeChannelName(row.name)),
+          ),
+        )
+
     const streamsListResponseSchema = Schema.Struct({
       result: Schema.Literal('success'),
       streams: Schema.Array(Schema.Struct({ name: Schema.NonEmptyString, stream_id: Schema.Int })),
@@ -2031,10 +2044,7 @@ export const zulipAdapter = (
       subscriptions: () =>
         boundHttp().pipe(
           Effect.flatMap((http) =>
-            http.get('/users/me/subscriptions', mySubscriptionsResponseSchema).pipe(
-              Effect.flatMap((res) =>
-                Effect.forEach(res.subscriptions, (row) => decodeChannelName(row.name)),
-              ),
+            readSubscribedChannels(http).pipe(
               Effect.mapError((cause) => new InboxError({ operation: 'subscribe', cause })),
             ),
           ),
@@ -2195,6 +2205,14 @@ export const zulipAdapter = (
             Effect.fork(buildDirectoryLookup()),
             SynchronizedRef.get(boundRef),
           ])
+          // History is read as the minter, so the seat's subscriptions come
+          // from its own rows: a wildcard notifies only the channel's
+          // subscribers, as live delivery's recipient set does.
+          const seatChannels = yield* Option.match(current, {
+            onNone: () => Effect.succeed(HashSet.empty<ChannelName>()),
+            onSome: (bound) =>
+              readSubscribedChannels(bound.http).pipe(Effect.map(HashSet.fromIterable)),
+          })
           // Catch-up has no cap of its own: a seat that was away for a week
           // has to be told everything it missed, however many pages that
           // spans.
@@ -2240,7 +2258,19 @@ export const zulipAdapter = (
                 messageRefCache.set(ev.message.ref.id, ev.message.ref)
               }
             }
-            out.push(...mapped)
+            out.push(
+              ...mapped.filter(
+                (ev) =>
+                  ev.kind !== 'mention-received' ||
+                  Option.exists(current, (bound) =>
+                    notifiesIdentity(
+                      ev.mentions,
+                      bound.identity.id,
+                      HashSet.has(seatChannels, ev.message.ref.channel.name),
+                    ),
+                  ),
+              ),
+            )
           }
           return out
         }).pipe(Effect.mapError((cause) => new InboxError({ operation: 'replay', cause })))

@@ -307,6 +307,20 @@ export const mentionsIdentity = (mentions: ReadonlyArray<Mention>, identity: Ide
 export const mentionedIdentities = (mentions: ReadonlyArray<Mention>): ReadonlyArray<Identity> =>
   mentions.filter(Mention.$is('UserMention')).map((m) => m.identity)
 
+/**
+ * Whether these mentions notify the identity, given whether it holds the
+ * message's channel. A wildcard notifies the channel's subscribers, as on
+ * Zulip, so outside the channel only a mention by name reaches it.
+ */
+export const notifiesIdentity = (
+  mentions: ReadonlyArray<Mention>,
+  identity: IdentityId,
+  holdsChannel: boolean,
+): boolean =>
+  holdsChannel
+    ? mentionsIdentity(mentions, identity)
+    : mentionedIdentities(mentions).some((m) => m.id === identity)
+
 export interface Message {
   readonly ref: MessageRef
   readonly sender: Identity

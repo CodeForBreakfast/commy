@@ -128,6 +128,16 @@ const makeConfig = (): Effect.Effect<ZulipAdapterConfig> =>
 const seedUsers = (stub: StubHttpClient, members: ReadonlyArray<unknown>): Effect.Effect<void> =>
   stub.respond('GET', '/api/v1/users', { body: { result: 'success', members } })
 
+// Replay reads the seat's own subscription rows to decide who a wildcard
+// notifies.
+const seedMySubscriptions = (
+  stub: StubHttpClient,
+  names: ReadonlyArray<string> = [],
+): Effect.Effect<void> =>
+  stub.respond('GET', '/api/v1/users/me/subscriptions', {
+    body: { result: 'success', subscriptions: names.map((name) => ({ name })) },
+  })
+
 const seedRegenerate = (
   stub: StubHttpClient,
   userId: number,
@@ -2433,6 +2443,7 @@ effectTest('inbox.replay pages back until it reaches the catch-up bound', () =>
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
     yield* seedUsers(stub, [HERMES, MAINTAINER])
+    yield* seedMySubscriptions(stub)
     yield* seedMessagePages(stub, [
       [7, 8, 9].map((id) => historyRow(id, 'lobby')),
       [4, 5, 6, 7].map((id) => historyRow(id, 'lobby')),
@@ -2451,6 +2462,7 @@ effectTest('inbox.replay calls /messages with anchor=newest and a generous num_b
     const stub = yield* makeStubHttpClient
     const adapter = yield* buildAdapter(stub)
     yield* seedUsers(stub, [HERMES])
+    yield* seedMySubscriptions(stub)
     yield* stub.respond('GET', '/api/v1/messages', {
       body: {
         result: 'success',
@@ -2481,6 +2493,7 @@ effectTest(
       const stub = yield* makeStubHttpClient
       const adapter = yield* buildAdapter(stub)
       yield* seedUsers(stub, [HERMES])
+      yield* seedMySubscriptions(stub)
       yield* stub.respond('GET', '/api/v1/messages', {
         body: {
           result: 'success',

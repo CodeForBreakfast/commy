@@ -165,6 +165,16 @@ const homeChannel: ChannelRef = {
   permalink: ChannelPermalinkSchema.make('https://zulip.example.com/#narrow/channel/1234-general'),
 }
 
+// Replay reads the seat's own subscription rows to decide who a wildcard
+// notifies.
+const seedMySubscriptions = (
+  stub: StubHttpClient,
+  names: ReadonlyArray<string> = [],
+): Effect.Effect<void> =>
+  stub.respond('GET', '/api/v1/users/me/subscriptions', {
+    body: { result: 'success', subscriptions: names.map((name) => ({ name })) },
+  })
+
 const seedSubscribeOk = (stub: StubHttpClient): Effect.Effect<void> =>
   stub.respond('POST', '/api/v1/users/me/subscriptions', {
     body: {
@@ -864,6 +874,7 @@ effectTest(
       yield* stub.respond('GET', '/api/v1/messages', {
         body: gapMessagesBody('posted during the gap'),
       })
+      yield* seedMySubscriptions(stub)
       yield* stub.respondSequence('GET', '/api/v1/events', [
         {
           body: {
@@ -923,6 +934,7 @@ effectTest(
       yield* stub.respond('GET', '/api/v1/messages', {
         body: gapMessagesBody('posted during the reconnect gap'),
       })
+      yield* seedMySubscriptions(stub)
       // Sequence across both iterators:
       //   poll1 (iter1) — live ts=1000, advances the watermark
       //   poll2 (iter1) — HANG: the long-poll holds, so iter1's eager drain
