@@ -72,8 +72,8 @@ import {
   Mention,
   MessageEditRefused,
   MessagePermalinkSchema,
-  mentionedIdentities,
   mentionsIdentity,
+  notifiesIdentity,
   PublisherError,
   ThreadPermalinkSchema,
   UnboundEphemeralSession,
@@ -918,12 +918,10 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
           }
           if (HashSet.has(subs, MENTIONS_KEY) && Option.isSome(current)) {
             const me = current.value.identity
-            // A wildcard notifies the channel's subscribers, as on Zulip, so
-            // it reaches a seat only where the seat holds the channel.
-            const notified = holdsChannel(subs, stored.ref.channel.name)
-              ? mentionsIdentity(stored.mentions, me.id)
-              : mentionedIdentities(stored.mentions).some((identity) => identity.id === me.id)
-            if (notified) return true
+            if (
+              notifiesIdentity(stored.mentions, me.id, holdsChannel(subs, stored.ref.channel.name))
+            )
+              return true
           }
           return false
         }),
@@ -1062,8 +1060,8 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
       // A read, so it never binds — the state a read touches belongs to
       // whoever wrote it. Reaching here unbound stays a caller defect.
       replay: (since: TimestampType) =>
-        readBound().pipe(
-          Effect.map((me) => {
+        Effect.all([readBound(), Ref.get(subscriptions)]).pipe(
+          Effect.map(([me, subs]) => {
             const ordered: StoredMessage[] = []
             for (const bucket of messagesByChannel.values()) {
               for (const stored of bucket) {
@@ -1082,7 +1080,13 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
                 collectReactions(stored.ref.id),
               )
               out.push({ kind: 'message-posted', message: portMessage })
-              if (mentionsIdentity(stored.mentions, me.id)) {
+              if (
+                notifiesIdentity(
+                  stored.mentions,
+                  me.id,
+                  holdsChannel(subs, stored.ref.channel.name),
+                )
+              ) {
                 out.push({
                   kind: 'mention-received',
                   message: portMessage,

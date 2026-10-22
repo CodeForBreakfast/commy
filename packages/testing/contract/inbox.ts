@@ -800,6 +800,28 @@ export const inboxContract = (env: () => ContractEnv): void => {
         expect(mentionedIdentities(mention.mentions).map((m) => m.id)).toContain(me.id)
       }),
     ))
+  // Replay agrees with live delivery: a channel wildcard notifies only the
+  // channel's subscribers. The personal mention after it is the sentinel that
+  // shows replay still raises mentions in that channel.
+  test('inbox.replay raises no mention-received for a peer channel wildcard in a channel self never joined', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const peerPost = env().peerPost
+        if (peerPost === undefined) return
+        const channel = yield* env().seedChannel('lobby')
+        const me = yield* env().comms.identity.currentIdentity()
+        const peer = yield* env().seedAgent('alice')
+        yield* peerPost(peer, channel.name, decodeMessageBodySync('heads up @**all**'))
+        yield* peerPost(peer, channel.name, decodeMessageBodySync(`@**${me.name}** sentinel`))
+        const [wildcard] = yield* env().comms.history.readChannel(channel.name, {})
+        if (wildcard === undefined) throw new Error('expected the wildcard post in channel history')
+        const events = yield* env().comms.inbox.replay(wildcard.ts)
+        const mentioned = events
+          .filter((e) => e.kind === 'mention-received')
+          .map((e) => e.message.body)
+        expect(mentioned).toEqual([decodeMessageBodySync(`@**${me.name}** sentinel`)])
+      }),
+    ))
   test('inbox.subscribe(new-topics-in-channel) yields the first message of a fresh topic', () =>
     Effect.runPromise(
       Effect.scoped(
