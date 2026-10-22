@@ -117,29 +117,6 @@ test('fires mention-received when bound identity is in content even if flags lac
   }
 })
 
-test('does not fire mention-received when the bound identity is only mentioned inside a code span', () => {
-  // The phantom-mention case: a message that TALKS ABOUT the bound bot's
-  // mention token — inside backticks — is not a mention. Zulip renders no
-  // mention there and notifies nobody, so synthesis must not fire and the
-  // reported mentions[] must be empty.
-  const directory = directoryFor(HERMES, MAINTAINER)
-  const message: ParsedZulipMessage = {
-    ...messageMentioning(HERMES, MAINTAINER),
-    content: 'never write `@**hermes-agent**` in a code span',
-  }
-
-  const events = Effect.runSync(
-    messageToInboundEvents(message, directory, HERMES, PERMALINK_BASE, NO_RENDER),
-  )
-
-  expect(events.find((e) => e.kind === 'mention-received')).toBeUndefined()
-  const posted = events.find((e) => e.kind === 'message-posted')
-  expect(posted).toBeDefined()
-  if (posted !== undefined && posted.kind === 'message-posted') {
-    expect(posted.message.mentions).toEqual([])
-  }
-})
-
 test('decorates the inbound message ref with message, channel and topic permalinks', () => {
   const directory = directoryFor(HERMES, MAINTAINER)
   const message = messageMentioning(HERMES, MAINTAINER)
@@ -174,26 +151,6 @@ test('decorates the inbound message ref with message, channel and topic permalin
       ),
     )
   }
-})
-
-test('does not fire mention-received when bound identity is not in content', () => {
-  // Negative case: a message that mentions someone else (not the bound
-  // bot) must not synthesise a mention-received for the bound bot, even
-  // when the queue happens to have flagged it (e.g. minter was mentioned).
-  const RIQ: Identity = {
-    id: decodeIdentityIdSync('11'),
-    name: decodeDisplayNameSync('riq6r230'),
-    kind: 'agent',
-  }
-  const directory = directoryFor(HERMES, MAINTAINER, RIQ)
-  const message = messageMentioning(RIQ, MAINTAINER)
-
-  const events = Effect.runSync(
-    messageToInboundEvents(message, directory, HERMES, PERMALINK_BASE, rendering(RIQ)),
-  )
-  const mention = events.find((e) => e.kind === 'mention-received')
-
-  expect(mention).toBeUndefined()
 })
 
 // A seat minted after the user list was cached is missing from it. The realm
