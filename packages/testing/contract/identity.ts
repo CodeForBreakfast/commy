@@ -21,6 +21,16 @@ export const identityContract = (env: () => ContractEnv): void => {
         expect(Option.isNone(found)).toBe(true)
       }),
     ))
+  test('identity.resolve returns undefined for a deactivated agent', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const seedDeactivatedAgent = env().seedDeactivatedAgent
+        if (seedDeactivatedAgent === undefined) return
+        const gone = yield* seedDeactivatedAgent('alice')
+        const found = yield* env().comms.identity.resolve(gone.name)
+        expect(Option.isNone(found)).toBe(true)
+      }),
+    ))
   test('identity.acquire on the bound name is idempotent — returns the same identity', () =>
     Effect.runPromise(
       Effect.gen(function* () {

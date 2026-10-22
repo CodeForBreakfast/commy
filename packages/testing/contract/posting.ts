@@ -112,6 +112,24 @@ export const publisherPostingContract = (env: () => ContractEnv): void => {
         expect(findByBody(messages, body)).toBeUndefined()
       }),
     ))
+  test('publisher.post refuses a body that mentions a deactivated agent, and posts nothing', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const seedDeactivatedAgent = env().seedDeactivatedAgent
+        if (seedDeactivatedAgent === undefined) return
+        const gone = yield* seedDeactivatedAgent('alice')
+        const channel = yield* env().seedChannel('lobby')
+        const body = decodeMessageBodySync(`decision for @**${gone.name}** to make`)
+        const error = yield* Effect.flip(env().comms.publisher.post(channel.name, body))
+        expect(error).toBeInstanceOf(UnresolvedMention)
+        if (error instanceof UnresolvedMention) {
+          expect(error.operation).toBe('post')
+          expect(error.tokens).toEqual([String(gone.name)])
+        }
+        const messages = yield* env().comms.history.readChannel(channel.name, {})
+        expect(findByBody(messages, body)).toBeUndefined()
+      }),
+    ))
   // A mention form inside a code span is literal text, not a failed delivery,
   // so it never triggers UnresolvedMention.
   test('publisher.post delivers a mention form naming nobody verbatim when it sits in a code span', () =>

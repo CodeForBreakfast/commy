@@ -417,14 +417,19 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
         return { identity, origin: 'minted' as const }
       })
 
+    // As on Zulip, a deactivated member no longer answers to its name.
+    const activeIdentityNamed = (name: string): Option.Option<Identity> =>
+      Option.filter(
+        Option.fromNullable(identitiesByName.get(name)),
+        (identity) => !deactivatedIdentities.has(identity.id),
+      )
+
     // Who a body mentions, as Zulip renders it: each known name once, in the
     // order written. A name nobody holds mentions nobody.
     const mentionsIn = (body: MessageBodyType): ReadonlyArray<Mention> =>
       userMentions(
         Arr.dedupeWith(
-          Arr.filterMap(mentionedNames(body), (name) =>
-            Option.fromNullable(identitiesByName.get(name)),
-          ),
+          Arr.filterMap(mentionedNames(body), activeIdentityNamed),
           (a, b) => a.id === b.id,
         ),
       )
@@ -434,7 +439,7 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
       body: MessageBodyType,
     ): Effect.Effect<void, UnresolvedMention> => {
       const tokens = Arr.dedupe(
-        Arr.filter(mentionedNames(body), (name) => !identitiesByName.has(name)),
+        Arr.filter(mentionedNames(body), (name) => Option.isNone(activeIdentityNamed(name))),
       )
       return Arr.isEmptyReadonlyArray(tokens)
         ? Effect.void
@@ -592,7 +597,7 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
           ),
         ),
       release: () => Ref.set(bound, Option.none()),
-      resolve: (name) => Effect.sync(() => Option.fromNullable(identitiesByName.get(name))),
+      resolve: (name) => Effect.sync(() => activeIdentityNamed(name)),
     }
 
     const buildRef = (
