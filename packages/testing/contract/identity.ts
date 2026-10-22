@@ -77,6 +77,24 @@ export const identityContract = (env: () => ContractEnv): void => {
         expect(after.name).toEqual(decodeDisplayNameSync(rawName))
       }),
     ))
+  test('identity.acquire on a deactivated agent brings it back under its old id', () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const build = env().newUnacquiredAdapter
+        const deactivateAgent = env().deactivateAgent
+        if (build === undefined || deactivateAgent === undefined) return
+        const current = yield* env().comms.identity.currentIdentity()
+        const name = decodeBotNameSync(`${current.name}-returning`)
+        const first = yield* (yield* build()).identity.acquire(name)
+        yield* deactivateAgent(first.identity)
+        const again = yield* (yield* build()).identity.acquire(name)
+        expect(again.identity.id).toEqual(first.identity.id)
+        const found = yield* env().comms.identity.resolve(first.identity.name)
+        expect(Option.getOrUndefined(found)?.id).toEqual(first.identity.id)
+        const agents = yield* env().comms.directory.listAgents()
+        expect(agents.map((a) => a.id)).toContain(first.identity.id)
+      }),
+    ))
   test('identity.acquire binds the adapter to the identity it returns', () =>
     Effect.runPromise(
       Effect.gen(function* () {

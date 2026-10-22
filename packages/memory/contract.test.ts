@@ -52,6 +52,7 @@ runAgentCommsContract('memory adapter (allowlist mode for UnknownIdentity covera
         ...(bindOnDemand === undefined ? {} : { bindOnDemand }),
         acquirableNames: [
           'hermes-agent-cycle',
+          'hermes-agent-returning',
           'hermes-agent-a',
           'hermes-agent-b',
           'hermes-agent-c',
