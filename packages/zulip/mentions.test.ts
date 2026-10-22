@@ -33,7 +33,7 @@ const directoryFor = (...identities: ReadonlyArray<Identity>): MentionDirectory 
   const byId = new Map(identities.map((i) => [Number(i.id), i]))
   return {
     // Name-keyed: two same-named humans collide, so byName holds only the last.
-    byName: new Map(identities.map((i) => [i.name as string, i])),
+    byName: new Map(identities.map((i) => [(i.name as string).toLowerCase(), i])),
     byUserId: (userId) => byId.get(userId),
   }
 }
