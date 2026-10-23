@@ -100,7 +100,7 @@ const RUN_STREAM_PATTERN = /^cc-ct-([0-9a-z]+)-/
 // over; younger ones may belong to a run still going elsewhere.
 // ponytail: fixed age, so a killed run's streams survive until a run this much later
 const LEFTOVER_AFTER = Duration.hours(1)
-const SWEEP_TIMEOUT_MS = 120_000
+const SWEEP_TIMEOUT_MS = 600_000
 
 const successSchema = Schema.Struct({ result: Schema.Literal('success') })
 const streamsListSchema = Schema.Struct({
@@ -262,7 +262,8 @@ if (env === undefined) {
         Effect.flatMap((res) =>
           Effect.forEach(
             res.streams.filter((s) => isLeftoverRunStream(s.name)),
-            (s) => archiveStream(minter, s.stream_id),
+            (s) =>
+              Effect.sleep(MINTER_PACE).pipe(Effect.zipRight(archiveStream(minter, s.stream_id))),
             { discard: true },
           ),
         ),
