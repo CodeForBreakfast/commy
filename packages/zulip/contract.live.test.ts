@@ -102,9 +102,16 @@ const PEER_PREFIX = 'cc-contract-peer'
 
 const successSchema = Schema.Struct({ result: Schema.Literal('success') })
 const streamIdSchema = Schema.Struct({ result: Schema.Literal('success'), stream_id: Schema.Int })
+const groupMembersSchema = Schema.Struct({
+  direct_members: Schema.Array(Schema.Int),
+  direct_subgroups: Schema.Array(Schema.Int),
+})
 const streamSchema = Schema.Struct({
   result: Schema.Literal('success'),
-  stream: Schema.Struct({ description: Schema.String }),
+  stream: Schema.Struct({
+    description: Schema.String,
+    can_administer_channel_group: groupMembersSchema,
+  }),
 })
 const topicsSchema = Schema.Struct({
   result: Schema.Literal('success'),
@@ -204,10 +211,19 @@ if (env === undefined) {
   // A minter that is not a moderator may move a message only within the
   // realm's move time limit, so a stream left unemptied for longer than that
   // fails here until a realm administrator empties it.
-  const emptyStream = (minter: ZulipHttp, streamId: number) =>
+  const readyStream = (minter: ZulipHttp, streamId: number, selfId: number) =>
     Effect.gen(function* () {
       const spentId = yield* poolStream(minter, SPENT_CHANNEL)
       const { stream } = yield* minter.get(`/streams/${streamId}`, streamSchema)
+      // The contract has self set a seeded stream's description, which only the
+      // stream's administrators may do.
+      const admins = stream.can_administer_channel_group
+      if (!admins.direct_members.includes(selfId))
+        yield* minter.patch(`/streams/${streamId}`, successSchema, {
+          can_administer_channel_group: JSON.stringify({
+            new: { ...admins, direct_members: [...admins.direct_members, selfId] },
+          }),
+        })
       // Clearing a description posts a notice into the stream, so this goes
       // before the topics are moved out.
       if (stream.description !== '')
@@ -226,10 +242,14 @@ if (env === undefined) {
       )
     })
 
-  const seedPoolChannel = (minter: ZulipHttp, name: string): Effect.Effect<ChannelRef> => {
+  const seedPoolChannel = (
+    minter: ZulipHttp,
+    name: string,
+    selfId: number,
+  ): Effect.Effect<ChannelRef> => {
     const realName = `${POOL_PREFIX}-${name}`
     return poolStream(minter, realName).pipe(
-      Effect.tap((streamId) => emptyStream(minter, streamId)),
+      Effect.tap((streamId) => readyStream(minter, streamId, selfId)),
       Effect.map((streamId) =>
         withChannelPermalink(permalinkBase({ realmUrl: Effect.runSync(RealmUrl(liveEnv.site)) }), {
           id: decodeChannelIdSync(String(streamId)),
@@ -280,6 +300,7 @@ if (env === undefined) {
     await Effect.runPromise(
       Effect.sleep(MINTER_PACE).pipe(Effect.zipRight(adapter.identity.acquire(SELF_NAME))),
     )
+    const self = await Effect.runPromise(adapter.identity.currentIdentity())
 
     // The self bot is persistent, so subscriptions from earlier tests and runs
     // outlive them and would break the tests that assert the exact set.
@@ -296,7 +317,7 @@ if (env === undefined) {
       seedChannel: (name) => {
         const cached = seeded.get(name)
         if (cached !== undefined) return Effect.succeed(cached)
-        return seedPoolChannel(minter, name).pipe(
+        return seedPoolChannel(minter, name, Number(self.id)).pipe(
           Effect.tap((channel) => Effect.sync(() => seeded.set(name, channel))),
         )
       },
