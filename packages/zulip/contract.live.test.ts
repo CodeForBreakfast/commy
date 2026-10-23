@@ -18,17 +18,18 @@
  *   (`/register`) — a reused adapter re-polls a stale queue that silently
  *   stops delivering. The bot account is suite-scoped; only the adapter is
  *   per-test.
- * - **Per-test channel namespace.** `seedChannel(name)` creates a real stream
- *   named `cc-ct-<run>-<seq>-<name>` so each test reads/writes an isolated
- *   channel. The contract reuses fixed logical names (`lobby`, `alpha`) across
- *   ~50 tests; on a realm that persists channel state that is cross-test
- *   contamination within a run (the channel-wide `readChannel` range tests
- *   assert `not.toContain` / exact-equality). The fake sidesteps it by
- *   building a fresh realm per `beforeEach`; the live factory namespaces
- *   instead. The minter creates each stream, so the realm makes it the
- *   stream's administrator, and the per-test `dispose` archives what the test
- *   seeded, pass or fail. A run killed mid-test leaves its last test's
- *   streams, which the next run's start-of-suite sweep archives.
+ * - **A fixed pool of channels, emptied before each use.** Zulip's API cannot
+ *   delete a channel, and an archived one still loads in every web client, so
+ *   a run must create none. `seedChannel(name)` maps each logical name the
+ *   contract uses (`lobby`, `alpha`, …) to one permanent stream,
+ *   `cc-ct-<name>`, created by the first run ever and reused by every run
+ *   after. The contract's channel-wide reads assert exact contents, so the
+ *   first seed of a name in a test empties that stream: it clears the
+ *   description and moves every topic out to `cc-ct-spent`. The minter created
+ *   both streams, so the realm makes it their administrator, which lets it
+ *   move topics out. Emptying before use rather than after covers a run that
+ *   failed or was killed. The fake sidesteps all this by building a fresh
+ *   realm per `beforeEach`.
  * - **Shared peer agents.** `seedAgent(name)` find-or-creates a persistent
  *   peer bot (`cc-contract-peer-<name>`) once and reuses it — peers carry no
  *   per-test state, so suite-level reuse costs no per-test mint.
@@ -44,7 +45,7 @@
  * unset the suite is skipped.
  */
 
-import { afterAll, beforeAll, describe, test } from 'bun:test'
+import { afterAll, describe, test } from 'bun:test'
 import type { ChannelRef, Identity } from '@commy/core/ports'
 import {
   decodeBotNameSync,
@@ -93,19 +94,21 @@ const httpClient = Effect.runSync(HttpClient.HttpClient.pipe(Effect.provide(Fetc
 const MINTER_PACE = Duration.millis(900)
 
 const SELF_NAME = decodeBotNameSync('cc-contract-self')
-const NS_PREFIX = 'cc-ct'
+// ponytail: one pool per realm, so two runs at once on the same realm
+// trample each other's channels; namespace the pool per machine if that happens
+const POOL_PREFIX = 'cc-ct'
+const SPENT_CHANNEL = `${POOL_PREFIX}-spent`
 const PEER_PREFIX = 'cc-contract-peer'
-const RUN_STREAM_PATTERN = /^cc-ct-([0-9a-z]+)-/
-// A run's streams are another run's leftovers only once that run is long
-// over; younger ones may belong to a run still going elsewhere.
-// ponytail: fixed age, so a killed run's streams survive until a run this much later
-const LEFTOVER_AFTER = Duration.hours(1)
-const SWEEP_TIMEOUT_MS = 600_000
 
 const successSchema = Schema.Struct({ result: Schema.Literal('success') })
-const streamsListSchema = Schema.Struct({
+const streamIdSchema = Schema.Struct({ result: Schema.Literal('success'), stream_id: Schema.Int })
+const streamSchema = Schema.Struct({
   result: Schema.Literal('success'),
-  streams: Schema.Array(Schema.Struct({ name: Schema.NonEmptyString, stream_id: Schema.Int })),
+  stream: Schema.Struct({ description: Schema.String }),
+})
+const topicsSchema = Schema.Struct({
+  result: Schema.Literal('success'),
+  topics: Schema.Array(Schema.Struct({ max_id: Schema.Int })),
 })
 const usersListSchema = Schema.Struct({
   result: Schema.Literal('success'),
@@ -152,11 +155,8 @@ if (env === undefined) {
       minterApiKey: Redacted.make(Effect.runSync(ApiKey(liveEnv.minterApiKey))),
     }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.orDie)
 
-  // One process-wide run id keeps each `bun run test:live` invocation's streams
-  // distinct from prior runs; the per-call sequence keeps tests distinct within
-  // a run. (Test files may use Date.now — only Workflow scripts may not.)
-  const runId = Date.now().toString(36)
-  let seq = 0
+  // Pool stream ids never change, so each is looked up once per run.
+  const poolIds = new Map<string, number>()
 
   // Persistent peer bots are find-or-created once and cached for the suite.
   const peerCache = new Map<string, Identity>()
@@ -186,34 +186,59 @@ if (env === undefined) {
   // event pump is unwound here so handles don't leak across the run.
   const builtAdapters: ZulipAdapter[] = []
 
-  const ensureStream = (minter: ZulipHttp, realName: string): Effect.Effect<ChannelRef> =>
-    minter
-      .post('/users/me/subscriptions', successSchema, {
+  // Subscribing creates the stream only the first time any run asks for it.
+  const poolStream = (minter: ZulipHttp, realName: string) =>
+    Effect.gen(function* () {
+      const cached = poolIds.get(realName)
+      if (cached !== undefined) return cached
+      yield* minter.post('/users/me/subscriptions', successSchema, {
         subscriptions: JSON.stringify([{ name: realName }]),
       })
-      .pipe(
-        Effect.zipRight(
-          minter.get('/streams', streamsListSchema, {
-            include_public: true,
-            include_subscribed: true,
+      const { stream_id } = yield* minter.get('/get_stream_id', streamIdSchema, {
+        stream: realName,
+      })
+      poolIds.set(realName, stream_id)
+      return stream_id
+    })
+
+  // A minter that is not a moderator may move a message only within the
+  // realm's move time limit, so a stream left unemptied for longer than that
+  // fails here until a realm administrator empties it.
+  const emptyStream = (minter: ZulipHttp, streamId: number) =>
+    Effect.gen(function* () {
+      const spentId = yield* poolStream(minter, SPENT_CHANNEL)
+      const { stream } = yield* minter.get(`/streams/${streamId}`, streamSchema)
+      // Clearing a description posts a notice into the stream, so this goes
+      // before the topics are moved out.
+      if (stream.description !== '')
+        yield* minter.patch(`/streams/${streamId}`, successSchema, { description: '' })
+      const { topics } = yield* minter.get(`/users/me/${streamId}/topics`, topicsSchema)
+      yield* Effect.forEach(
+        topics,
+        (topic) =>
+          minter.patch(`/messages/${topic.max_id}`, successSchema, {
+            stream_id: spentId,
+            propagate_mode: 'change_all',
+            send_notification_to_old_thread: false,
+            send_notification_to_new_thread: false,
           }),
-        ),
-        Effect.flatMap((res) => {
-          const found = res.streams.find((s) => s.name === realName)
-          if (found === undefined)
-            return Effect.die(new Error(`seedChannel: stream ${realName} not found after create`))
-          return Effect.succeed<ChannelRef>(
-            withChannelPermalink(
-              permalinkBase({ realmUrl: Effect.runSync(RealmUrl(liveEnv.site)) }),
-              {
-                id: decodeChannelIdSync(String(found.stream_id)),
-                name: decodeChannelNameSync(realName),
-              },
-            ),
-          )
-        }),
-        Effect.orDie,
+        { discard: true },
       )
+    })
+
+  const seedPoolChannel = (minter: ZulipHttp, name: string): Effect.Effect<ChannelRef> => {
+    const realName = `${POOL_PREFIX}-${name}`
+    return poolStream(minter, realName).pipe(
+      Effect.tap((streamId) => emptyStream(minter, streamId)),
+      Effect.map((streamId) =>
+        withChannelPermalink(permalinkBase({ realmUrl: Effect.runSync(RealmUrl(liveEnv.site)) }), {
+          id: decodeChannelIdSync(String(streamId)),
+          name: decodeChannelNameSync(realName),
+        }),
+      ),
+      Effect.orDie,
+    )
+  }
 
   const ensurePeer = (
     minter: ZulipHttp,
@@ -244,40 +269,11 @@ if (env === undefined) {
       return resolved.value
     }).pipe(Effect.orDie)
 
-  const archiveStream = (minter: ZulipHttp, streamId: number | string) =>
-    minter.delete(`/streams/${streamId}`, successSchema)
-
-  const isLeftoverRunStream = (name: string): boolean => {
-    const run = RUN_STREAM_PATTERN.exec(name)?.[1]
-    return (
-      run !== undefined && Number.parseInt(run, 36) < Date.now() - Duration.toMillis(LEFTOVER_AFTER)
-    )
-  }
-
-  // Covers runs killed before their dispose could archive their streams.
-  beforeAll(async () => {
-    const minter = await Effect.runPromise(buildMinterHttp())
-    await Effect.runPromise(
-      minter.get('/streams', streamsListSchema, { include_public: true }).pipe(
-        Effect.flatMap((res) =>
-          Effect.forEach(
-            res.streams.filter((s) => isLeftoverRunStream(s.name)),
-            (s) =>
-              Effect.sleep(MINTER_PACE).pipe(Effect.zipRight(archiveStream(minter, s.stream_id))),
-            { discard: true },
-          ),
-        ),
-        Effect.orDie,
-      ),
-    )
-  }, SWEEP_TIMEOUT_MS)
-
   afterAll(async () => {
     for (const a of builtAdapters) await a.close()
   })
 
   const liveContractFactory: AttachmentContractFactory = async () => {
-    const ns = `${NS_PREFIX}-${runId}-${seq++}`
     const adapter = await Effect.runPromise(buildAdapter())
     builtAdapters.push(adapter)
     const minter = await Effect.runPromise(buildMinterHttp())
@@ -291,15 +287,19 @@ if (env === undefined) {
     for (const channel of held)
       await Effect.runPromise(adapter.inbox.unsubscribe(channel).pipe(Effect.orDie))
 
-    const seeded = new Set<ChannelRef['id']>()
+    // A name seeded twice in one test is the same channel, emptied only once.
+    const seeded = new Map<string, ChannelRef>()
 
     return {
       comms: adapter,
       attachments: adapter,
-      seedChannel: (name) =>
-        ensureStream(minter, `${ns}-${name}`).pipe(
-          Effect.tap((channel) => Effect.sync(() => seeded.add(channel.id))),
-        ),
+      seedChannel: (name) => {
+        const cached = seeded.get(name)
+        if (cached !== undefined) return Effect.succeed(cached)
+        return seedPoolChannel(minter, name).pipe(
+          Effect.tap((channel) => Effect.sync(() => seeded.set(name, channel))),
+        )
+      },
       seedAgent: (name) => ensurePeer(minter, adapter, name),
       // A seeded peer posts (mentioning self) through its own bound adapter so
       // the mention-floor tests run cross-identity — the shape that surfaces on
@@ -318,11 +318,6 @@ if (env === undefined) {
       dispose: () =>
         Effect.sleep(MINTER_PACE).pipe(
           Effect.zipRight(adapter.identity.release({ persistent: true })),
-          Effect.zipRight(
-            Effect.forEach(seeded, (id) => archiveStream(minter, id), { discard: true }),
-          ),
-          Effect.zipRight(Effect.sync(() => seeded.clear())),
-          Effect.orDie,
         ),
     }
   }
