@@ -480,10 +480,9 @@ export interface AcquiredIdentity {
  * Caller-supplied intent for `IdentityPort.release`. `persistent` flags an
  * identity meant to outlive the session — pinned via `COMMY_BOT_NAME`
  * rather than minted as an ephemeral `cc-*` seat. Substrates that deactivate
- * on release (Zulip) skip deactivation for a persistent identity, so a
- * later re-acquire is an owner-permitted regenerate rather than an admin-only
- * reactivate of a bot the minter deactivated itself. Omitted /
- * `false` is the ephemeral default: deactivate as usual.
+ * on release (Zulip) skip deactivation for a persistent identity, so it
+ * stays active between sessions. Omitted / `false` is the ephemeral
+ * default: deactivate as usual.
  */
 export interface ReleaseOpts {
   readonly persistent?: boolean
@@ -542,10 +541,7 @@ export interface IdentityPort {
    * calling on an unauthenticated adapter is a no-op, never fails.
    *
    * Pass `{ persistent: true }` for an `COMMY_BOT_NAME`-pinned
-   * identity so the substrate skips deactivation: a
-   * deactivated bot's only path back is an admin-only reactivate, which
-   * wedges a Member-rights minter. Leaving a persistent bot active keeps
-   * re-acquire on the owner-permitted regenerate path. Omitted / `false`
+   * identity so the substrate skips deactivation. Omitted / `false`
    * is the ephemeral default and deactivates as usual.
    */
   release(opts?: ReleaseOpts): Effect.Effect<void, never>

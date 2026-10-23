@@ -240,7 +240,7 @@ export type ZulipAdapter = AgentComms &
 /**
  * An identity failure the realm may get over by itself: a minter call that
  * timed out, or a realm that could not be reached. A refusal wrapped in one of
- * our own errors, such as `ReactivateForbidden`, is not transient.
+ * our own errors, such as `AttachIdentityNotFound`, is not transient.
  */
 const identityError = (operation: IdentityError['operation'], cause: unknown): IdentityError =>
   new IdentityError({
@@ -250,32 +250,6 @@ const identityError = (operation: IdentityError['operation'], cause: unknown): I
       Cause.isTimeoutException(cause) ||
       (cause instanceof ZulipApiError && isTransientZulipError(cause)),
   })
-
-/**
- * Raised when re-acquiring a deactivated bot needs the admin-only
- * `POST /users/{id}/reactivate` and the minter lacks the rights (a plain
- * Member, `is_admin` false). The underlying realm response is often the
- * opaque "Invalid API key" / "Must be an organization administrator", which
- * reads as a credential bug; this error states the real cause so the next
- * debugger is not sent chasing a phantom. The fix that removes
- * the dependency for pinned identities is `release({ persistent: true })` —
- * a persistent bot is never deactivated, so re-acquire stays on the
- * owner-permitted regenerate path and never reaches reactivate.
- */
-class ReactivateForbidden extends Data.TaggedError('ReactivateForbidden')<{
-  readonly userId: number
-  readonly cause: ZulipApiError
-}> {
-  override get message(): string {
-    return (
-      `cannot reactivate deactivated bot ${this.userId}: the minter is not an ` +
-      `organization administrator, and POST /users/{id}/reactivate is admin-only. ` +
-      `Pin this identity with COMMY_BOT_NAME so it is never deactivated on ` +
-      `release, or grant the minter admin rights. Underlying realm ` +
-      `error: ${this.cause.message}`
-    )
-  }
-}
 
 /**
  * Raised when attach mode is configured for a persona that the
@@ -1155,16 +1129,10 @@ export const zulipAdapter = (
 
     const reactivateBot = (
       existing: ZulipUser,
-    ): Effect.Effect<void, ReactivateForbidden | ParseResult.ParseError> =>
-      minterHttp.post(`/users/${existing.user_id}/reactivate`, successSchema, {}).pipe(
-        Effect.asVoid,
-        // POST /users/{id}/reactivate is admin-only; a Member-rights minter is
-        // refused. Re-flag the failure as ReactivateForbidden so the surfaced
-        // IdentityError names the real cause instead of the opaque realm error.
-        Effect.catchTag('ZulipApiError', (cause) =>
-          Effect.fail(new ReactivateForbidden({ userId: existing.user_id, cause })),
-        ),
-      )
+    ): Effect.Effect<void, ZulipApiError | ParseResult.ParseError> =>
+      minterHttp
+        .post(`/users/${existing.user_id}/reactivate`, successSchema, {})
+        .pipe(Effect.asVoid)
 
     const regenerateBotKey = (
       existing: ZulipUser,
@@ -1189,7 +1157,7 @@ export const zulipAdapter = (
 
     const acquireBot = (
       name: BotName,
-    ): Effect.Effect<BoundBot, ZulipApiError | ReactivateForbidden | ParseResult.ParseError> =>
+    ): Effect.Effect<BoundBot, ZulipApiError | ParseResult.ParseError> =>
       findAnyBotByName(name).pipe(
         Effect.flatMap(
           Option.match({
@@ -1239,10 +1207,7 @@ export const zulipAdapter = (
     // configured attach persona, else the self-service mint/regenerate.
     const provideMintedFor = (
       name: BotName,
-    ): Effect.Effect<
-      BoundBot,
-      ZulipApiError | ReactivateForbidden | AttachIdentityNotFound | ParseResult.ParseError
-    > => {
+    ): Effect.Effect<BoundBot, ZulipApiError | AttachIdentityNotFound | ParseResult.ParseError> => {
       const attach = config.attachIdentity
       return attach !== undefined && attach.name === name
         ? attachBot(name, Redacted.value(attach.apiKey))
@@ -1332,9 +1297,7 @@ export const zulipAdapter = (
         SynchronizedRef.modifyEffect(boundRef, (current) =>
           Option.match(current, {
             onNone: () => Effect.succeed([undefined, current] as const),
-            // A persistent identity (COMMY_BOT_NAME-pinned) must stay
-            // active: deactivating it forces the next acquire onto the
-            // admin-only reactivate path, which wedges a Member-rights minter.
+            // A persistent identity (COMMY_BOT_NAME-pinned) stays active.
             // Clear the binding either way; only skip the
             // substrate-side deactivate. Deactivation failure is non-fatal —
             // the bot expires via the realm's idle GC, so we swallow it and

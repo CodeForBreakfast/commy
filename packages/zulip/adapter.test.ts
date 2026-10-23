@@ -607,42 +607,34 @@ effectTest(
     }),
 )
 
-effectTest(
-  'identity.acquire surfaces a reactivate failure with the real cause, not a generic credential error',
-  () =>
-    Effect.gen(function* () {
-      const stub = yield* makeStubHttpClient
-      const deactivated = { ...HERMES, is_active: false }
-      yield* seedUsers(stub, [deactivated])
-      // A Member (non-admin) minter calling POST /users/{id}/reactivate gets
-      // UNAUTHORIZED_PRINCIPAL ("Must be an organization administrator"), 400.
-      yield* stub.respond('POST', `/api/v1/users/${HERMES.user_id}/reactivate`, {
-        body: {
-          result: 'error',
-          msg: 'Must be an organization administrator',
-          code: 'UNAUTHORIZED_PRINCIPAL',
-        },
-        status: 400,
-      })
-      yield* seedRegenerate(stub, HERMES.user_id)
-      const adapter = yield* zulipAdapter(stub, yield* makeConfig())
-      const err = yield* Effect.flip(adapter.identity.acquire(decodeBotNameSync('hermes-agent')))
-      expect(err).toBeInstanceOf(IdentityError)
-      // The surfaced message must name the real cause (reactivate forbidden /
-      // minter not admin) so the next debugger is not sent chasing a phantom
-      // credential bug.
-      expect(err.message).toContain('reactivate')
-      expect(err.message.toLowerCase()).toContain('administrator')
-      // The regenerate must never have fired — reactivate failed first.
-      const reqs = yield* stub.captured
-      expect(
-        reqs.find(
-          (r) =>
-            r.method === 'POST' &&
-            r.url.pathname === `/api/v1/bots/${HERMES.user_id}/api_key/regenerate`,
-        ),
-      ).toBeUndefined()
-    }),
+effectTest("identity.acquire surfaces the realm's reason when it refuses a reactivate", () =>
+  Effect.gen(function* () {
+    const stub = yield* makeStubHttpClient
+    const deactivated = { ...HERMES, is_active: false }
+    yield* seedUsers(stub, [deactivated])
+    yield* stub.respond('POST', `/api/v1/users/${HERMES.user_id}/reactivate`, {
+      body: {
+        result: 'error',
+        msg: 'There is already an active bot named "hermes-agent" in this organization.',
+        code: 'BAD_REQUEST',
+      },
+      status: 400,
+    })
+    yield* seedRegenerate(stub, HERMES.user_id)
+    const adapter = yield* zulipAdapter(stub, yield* makeConfig())
+    const err = yield* Effect.flip(adapter.identity.acquire(decodeBotNameSync('hermes-agent')))
+    expect(err).toBeInstanceOf(IdentityError)
+    expect(err.message).toContain('already an active bot named')
+    // The regenerate must never have fired — reactivate failed first.
+    const reqs = yield* stub.captured
+    expect(
+      reqs.find(
+        (r) =>
+          r.method === 'POST' &&
+          r.url.pathname === `/api/v1/bots/${HERMES.user_id}/api_key/regenerate`,
+      ),
+    ).toBeUndefined()
+  }),
 )
 
 effectTest('identity.acquire after release rebinds via a fresh /users round-trip', () =>
