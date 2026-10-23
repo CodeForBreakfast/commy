@@ -59,7 +59,7 @@ export interface InProcessRealm {
   /** Reaches this realm. Provide it as the adapter's `HttpClient`. */
   readonly client: HttpClient.HttpClient
   readonly url: RealmUrlType
-  /** An organization administrator, for the adapter's minter credentials. */
+  /** A member who may create bots, for the adapter's minter credentials. */
   readonly minter: { readonly email: BotEmailType; readonly apiKey: ApiKeyType }
   /** A channel nobody is subscribed to, or the one already named so. */
   readonly addChannel: (
@@ -653,7 +653,7 @@ export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(func
 
   const minter = yield* createUser('Minter', 'human', {
     email: `minter@${REALM_HOST}`,
-    isAdmin: true,
+    isAdmin: false,
   })
   const notificationBot = yield* createUser('Notification Bot', 'notification-bot', {
     email: 'notification-bot@zulip.com',
@@ -955,12 +955,23 @@ export const makeInProcessRealm: Effect.Effect<InProcessRealm> = Effect.gen(func
       handle: (call) =>
         update((state) =>
           Effect.gen(function* () {
-            if (!call.caller.isAdmin) return yield* refuse('Must be an organization administrator')
             const user = yield* Option.match(HashMap.get(state.users, pathId(call)), {
               onNone: () => refuse('No such user'),
               onSome: Effect.succeed,
             })
+            // Zulip's `can_admin_user`: an administrator, or the bot's owner.
+            if (!call.caller.isAdmin && !Option.contains(user.ownerId, call.caller.userId)) {
+              return yield* refuse('Insufficient permission')
+            }
             if (user.isActive) return yield* refuse('User is already active')
+            if (
+              isBot(user) &&
+              Option.isSome(findUser(state, (u) => u.isActive && u.fullName === user.fullName))
+            ) {
+              return yield* refuse(
+                `There is already an active bot named "${user.fullName}" in this organization.`,
+              )
+            }
             return putUser(state, { ...user, isActive: true })
           }),
         ),

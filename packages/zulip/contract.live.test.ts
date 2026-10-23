@@ -33,8 +33,7 @@
  * - **`newUnacquiredAdapter` omitted.** The contract sanctions this for
  *   substrates "whose acquire-acceptable names are pinned by external
  *   configuration (transitional Zulip)". It skips the rebind/no-op lifecycle
- *   tests, which on a non-admin minter would hit the admin-only
- *   reactivate path and fail.
+ *   tests.
  * - **Retry-After** is honoured automatically: the request layer's
  *   `rateLimitSchedule` absorbs 429s under a cumulative-wait budget.
  *

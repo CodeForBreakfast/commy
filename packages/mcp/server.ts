@@ -818,9 +818,7 @@ export const makeProgram = (
       // ephemeral session that never acquired has nothing to release.
       //
       // Persistent mode (COMMY_BOT_NAME set) releases with
-      // `{ persistent: true }` so the substrate keeps the pinned bot active —
-      // deactivating it would force the next session's acquire onto the
-      // admin-only reactivate path and wedge a Member-rights minter.
+      // `{ persistent: true }` so the substrate keeps the pinned bot active.
       // Ephemeral seats deactivate.
       const releasePersistent = parsed.botName !== undefined
       yield* Effect.addFinalizer(() =>

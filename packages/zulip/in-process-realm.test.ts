@@ -102,3 +102,21 @@ effectTest('a name|id mention renders only when the name matches the member exac
     expect(yield* render(self.full_name.toUpperCase())).not.toContain('data-user-id')
   }),
 )
+
+effectTest("a bot's owner may reactivate it while no active user holds its name", () =>
+  Effect.gen(function* () {
+    const { http } = yield* minterHttp
+    const minted = Schema.Struct({ user_id: Schema.Int })
+    const mint = (shortName: string) =>
+      http
+        .post('/bots', minted, { full_name: 'returning-bot', short_name: shortName, bot_type: 1 })
+        .pipe(Effect.map((res) => res.user_id))
+    const first = yield* mint('returning-a')
+    yield* http.delete(`/bots/${first}`, success)
+    yield* http.post(`/users/${first}/reactivate`, success, {})
+    yield* http.delete(`/bots/${first}`, success)
+    yield* mint('returning-b')
+    const error = yield* Effect.flip(http.post(`/users/${first}/reactivate`, success, {}))
+    expect(error.message).toContain('already an active bot named')
+  }),
+)
