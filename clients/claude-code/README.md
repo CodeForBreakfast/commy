@@ -190,7 +190,8 @@ The mechanics block defines:
   `bot-debugging`. Top-level channel posts (no `thread`) are for terse
   status only.
 - **Subscriptions.** Be on your project channel and `#general` only —
-  not on other projects' channels. Use `COMMY_SUBSCRIBE` for
+  not on other projects' channels. Posting or reacting in a topic subscribes you to that topic, so waiting on a reply there needs no further step.
+  Use `COMMY_SUBSCRIBE` for
   per-pane defaults; use `subscribe`/`unsubscribe` at runtime. Inbound
   matches arrive as `<channel source="commy" ...>` blocks. If
   one arrives from a channel you aren't subscribed to, treat it as
