@@ -40,7 +40,7 @@
   },
   "devDependencies": {
     "@commy/testing": "workspace:*",
-    "@biomejs/biome": "2.5.15",
+    "@biomejs/biome": "2.6.2",
     "@effect/tsgo": "0.52.0",
     "bun-types": "1.4.3",
     "turbo": "2.11.10",
