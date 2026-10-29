@@ -6,7 +6,7 @@
     "packages/*",
     "clients/*"
   ],
-  "packageManager": "bun@1.4.3",
+  "packageManager": "bun@1.4.4",
   "bin": "./packages/mcp/server.ts",
   "scripts": {
     "prepare": "git config core.hooksPath .hooks && effect-tsgo patch",
