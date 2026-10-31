@@ -6,7 +6,7 @@
     "packages/*",
     "clients/*"
   ],
-  "packageManager": "bun@1.4.3",
+  "packageManager": "bun@1.4.4",
   "bin": "./packages/mcp/server.ts",
   "scripts": {
     "prepare": "git config core.hooksPath .hooks && effect-tsgo patch",
@@ -14,11 +14,11 @@
     "pack:npm": "bun scripts/assemble-npm-package.ts",
     "start": "bun install --no-summary && bun packages/mcp/server.ts",
     "check": "bun install --no-summary && bunx turbo run test",
-    "test": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check (via turbo) instead of bun run test directly' >&2; exit 1; } && bun test",
-    "test:hermes": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check (via turbo) instead of bun run test:hermes directly' >&2; exit 1; } && clients/hermes/scripts/test.sh",
+    "test": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check instead of bun run test directly' >&2; exit 1; } && bun test",
+    "test:hermes": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check instead of bun run test:hermes directly' >&2; exit 1; } && clients/hermes/scripts/test.sh",
     "test:live": "bun test --path-ignore-patterns='' --timeout 45000 packages/zulip/realm.live.test.ts packages/zulip/contract.live.test.ts packages/mcp/server.live.test.ts",
-    "typecheck": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check (via turbo) instead of bun run typecheck directly' >&2; exit 1; } && tsc --noEmit",
-    "lint": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check (via turbo) instead of bun run lint directly' >&2; exit 1; } && bunx biome check .",
+    "typecheck": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check instead of bun run typecheck directly' >&2; exit 1; } && tsc --noEmit",
+    "lint": "[ -n \"$TURBO_HASH\" ] || { echo 'Use bun run check instead of bun run lint directly' >&2; exit 1; } && bunx biome check .",
     "lint:fix": "bunx biome check --fix ."
   },
   "dependencies": {
@@ -27,23 +27,23 @@
     "@commy/memory": "workspace:*",
     "@commy/zulip": "workspace:*",
     "@effect/platform": "0.97.2",
-    "@effect/platform-node": "0.108.3",
-    "@modelcontextprotocol/sdk": "1.32.1",
-    "effect": "3.22.3"
+    "@effect/platform-node": "0.108.4",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "effect": "3.22.4"
   },
   "overrides": {
     "undici": "^7.30.1",
     "hono": "^4.13.13",
     "ws": "^8.22.0",
-    "fast-uri": "^4.2.2",
+    "fast-uri": "^4.2.3",
     "ip-address": "^10.7.4"
   },
   "devDependencies": {
     "@commy/testing": "workspace:*",
-    "@biomejs/biome": "2.5.15",
+    "@biomejs/biome": "2.6.2",
     "@effect/tsgo": "0.53.0",
-    "bun-types": "1.4.3",
-    "turbo": "2.11.9",
+    "bun-types": "1.4.4",
+    "turbo": "2.11.10",
     "typescript": "7.0.2"
   }
 }
