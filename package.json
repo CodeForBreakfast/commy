@@ -36,7 +36,7 @@
     "hono": "^4.13.13",
     "ws": "^8.22.0",
     "fast-uri": "^4.2.3",
-    "ip-address": "^10.7.4"
+    "ip-address": "^10.7.5"
   },
   "devDependencies": {
     "@commy/testing": "workspace:*",
