@@ -17,12 +17,18 @@ import {
   UnknownIdentity,
 } from './ports.ts'
 
-test('UnknownIdentity names both the name and the substrate in its message', () => {
-  const err = new UnknownIdentity({ name: 'polecat-7', substrate: 'discord' })
+test('UnknownIdentity names both the bot name and the substrate in its message', () => {
+  const err = new UnknownIdentity({ botName: 'polecat-7', substrate: 'discord' })
   expect(err).toBeInstanceOf(Error)
   expect(err.message).toContain('polecat-7')
   expect(err.message).toContain('discord')
   expect(err._tag).toBe('UnknownIdentity')
+})
+
+test('UnknownIdentity keeps its error type as its name', () => {
+  const err = new UnknownIdentity({ botName: 'polecat-7', substrate: 'discord' })
+  expect(err.name).not.toBe('polecat-7')
+  expect(String(err)).not.toStartWith('polecat-7')
 })
 
 const runEither = <A, E>(effect: Effect.Effect<A, E>): Either.Either<A, E> =>

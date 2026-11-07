@@ -621,7 +621,7 @@ const memorySeat = (realm: MemoryRealm, config: MemorySeatConfig): Effect.Effect
                     ),
               onNone: (): Effect.Effect<AcquiredIdentity, UnknownIdentity | IdentityError> =>
                 allowlist !== undefined && !allowlist.has(name)
-                  ? Effect.fail(new UnknownIdentity({ name, substrate: 'memory' }))
+                  ? Effect.fail(new UnknownIdentity({ botName: name, substrate: 'memory' }))
                   : isCaseVariantOfExisting(name) || isNameOfHuman(name)
                     ? Effect.fail(
                         new IdentityError({

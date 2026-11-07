@@ -889,11 +889,11 @@ export interface AgentComms {
  * from a generic `IdentityError`.
  */
 export class UnknownIdentity extends Data.TaggedError('UnknownIdentity')<{
-  readonly name: string
+  readonly botName: string
   readonly substrate: string
 }> {
   override get message(): string {
-    return `acquire(${this.name}) failed — ${this.substrate} substrate has no entry for that name and cannot mint one`
+    return `acquire(${this.botName}) failed — ${this.substrate} substrate has no entry for that name and cannot mint one`
   }
 }
 
