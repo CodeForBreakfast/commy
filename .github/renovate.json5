@@ -1,90 +1,59 @@
 {
-  $schema: "https://docs.renovatebot.com/renovate-schema.json",
-
-  // config:best-practices gives us the whole maintainability spine in one line:
-  // config:recommended + dependency dashboard, GitHub Actions & Docker digest
-  // pinning (helpers:pinGitHubActionDigests replaces what dependabot.yml did),
-  // dev-dependency pinning, automatic config-migration PRs, abandoned-package
-  // detection, and weekly lock-file maintenance.
-  extends: ["config:best-practices"],
-
-  // Internal dependencies pin to an exact version. The packageRules below carve
-  // out the bun ecosystem (owned by bunfig.toml) and the compatibility floors.
-  rangeStrategy: "pin",
-
-  // CI (the `check` gate) is the arbiter of whether an update is good.
-  // platformAutomerge (default true) enqueues GitHub's native auto-merge, which
-  // respects the no-bypass branch ruleset on main and merges only on a green
-  // `check`. Default-on here, then the packageRule below holds minor + major
-  // for agent review — so patch, digest, pin and lock-file maintenance flow
-  // unattended (low semver risk, and the 7-day age gate plus the CI install-age
-  // gate keep a fresh release from ever going green), while semver bumps that
-  // can carry behaviour changes wait for the `/renovate` skill to evaluate.
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  extends: [
+    'config:best-practices',
+  ],
+  rangeStrategy: 'pin',
   automerge: true,
-  dependencyDashboard: true,
-
-  // packages/core is the substrate-neutral ports layer and is dependency-free
-  // by design. With a single shared bun.lock, every lock regen sweeps it via
-  // Renovate's non-updated-package-files artifact loop; the re-extract finds no
-  // deps and Renovate logs a benign "Could not re-extract the packageFile after
-  // updating it" repository-problem warning. Excluding the file from extraction
-  // silences that noise. Remove this entry if @commy/core ever gains a
-  // dependency — otherwise its updates would go unmanaged.
-  ignorePaths: ["packages/core/package.json"],
-
+  dependencyDashboard: {
+    enabled: true,
+  },
+  ignorePaths: [
+    'packages/core/package.json',
+  ],
   packageRules: [
     {
-      // Supply-chain-attack protection: never act on a release until it has
-      // been public for 7 days. Realm-wide and aligned with bunfig.toml's own
-      // `minimumReleaseAge = 604800`. For GitHub Actions and PyPI/uv this is
-      // the only age gate; bun also enforces it at install time.
-      matchPackageNames: ["*"],
-      minimumReleaseAge: "7 days",
+      matchPackageNames: [
+        '*',
+      ],
+      minimumReleaseAge: '7 days',
     },
     {
-      // Hold semver bumps that can carry behaviour changes for agent review:
-      // they stay as ordinary open PRs (no auto-merge) labelled for the
-      // `/renovate` skill to find, evaluate (changelog + migration for majors,
-      // incompatible-dependency check) and merge or report. Patch / digest /
-      // pin / lock-file maintenance keep auto-merging via the default above.
-      matchUpdateTypes: ["minor", "major"],
+      matchUpdateTypes: [
+        'minor',
+        'major',
+      ],
       automerge: false,
-      addLabels: ["renovate/needs-review"],
+      addLabels: [
+        'renovate/needs-review',
+      ],
     },
     {
-      // Bun pinning is owned by bunfig.toml (`exact = true` + its own
-      // `minimumReleaseAge`), not Renovate. Renovate's `pin` operation ignores
-      // release age (renovatebot/renovate#40288): it would pin to the newest
-      // version, which bun then refuses to install while it is <7 days old, so
-      // bun.lock could never regenerate and the PR would wedge. `bump` instead
-      // updates exact deps to the new exact version and raises the `^` security
-      // override floors (undici/hono/ws/fast-uri) as newer versions appear —
-      // both via age-gated PRs, since bump respects minimumReleaseAge. (replace
-      // would leave the in-range override updates to bun lockFileMaintenance,
-      // which is unreliable — renovatebot/renovate#38692.)
-      matchManagers: ["bun"],
-      rangeStrategy: "bump",
+      matchManagers: [
+        'bun',
+      ],
+      rangeStrategy: 'bump',
     },
     {
-      // @effect/tsgo patches one exact TypeScript release and refuses any other,
-      // so the two only ever move together.
-      matchPackageNames: ["typescript", "@effect/tsgo"],
-      groupName: "typescript and @effect/tsgo",
+      matchPackageNames: [
+        'typescript',
+        '@effect/tsgo',
+      ],
+      groupName: 'typescript and @effect/tsgo',
     },
     {
-      // The @effect/* packages track effect's major version, so one of them
-      // cannot land without the rest. @effect/tsgo is excluded: it versions
-      // with TypeScript and already has its own group above.
-      matchPackageNames: ["effect", "@effect/*", "!@effect/tsgo"],
-      groupName: "effect",
+      matchPackageNames: [
+        'effect',
+        '@effect/*',
+        '!@effect/tsgo',
+      ],
+      groupName: 'effect',
     },
     {
-      // External requirements are compatibility floors, not pinned dependencies.
-      // `requires-python` declares the Python range commy supports;
-      // `build-system.requires` declares the minimum build tooling. Both must
-      // stay `>=` floors — pinning them to one exact version would wrongly
-      // narrow which interpreters and build environments we accept.
-      matchDepTypes: ["requires-python", "build-system.requires"],
+      matchDepTypes: [
+        'requires-python',
+        'build-system.requires',
+      ],
       enabled: false,
     },
   ],
