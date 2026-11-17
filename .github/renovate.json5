@@ -21,7 +21,7 @@
   // gate keep a fresh release from ever going green), while semver bumps that
   // can carry behaviour changes wait for the `/renovate` skill to evaluate.
   automerge: true,
-  dependencyDashboard: true,
+  dependencyDashboard: { enabled: true },
 
   // packages/core is the substrate-neutral ports layer and is dependency-free
   // by design. With a single shared bun.lock, every lock regen sweeps it via
