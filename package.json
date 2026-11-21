@@ -41,7 +41,7 @@
   "devDependencies": {
     "@commy/testing": "workspace:*",
     "@biomejs/biome": "2.6.7",
-    "@effect/tsgo": "0.68.1",
+    "@effect/tsgo": "0.69.0",
     "bun-types": "1.4.4",
     "turbo": "2.11.11",
     "typescript": "7.0.2"
