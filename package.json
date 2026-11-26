@@ -42,7 +42,7 @@
     "@commy/testing": "workspace:*",
     "@biomejs/biome": "2.6.8",
     "@effect/tsgo": "0.70.0",
-    "bun-types": "1.4.4",
+    "bun-types": "1.4.5",
     "turbo": "2.11.13",
     "typescript": "7.0.2"
   }
