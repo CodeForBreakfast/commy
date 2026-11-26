@@ -48,9 +48,6 @@ through a chat realm the user already runs. This repo decides and changes:
 
 ## Build & Test
 
-Requires [Bun](https://bun.sh) (version pinned in `package.json` under
-`packageManager`).
-
 ```bash
 bun install        # install deps
 bun run check      # run all quality gates via turbo (typecheck → lint → test, cached)
@@ -60,8 +57,7 @@ bun run test:live  # run live suite against a real Zulip realm
 
 **Always use `bun run check`** for quality gates. The individual scripts
 (`test`, `typecheck`, `lint`) refuse to run outside turbo — they exist only as
-turbo task targets. This ensures turbo's dependency ordering and caching are
-always in play.
+turbo task targets.
 
 **Run the gate inside the dev shell.** `bun run check` (and the pre-commit
 hook) includes the `clients/hermes` Python gate (`//#test:hermes` →
@@ -77,16 +73,37 @@ runs against every adapter, which is what lets the in-memory adapter stand in
 for Zulip in tests. See [Test architecture](docs/architecture.md#test-architecture).
 
 **Live tests** (`*.live.test.ts`) hit a real Zulip realm and can rate-limit
-other clients sharing it. They are excluded from default discovery via
-`bunfig.toml` `[test] pathIgnorePatterns`. The `test:live` script clears that
-override and targets the file explicitly. Live tests are env-gated inside the
-file too — without `ZULIP_SITE` / `ZULIP_MINTER_*` / `ZULIP_LIVE_CHANNEL_*`
-set, the suite skips silently.
+other clients sharing it. Default discovery skips them (`bunfig.toml`
+`pathIgnorePatterns`), so run them through `test:live`. Without `ZULIP_SITE` /
+`ZULIP_MINTER_*` / `ZULIP_LIVE_CHANNEL_*` set, the suite skips silently. Zulip
+limits each user's REST calls, and the suite mints through the shared minter,
+so several runs back to back saturate the realm and flake unrelated tests.
+Leave a few minutes between batches.
 
 **Lint layers, when to reach for which:**
 
-- **biome** — JS/TS style, formatting, generic lint (unused imports, etc.). Run via `bun run check` (turbo cached) or `bun run lint:fix` for auto-fix.
-- **@effect/tsgo** — Effect idiom (floating Effects, untyped catches, unnecessary `Effect.gen`, reaching for global `fetch`/`Date`/`console` instead of Effect-native services, ~60 rules). It patches the TypeScript 7 compiler and reads its plugin entry, still named `@effect/language-service`, from `tsconfig.json` under `compilerOptions.plugins`. The `effect-tsgo patch` step in the `prepare` script applies the patch at install time — so diagnostics surface under `tsc --noEmit` (i.e. `bun run check`), not just in editors. Project-scope rule tweaks live in the tsconfig plugin entry; document the reason inline when disabling.
+- **biome** — JS/TS style, formatting and generic lint. `bun run lint:fix` auto-fixes.
+- **@effect/tsgo** — Effect idiom: floating Effects, untyped catches, unnecessary `Effect.gen`, global `fetch`/`Date`/`console` where an Effect service exists. It patches the TypeScript 7 compiler and reads its plugin entry, still named `@effect/language-service`, from `tsconfig.json` under `compilerOptions.plugins`. The `effect-tsgo patch` step in the `prepare` script applies the patch at install time — so diagnostics surface under `tsc --noEmit` (i.e. `bun run check`), not just in editors. Project-scope rule tweaks live in the tsconfig plugin entry; document the reason inline when disabling.
+
+## Gotchas
+
+- **A new git worktree typechecks and tests against the main checkout.** It
+  has no `node_modules` of its own, so `@commy/*` resolves up to the main
+  checkout's packages. Your new exports then read as "has no exported member",
+  and contract tests you edited never run. Run `bun install` in the worktree
+  before trusting `tsc` or `bun test`.
+- **Widening a port's error channel compiles and then delivers the wrong tag.**
+  Both adapters end their verbs in a catch-all `Effect.mapError` that flattens
+  anything unrecognised into `PublisherError`. Scope the `mapError` to the
+  operation so it cannot see the new error, or let the error through by
+  predicate as `isBindError` does. Only a contract test asserting `_tag`
+  catches this.
+- **The subscribe-token grammar is spoken outside the docs.**
+  `clients/hermes/commy/connection.py` builds `COMMY_SUBSCRIBE` values in code,
+  so a grammar change breaks Hermes-spawned servers at boot. The server
+  instructions in `packages/mcp/mcp-server.ts` and the `subscribe` and
+  `unsubscribe` descriptions recite it too. Grep for where tokens are built, not
+  only where they are documented.
 
 ## Contributing
 
@@ -100,6 +117,10 @@ the bump PR. The maintainer's merge is the single trigger; CI tags, publishes to
 npm, and cuts the GitHub Release.
 
 ## Conventions & Patterns
+
+The product is named `commy` everywhere we control the name. The npm packages
+publish under `@codeforbreakfast` only because `commy` was taken on npm. Try
+`commy` first for any new named surface.
 
 ### Effect style
 
