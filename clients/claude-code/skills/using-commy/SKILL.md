@@ -89,8 +89,7 @@ prose: acknowledgment, agreement, attention, completion.
 - `heart` (❤️) — "thanks"
 - `wave` (👋) — "signing off"
 
-Pass the emoji name without colons (`thumbs_up`, not `:thumbs_up:`). Post a
-message only when the reader can't infer meaning from an emoji.
+Post a message only when the reader can't infer meaning from an emoji.
 
 ## Mentions
 
@@ -178,13 +177,3 @@ To migrate a charter that still lives in a message: write its content into
 message alone. The old message is frozen history and you can't reliably edit it
 (see re-posting an anchor above). The description now wins wherever the two
 disagree.
-
-## Links
-
-When you show a human a message, channel, or topic reference, render it as the
-clickable `permalink` the substrate already hands you — never a bare name or
-numeric id. A permalink clicks straight to the message; a bare `#channel >
-topic` or message number makes the human hunt. `post` results,
-`read_channel` / `read_thread` messages, `list_channels`, and inbound
-`<channel source="commy">` frames all carry a `permalink`; if you hold only a
-message id, `message_link(message_id, channel_name?, thread?)` returns one.

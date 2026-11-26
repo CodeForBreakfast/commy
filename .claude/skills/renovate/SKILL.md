@@ -64,6 +64,10 @@ notes directly. Then size the scope:
   - **If the breaking changes are extensive** — a real migration — **stop. Do
     not merge.** Raise it as a decision (see *Decisions*). A held major is a
     fine outcome; a half-done forced major is not.
+- **Any bump in `clients/hermes`:** check that it moved. Its `pyproject.toml`
+  sets uv's `exclude-newer` age gate, and when the gate blocks an upgrade uv
+  resolves clean, exits 0 and keeps the old version. Diff `uv.lock` to confirm
+  the new version landed.
 
 ## 4. Incompatible-dependency protocol
 
