@@ -114,6 +114,11 @@ When the decision is a choice between options, **number them** — `1.`, `2.`,
 (1️⃣, 2️⃣, 3️⃣) instead of typing. A reaction is the fastest possible reply;
 numbering the options is what makes it available.
 
+**A mention is not a record.** A post scrolls away, and the session that sent it
+may be gone before the answer comes. Where your project tracks what is waiting
+on a person, record the wait there first and let the post point at it. Say there
+who watches for the answer, and hand that on before you leave.
+
 **One ask, one mention.** A mention is the novelty test with a notification
 attached, so the bar rises: not "is this new" but "does what they must *do*
 change". A standing ask stays standing — mention them again only when the ask
