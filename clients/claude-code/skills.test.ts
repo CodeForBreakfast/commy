@@ -33,3 +33,8 @@ test('using-commy skill covers the etiquette the always-on instructions block do
   expect(skillSource).toMatch(/react/i)
   expect(skillSource).toMatch(/mention/i)
 })
+
+test('using-commy skill does not let a post stand as the record of a wait on a person', () => {
+  expect(skillSource).toMatch(/mention is not a record/i)
+  expect(skillSource).toMatch(/who watches for the answer/i)
+})
